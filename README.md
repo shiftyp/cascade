@@ -110,8 +110,8 @@ Five specialized neural networks coordinated by an attention-based conductor:
 ## Directory Structure
 
 ```
-cascade2/
-├── README.md                # This file
+README.md                   # This file
+docs
 ├── protocol/               # Protocol layer (discrete decisions)
 │   ├── README.md          # Protocol overview
 │   ├── beacons.md         # Adaptive beacon system
