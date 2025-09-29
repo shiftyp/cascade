@@ -190,12 +190,29 @@ Captures NOAA space weather conditions for correlating with propagation.
   - `alert_type`: Type of alert
   - `severity`: Alert severity level
   - `message`: Alert description
+- `solar_cycle_phase`: Enum - Current solar cycle phase [MINIMUM, RISING, MAXIMUM, DECLINING]
+- `solar_cycle_number`: Integer - Solar cycle number (currently 25)
+- `qbo_index`: Float - Quasi-Biennial Oscillation index (-40 to +40)
+- `qbo_phase`: Enum - QBO phase [EASTERLY, WESTERLY, TRANSITION]
+- `lunar_phase`: Float - Lunar phase (0.0=new moon, 0.5=full moon, 1.0=new moon)
+- `lunar_age_days`: Integer - Days since new moon (0-29)
+- `season`: Enum - Astronomical season [WINTER, SPRING, SUMMER, AUTUMN]
+- `seasonal_balance_factor`: Float - Collection weighting factor for seasonal balance (0.8-1.3)
+- `equinoctial_enhancement`: Boolean - True during equinoctial periods (Mar 15-Apr 15, Sep 15-Oct 15)
+- `cycle_metadata`: JSON - Additional natural cycle tracking
+  - `solar_rotation_number`: Solar rotation since reference
+  - `days_since_solar_min`: Days since solar cycle minimum
+  - `geomagnetic_season`: Enhanced/suppressed based on IMF orientation
 - `created_at`: DateTime - Database entry time
 - `updated_at`: DateTime - Last modification
 
 **Constraints:**
 - k_index between 0 and 9
 - solar_flux_index > 0
+- qbo_index between -40 and 40
+- lunar_phase between 0.0 and 1.0
+- lunar_age_days between 0 and 29
+- seasonal_balance_factor between 0.8 and 1.3
 - timestamp unique (one entry per observation time)
 
 ### CollectionSchedule

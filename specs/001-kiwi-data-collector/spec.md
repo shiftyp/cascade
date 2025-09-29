@@ -163,13 +163,23 @@ As a CASCADE developer, I need to collect real-world atmospheric noise (QRN) and
 - **FR-047**: Dashboard MUST provide searchable interface for QA samples with filters for: date/time range, frequency band, SDR source, propagation mode, SNR range, space weather conditions (K-index, X-ray class)
 - **FR-048**: QA sample search MUST support sorting by: timestamp, SNR, file size, review status, propagation event type, rarity score
 - **FR-049**: Dashboard MUST display QA sample metadata alongside waterfall including: correlation ID, linked FT8/WSPR detections, quiet period markers, QRN characteristics, space weather at collection time
+- **FR-050**: System MUST implement systematic seasonal balancing ensuring 25% ±5% collection per season (winter, spring, summer, autumn) to guarantee comprehensive temporal diversity coverage
+- **FR-051**: System MUST weight winter collection 20% higher to account for rarer propagation conditions during low solar activity periods and increased atmospheric noise
+- **FR-052**: System MUST track and label solar cycle phase (minimum, rising, maximum, declining) for all recordings to enable solar activity correlation analysis
+- **FR-053**: System MUST capture QBO (Quasi-Biennial Oscillation) index and phase data from NOAA for equatorial propagation correlation and trans-equatorial path analysis
+- **FR-054**: System MUST track lunar cycle phase and age for all recordings to support VHF/EME considerations and ionospheric tidal effect analysis
+- **FR-055**: System MUST implement aggressive solar minimum rare event boost strategy with K≥3 storm threshold and 5x-10x rarity scoring multipliers to maximize diversity capture during the limited 18-month collection window
+- **FR-059**: System MUST implement 100% capture rate for all activity events during solar minimum (K≥3, C-class flares and above) with aggressive boost multipliers to ensure maximum rare event diversity within the opportunity-limited collection period
+- **FR-056**: System MUST ensure equinoctial period coverage (March 15-April 15, September 15-October 15) receives 30% collection weight increase due to enhanced propagation conditions
+- **FR-057**: System MUST maintain seasonal collection quotas with automatic rebalancing when any season falls below 20% or exceeds 30% of total collection hours
+- **FR-058**: System MUST integrate cycle-aware factors into rarity scoring algorithm to properly weight events based on their natural frequency within current cycle phases
 
 ### Key Entities *(include if feature involves data)*
 - **Recording Session**: Represents a single data collection session with start/end times, source receiver, frequency, mode, quality metrics, and correlation ID for linking related samples
 - **KiwiSDR Source**: Represents a public receiver with URL, location (anonymized), available frequency ranges, and usage statistics
 - **QRN Sample**: Atmospheric noise recording with timestamp, frequency, bandwidth, signal characteristics, geographic region, quiet period markers, and correlation ID
 - **Propagation Record**: Extracted FT8/WSPR data showing signal strength, path distance, frequency, time, detected propagation mode, confidence score, and correlation ID (no message content)
-- **SpaceWeatherData**: Solar and geomagnetic conditions including K-index, solar flux, X-ray class and flux values for event correlation
+- **SpaceWeatherData**: Solar and geomagnetic conditions including K-index, solar flux, X-ray class and flux values for event correlation, enhanced with natural cycle tracking (solar cycle phase, QBO index, lunar phase, seasonal balance factors)
 - **Collection Schedule**: Defines automated recording times, durations, rotation patterns, and target data volumes
 - **QA Sample**: Quality assurance sample with hot storage path, review status, quality metrics, and reviewer notes
 - **NotificationConfig**: Alert configuration for SDR availability and error conditions

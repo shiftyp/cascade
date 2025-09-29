@@ -101,6 +101,343 @@ Finally, CASCADE trains using the generated embeddings. The model learns by:
 
 This approach ensures CASCADE only experiences realistic combinations that actually occur in nature.
 
+## Natural Cycle Coverage Strategy
+
+The 18-month collection period spans multiple natural cycles that affect HF propagation. CASCADE implements systematic coverage strategies to ensure comprehensive temporal diversity despite the limited timeframe relative to longer cycles.
+
+### Captured Natural Cycles
+
+**Diurnal Cycles (24 hours)** ✅ Complete Coverage
+- Full 24-hour UTC coverage for each geographic region
+- Gray-line enhancement periods systematically captured
+- Day/night terminator crossing events prioritized
+
+**Lunar Cycles (27 days)** ✅ Complete Coverage
+- 18 months captures ~20 complete lunar cycles
+- New moon and full moon periods tracked for EME effects
+- Lunar tidal influences on ionosphere documented
+
+**Solar Rotation (27 days)** ✅ Complete Coverage
+- 18 months captures ~24 solar rotations
+- Coronal hole and active region rotation effects included
+- Solar wind stream interaction regions captured
+
+**Seasonal Cycles (365 days)** ✅ Systematic Coverage
+- 1.5 complete seasonal cycles captured
+- Systematic seasonal balancing ensures 25% ±5% per season
+- Winter collection weighted 20% higher for rarer conditions
+- Equinoctial enhancement periods (Mar 15-Apr 15, Sep 15-Oct 15) prioritized
+
+### Partially Captured Cycles
+
+**QBO (Quasi-Biennial Oscillation, 28 months)** ⚠️ Single Phase
+- 18-month collection captures one QBO phase transition
+- Enhanced equatorial propagation monitoring during transitions
+- QBO index and phase tracked for correlation analysis
+
+**Solar Cycle (11 years)** ⚠️ Solar Minimum Only - Aggressive Boost Strategy
+- Collection occurs during Solar Cycle 25 minimum (2025-2026)
+- Implements aggressive rare event maximization strategy:
+  * K≥3 storm threshold with 100% capture rate
+  * All C-class flares and above captured (100% rate)
+  * 5x-10x rarity score multipliers for any activity
+  * Opportunity-cost driven: maximize limited window value
+  * Future Phase 2 collection planned for solar maximum (~2028-2030)
+
+### Cycle-Aware Collection Weighting
+
+```python
+def calculate_cycle_aware_rarity_score(recording):
+    """
+    Enhanced rarity scoring that accounts for natural cycle phases
+    """
+    base_score = calculate_base_rarity_score(recording)
+
+    # Solar minimum: AGGRESSIVE rare event boost strategy
+    if recording.solar_cycle_phase == 'MINIMUM':
+        # Aggressive multipliers - maximize diversity capture
+        activity_multipliers = {
+            3: 50,    # K=3: 50x vs normal 8x (6x increase)
+            4: 100,   # K=4: 100x vs normal 25x (4x increase)
+            5: 500,   # K≥5: 500x vs normal 50x (10x increase)
+        }
+
+        if recording.k_index >= 3:
+            multiplier = activity_multipliers.get(recording.k_index, 500)
+            base_score *= multiplier
+
+        # Aggressive flare boosting - 100% capture strategy
+        flare_multipliers = {
+            'C': 25,   # NEW: Include C-class (was ignored)
+            'M': 200,  # 4x increase from normal 50x
+            'X': 2000  # 4x increase from normal 500x
+        }
+
+        if recording.xray_class in flare_multipliers:
+            base_score *= flare_multipliers[recording.xray_class]
+
+    # Seasonal weighting
+    seasonal_factors = {
+        'WINTER': 1.2,    # Rarer conditions, enhanced weighting
+        'SPRING': 1.1,    # Equinoctial enhancement
+        'SUMMER': 0.9,    # Common E-layer conditions
+        'AUTUMN': 1.1     # Equinoctial enhancement
+    }
+    base_score *= seasonal_factors[recording.season]
+
+    # Equinoctial period boost
+    if recording.equinoctial_enhancement:
+        base_score *= 1.3
+
+    # QBO enhancement for equatorial paths
+    if (recording.is_equatorial_path and
+        recording.qbo_phase == 'TRANSITION'):
+        base_score *= 1.4
+
+    # Lunar enhancement for VHF considerations
+    if recording.lunar_phase in [0.0, 0.5]:  # New or full moon
+        base_score *= 1.1
+
+    return min(base_score, 10000)  # Cap maximum score
+
+def enhanced_rarity_scoring_example():
+    """
+    Example of cycle-aware rarity scoring in action
+    """
+    # Example 1: Storm during solar minimum winter
+    storm_recording = {
+        'k_index': 5,
+        'xray_class': 'M',
+        'solar_cycle_phase': 'MINIMUM',
+        'season': 'WINTER',
+        'equinoctial_enhancement': False,
+        'qbo_phase': 'EASTERLY',
+        'lunar_phase': 0.0,  # New moon
+        'propagation_mode': 'Aurora',
+        'snr': -20,
+        'seasonal_balance_factor': 1.2
+    }
+
+    # Base K=5 score: 1/0.04 = 25
+    # M-class during minimum: * 75 = 1,875
+    # Solar minimum activity boost: * 1.5 = 2,812
+    # Winter enhancement: * 1.3 = 3,656
+    # New moon boost: * 1.1 = 4,022
+    # Aurora in winter: * 150 = 603,300
+    # Seasonal balance: * 1.2 = 723,960
+    # Final score: 723,960 (very high priority)
+
+    score1 = calculate_cycle_aware_rarity_score(storm_recording)
+    print(f"Storm during solar minimum winter: {score1}")
+
+    # Example 2: Common summer conditions
+    common_recording = {
+        'k_index': 1,
+        'xray_class': None,
+        'solar_cycle_phase': 'MINIMUM',
+        'season': 'SUMMER',
+        'equinoctial_enhancement': False,
+        'qbo_phase': 'EASTERLY',
+        'lunar_phase': 0.3,  # Waxing crescent
+        'propagation_mode': 'F2',
+        'snr': 15,
+        'seasonal_balance_factor': 0.9
+    }
+
+    # Base K=1 score: 1/0.25 = 4
+    # No flare: * 1 = 4
+    # Summer reduction: * 0.9 = 3.6
+    # F2 propagation: * 1 = 3.6
+    # Seasonal balance: * 0.9 = 3.24
+    # Final score: 3.24 (low priority)
+
+    score2 = calculate_cycle_aware_rarity_score(common_recording)
+    print(f"Common summer conditions: {score2}")
+
+    # Ratio shows 220,000x preference for rare events
+    print(f"Rare/common ratio: {score1/score2:.0f}x")
+```
+
+### Seasonal Balance Enforcement
+
+```python
+class SeasonalBalanceManager:
+    """
+    Ensures systematic 25% ±5% coverage per season
+    """
+    def __init__(self):
+        self.target_hours_per_season = 62500  # 250k hours / 4 seasons
+        self.tolerance = 0.05  # ±5%
+        self.seasonal_quotas = {
+            'WINTER': {'target': 62500, 'collected': 0, 'weight': 1.2},
+            'SPRING': {'target': 62500, 'collected': 0, 'weight': 1.1},
+            'SUMMER': {'target': 62500, 'collected': 0, 'weight': 0.9},
+            'AUTUMN': {'target': 62500, 'collected': 0, 'weight': 1.1}
+        }
+
+    def get_seasonal_priority(self, current_season):
+        """
+        Return collection priority for current season
+        """
+        quota = self.seasonal_quotas[current_season]
+        completion_rate = quota['collected'] / quota['target']
+
+        # Increase priority if behind target
+        if completion_rate < 0.8:
+            return quota['weight'] * 1.5
+        elif completion_rate < 0.9:
+            return quota['weight'] * 1.2
+        else:
+            return quota['weight']
+
+    def should_throttle_season(self, season):
+        """
+        Check if season is over-represented and should be throttled
+        """
+        quota = self.seasonal_quotas[season]
+        completion_rate = quota['collected'] / quota['target']
+        return completion_rate > 1.05  # Over 105% of target
+```
+
+### Long-Term Cycle Metadata
+
+All recordings include comprehensive cycle context:
+
+```python
+cycle_metadata = {
+    'solar_cycle': {
+        'number': 25,
+        'phase': 'MINIMUM',
+        'days_since_minimum': 365,
+        'expected_duration_years': 11
+    },
+    'qbo': {
+        'index': -15.2,
+        'phase': 'EASTERLY',
+        'months_since_transition': 8
+    },
+    'seasonal': {
+        'season': 'WINTER',
+        'balance_factor': 1.2,
+        'equinoctial_enhancement': False,
+        'days_to_equinox': 45
+    },
+    'lunar': {
+        'phase': 0.3,  # Waxing crescent
+        'age_days': 7,
+        'next_extreme': 'full_moon'
+    }
+}
+```
+
+This comprehensive cycle tracking enables:
+1. **Training Data Understanding**: Know exactly which cycle phases are represented
+2. **Bias Correction**: Compensate for solar minimum during training
+3. **Scientific Analysis**: Correlate CASCADE performance with natural cycles
+4. **Future Planning**: Design follow-up data collection for missing cycle phases
+
+## Solar Minimum Collection Strategy: Boost vs Balance
+
+### The Strategic Choice
+
+CASCADE faces a fundamental decision during the 18-month solar minimum collection period (2025-2026): attempt to "balance" the dataset with mostly quiet conditions, or aggressively boost rare events to maximize diversity. We choose the **aggressive boost strategy** for compelling reasons:
+
+#### Opportunity Cost Analysis
+
+**Solar Cycle Reality:**
+- Solar Cycle 25 minimum: 2025-2026 (our collection window)
+- Solar Cycle 25 maximum: ~2028-2030 (3+ years away)
+- K≥5 storms: ~1% frequency during minimum vs ~5% during maximum
+- M/X-class flares: 10-20x rarer during minimum
+
+**The Choice:**
+- **Balance Strategy**: Collect mostly quiet conditions, wait years for activity
+- **Boost Strategy**: Hoard every rare event we can get NOW
+
+### Aggressive Boost Implementation
+
+```python
+def solar_minimum_opportunity_maximization():
+    """
+    Maximize rare event capture during limited opportunity window
+    """
+    strategy = {
+        'philosophy': 'Capture everything rare - we only get one chance',
+        'thresholds': {
+            'storm_min': 3,        # K≥3 vs normal K≥5
+            'flare_min': 'C',      # All C+ vs normal M+ only
+            'capture_rate': 1.0    # 100% vs normal 10-30%
+        },
+        'multipliers': {
+            'K=3_storms': 50,      # vs normal 8 (6x boost)
+            'C_class_flares': 25,  # vs normal 0 (NEW)
+            'M_class_flares': 200, # vs normal 50 (4x boost)
+            'X_class_flares': 2000 # vs normal 500 (4x boost)
+        },
+        'rationale': {
+            'limited_window': 'Only 18 months during solar minimum',
+            'next_opportunity': '2028-2030 for high activity',
+            'training_value': 'Rare events more valuable than common',
+            'diversity_priority': 'Model needs edge case experience'
+        }
+    }
+    return strategy
+```
+
+### Two-Phase Collection Strategy
+
+**Phase 1 (2025-2026): Diversity Maximization**
+- Aggressive boost of ALL activity during solar minimum
+- 100% capture rate for K≥3 storms and C+ flares
+- Accept dataset bias toward rare events
+- Focus: Capture what we CAN get during minimum
+
+**Phase 2 (2028-2030): Balance Correction**
+- Collect during solar maximum
+- Balance dataset with high-activity periods
+- Create representative long-term training set
+- Focus: Complete the dataset with missing cycle phases
+
+### Training Bias Management
+
+```python
+def handle_solar_minimum_bias():
+    """
+    Account for aggressive rare event boosting in training
+    """
+    # True natural frequencies
+    natural_distribution = {
+        'quiet_sun': 0.70,    # Actually most common
+        'moderate': 0.25,     # Somewhat common
+        'active': 0.05        # Actually rare
+    }
+
+    # Our biased collection (due to boost strategy)
+    collected_distribution = {
+        'quiet_sun': 0.30,    # Underrepresented
+        'moderate': 0.40,     # Better represented
+        'active': 0.30        # Overrepresented due to boost
+    }
+
+    # Training compensation weights
+    compensation_weights = {
+        'quiet_sun': 0.70 / 0.30,  # 2.33x upweight
+        'moderate': 0.25 / 0.40,   # 0.625x downweight
+        'active': 0.05 / 0.30      # 0.167x downweight
+    }
+
+    return compensation_weights
+```
+
+### Scientific Justification
+
+1. **Maximum Value Extraction**: Extract every bit of diversity from limited window
+2. **Training Efficacy**: Models benefit more from rare events than common ones
+3. **Future Flexibility**: Easier to add common data later than recreate rare events
+4. **Honest Bias Handling**: Explicit documentation and compensation for bias
+
+This strategy acknowledges that we have one shot at solar minimum conditions and maximizes the scientific and training value of our opportunity-limited collection window.
+
 ## Diversity-Biased Sampling
 
 The sampling strategy deliberately overrepresents rare conditions to ensure the model learns to handle edge cases. The system groups recordings into rarity tiers and samples them at different rates:

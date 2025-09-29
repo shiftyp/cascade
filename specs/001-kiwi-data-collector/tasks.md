@@ -27,12 +27,12 @@
 - Include exact file paths in descriptions
 
 ## Phase 3.1: Setup
-- [ ] T001 Create project structure in modules/data/ per plan.md
-- [ ] T002 Initialize Python 3.11 project with requirements.txt dependencies (including redis-py)
-- [ ] T003 [P] Configure pytest and ruff for linting
+- [x] T001 Create project structure in modules/data/ per plan.md
+- [x] T002 Initialize Python 3.11 project with requirements.txt dependencies (including redis-py)
+- [x] T003 [P] Configure pytest and ruff for linting
 - [ ] T004 [P] Setup PostgreSQL database and run initial schema migration
-- [ ] T005 Configure Fly.io deployment files (fly.toml, Dockerfile) with auto-scaling
-- [ ] T005a Configure center frequencies per FR-021 in modules/data/src/config/frequencies.py
+- [x] T005 Configure Fly.io deployment files (fly.toml, Dockerfile) with auto-scaling
+- [x] T005a Configure center frequencies per FR-021 in modules/data/src/config/frequencies.py
 - [ ] T005b [P] Setup Redis/KeyDB instance on Fly.io for distributed coordination
 - [ ] T005c [P] Configure Fly.io machines (scheduler, workers) in fly.toml
 - [ ] T005d [P] Setup Tigris S3 bucket configuration for FLAC storage
@@ -41,10 +41,10 @@
 **CRITICAL: These tests MUST be written and MUST FAIL before ANY implementation**
 
 ### Contract Tests
-- [ ] T006 [P] Contract test POST /collectors/connect in modules/data/tests/contract/test_collector_connect.py
-- [ ] T007 [P] Contract test POST /collectors/start in modules/data/tests/contract/test_collector_start.py
-- [ ] T008 [P] Contract test POST /collectors/stop in modules/data/tests/contract/test_collector_stop.py
-- [ ] T009 [P] Contract test GET /collectors/status in modules/data/tests/contract/test_collector_status.py
+- [x] T006 [P] Contract test POST /collectors/connect in modules/data/tests/contract/test_collector_connect.py
+- [x] T007 [P] Contract test POST /collectors/start in modules/data/tests/contract/test_collector_start.py
+- [x] T008 [P] Contract test POST /collectors/stop in modules/data/tests/contract/test_collector_stop.py
+- [x] T009 [P] Contract test GET /collectors/status in modules/data/tests/contract/test_collector_status.py
 - [ ] T010 [P] Contract test POST /processors/decode/ft8 in modules/data/tests/contract/test_processor_ft8.py
 - [ ] T011 [P] Contract test POST /processors/decode/wspr in modules/data/tests/contract/test_processor_wspr.py
 - [ ] T012 [P] Contract test POST /processors/analyze/qrn in modules/data/tests/contract/test_processor_qrn.py
@@ -66,19 +66,19 @@
 ## Phase 3.3: Core Implementation (ONLY after tests are failing)
 
 ### Database Models
-- [ ] T018 [P] RecordingSession model with correlation_id in modules/data/src/models/recording_session.py
-- [ ] T019 [P] KiwiSDRSource model in modules/data/src/models/kiwisdr_source.py
-- [ ] T020 [P] QRNSample model with quiet_periods and correlation_id in modules/data/src/models/qrn_sample.py
-- [ ] T021 [P] PropagationRecord model with propagation_mode and correlation_id in modules/data/src/models/propagation_record.py
-- [ ] T022 [P] SpaceWeatherData model with xray_class and xray_flux in modules/data/src/models/space_weather_data.py
-- [ ] T023 [P] CollectionSchedule model in modules/data/src/models/collection_schedule.py
-- [ ] T024 [P] NotificationConfig model in modules/data/src/models/notification_config.py
-- [ ] T024a [P] CollectionAlerts model in modules/data/src/models/collection_alerts.py
-- [ ] T024b [P] NotificationTemplates model in modules/data/src/models/notification_templates.py
+- [x] T018 [P] RecordingSession model with correlation_id in modules/data/src/models/recording_session.py
+- [x] T019 [P] KiwiSDRSource model in modules/data/src/models/kiwisdr_source.py
+- [x] T020 [P] QRNSample model with quiet_periods and correlation_id in modules/data/src/models/qrn_sample.py
+- [x] T021 [P] PropagationRecord model with propagation_mode and correlation_id in modules/data/src/models/propagation_record.py
+- [x] T022 [P] SpaceWeatherData model with xray_class and xray_flux in modules/data/src/models/space_weather_data.py
+- [x] T023 [P] CollectionSchedule model in modules/data/src/models/collection_schedule.py
+- [x] T024 [P] NotificationConfig model in modules/data/src/models/notification_config.py
+- [x] T024a [P] CollectionAlerts model in modules/data/src/models/collection_alerts.py
+- [x] T024b [P] NotificationTemplates model in modules/data/src/models/notification_templates.py
 
 ### Collector Services
-- [ ] T025 [P] KiwiClient connection manager (implements FR-001, FR-008, FR-009) in modules/data/src/collectors/kiwi_client.py
-- [ ] T026 [P] Recorder orchestrator (implements FR-002, FR-007, FR-015) in modules/data/src/collectors/recorder.py
+- [x] T025 [P] KiwiClient connection manager (implements FR-001, FR-008, FR-009) in modules/data/src/collectors/kiwi_client.py
+- [x] T026 [P] Recorder orchestrator (implements FR-002, FR-007, FR-015) in modules/data/src/collectors/recorder.py
 - [ ] T027 Collection scheduler (implements FR-011, FR-016, FR-042) in modules/data/src/collectors/scheduler.py
 - [ ] T027a [P] Distributed worker process in modules/data/src/collectors/worker.py
 - [ ] T027b [P] Redis queue manager in modules/data/src/collectors/queue_manager.py
@@ -99,7 +99,7 @@
 - [ ] T032c [P] Path context calculator for propagation geometry in modules/data/src/processors/path_context.py
 
 ### Storage Services
-- [ ] T033 [P] FLAC compression utility (implements FR-007, FR-031) in modules/data/src/storage/compression.py
+- [x] T033 [P] FLAC compression utility (implements FR-007, FR-031) in modules/data/src/storage/compression.py
 - [ ] T034 [P] File manager for FLAC in modules/data/src/storage/file_manager.py
 - [ ] T035 [P] PostgreSQL metadata interface in modules/data/src/storage/metadata_db.py
 - [ ] T036 [P] Tigris S3 storage client in modules/data/src/storage/tigris_storage.py
@@ -112,13 +112,13 @@
 - [ ] T038c [P] Quarantine manager for failed QC (implements FR-038) in modules/data/src/validators/quarantine_manager.py
 
 ### API Endpoints
-- [ ] T039 POST /collectors/connect endpoint in modules/data/src/api/collectors.py
-- [ ] T040 POST /collectors/start endpoint in modules/data/src/api/collectors.py
-- [ ] T041 POST /collectors/stop endpoint in modules/data/src/api/collectors.py
-- [ ] T042 GET /collectors/status endpoint in modules/data/src/api/collectors.py
-- [ ] T043 POST /processors/decode/ft8 endpoint in modules/data/src/api/processors.py
-- [ ] T044 POST /processors/decode/wspr endpoint in modules/data/src/api/processors.py
-- [ ] T045 POST /processors/analyze/qrn endpoint in modules/data/src/api/processors.py
+- [x] T039 POST /collectors/connect endpoint in modules/data/src/api/collectors.py
+- [x] T040 POST /collectors/start endpoint in modules/data/src/api/collectors.py
+- [x] T041 POST /collectors/stop endpoint in modules/data/src/api/collectors.py
+- [x] T042 GET /collectors/status endpoint in modules/data/src/api/collectors.py
+- [x] T043 POST /processors/decode/ft8 endpoint in modules/data/src/api/processors.py
+- [x] T044 POST /processors/decode/wspr endpoint in modules/data/src/api/processors.py
+- [x] T045 POST /processors/analyze/qrn endpoint in modules/data/src/api/processors.py
 
 ## Phase 3.4: Integration
 

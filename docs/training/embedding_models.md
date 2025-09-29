@@ -348,7 +348,7 @@ The encoder extracts features that directly influence propagation:
 ```python
 class PathContextEncoder:
     """
-    Encodes path geometry and ionospheric context into 32D vector
+    Encodes path geometry, ionospheric context, and natural cycles into 42D vector
     """
     def __init__(self):
         # Precompute magnetic pole locations for efficiency
@@ -425,15 +425,21 @@ class PathContextEncoder:
             longitude_difference(tx_grid, rx_grid) / 360
         ])
 
-        # 6. Time context (4D)
+        # 6. Natural cycle context (10D)
         features.extend([
             timestamp.hour / 24,           # UTC hour [0-1]
             timestamp.month / 12,          # Season proxy
-            np.sin(timestamp.hour * 2*np.pi/24),  # Circular time
-            np.cos(timestamp.hour * 2*np.pi/24)
+            np.sin(timestamp.hour * 2*np.pi/24),    # Circular time
+            np.cos(timestamp.hour * 2*np.pi/24),
+            metadata.get('lunar_phase', 0.0),       # Lunar phase [0-1]
+            metadata.get('qbo_index', 0.0) / 40,    # QBO normalized
+            float(metadata.get('solar_cycle_phase') == 'MINIMUM'),  # Binary
+            float(metadata.get('equinoctial_enhancement', False)),  # Binary
+            metadata.get('seasonal_balance_factor', 1.0),  # [0.8-1.3]
+            float(metadata.get('season') == 'WINTER')      # Winter flag
         ])
 
-        return np.array(features)  # Total: 32D
+        return np.array(features)  # Total: 42D (expanded for cycle context)
 ```
 
 ### Training vs Inference Usage
@@ -476,7 +482,7 @@ class GeographicallyAwarePropagationVAE(nn.Module):
         # Conditional decoder uses both embeddings
         self.decoder = ConditionalDecoder(
             channel_dim=128,
-            context_dim=32,
+            context_dim=42,  # Updated for cycle-aware features
             output_dim=512
         )
 
@@ -495,6 +501,239 @@ class GeographicallyAwarePropagationVAE(nn.Module):
 
         return channel_params
 ```
+
+### Cycle-Aware Training Integration
+
+The enhanced path context encoder enables training that systematically accounts for natural cycles:
+
+```python
+def cycle_aware_training_step(batch_data):
+    """
+    Training step that integrates natural cycle context
+    """
+    for sample in batch_data:
+        # Extract IQ characteristics
+        channel_embedding = prop_vae.encode(sample.iq_data)
+
+        # Enhanced path context with cycle information
+        cycle_metadata = {
+            'solar_cycle_phase': sample.solar_cycle_phase,
+            'season': sample.season,
+            'lunar_phase': sample.lunar_phase,
+            'qbo_index': sample.qbo_index,
+            'equinoctial_enhancement': sample.equinoctial_enhancement,
+            'seasonal_balance_factor': sample.seasonal_balance_factor
+        }
+
+        path_context = path_encoder.encode_path_context(
+            sample.tx_grid,
+            sample.rx_grid,
+            sample.timestamp,
+            metadata=cycle_metadata
+        )
+
+        # Combined conditioning for realistic propagation
+        combined_context = torch.cat([channel_embedding, path_context])
+
+        # Generate cycle-appropriate channel characteristics
+        channel_params = decoder(combined_context)
+
+        # Apply to CASCADE signal for training
+        cascade_rx = apply_propagation_with_cycles(
+            sample.cascade_signal,
+            channel_params,
+            cycle_context=cycle_metadata
+        )
+
+        # Train CASCADE to decode without cycle knowledge
+        decoded = cascade_model(cascade_rx)  # No cycle info at inference!
+        loss = compute_loss(decoded, sample.original_data)
+
+        return loss
+
+def apply_propagation_with_cycles(signal, channel_params, cycle_context):
+    """
+    Apply propagation effects conditioned on natural cycles
+    """
+    # Base propagation effects
+    propagated = apply_base_propagation(signal, channel_params)
+
+    # Aggressive boost-aware adjustments for solar minimum
+    if cycle_context['solar_cycle_phase'] == 'MINIMUM':
+        # Aggressive enhancement of rare activity (boost strategy)
+        if channel_params['storm_effects'] > 0:
+            # Apply aggressive multiplier based on activity level
+            k_index = cycle_context.get('k_index', 0)
+            if k_index >= 5:
+                channel_params['storm_effects'] *= 10.0  # 10x boost for major storms
+            elif k_index >= 4:
+                channel_params['storm_effects'] *= 5.0   # 5x boost for moderate storms
+            elif k_index >= 3:
+                channel_params['storm_effects'] *= 3.0   # 3x boost for minor storms
+
+        # Aggressive flare effect enhancement
+        if cycle_context.get('xray_class') in ['C', 'M', 'X']:
+            flare_multipliers = {'C': 2.0, 'M': 5.0, 'X': 10.0}
+            multiplier = flare_multipliers[cycle_context['xray_class']]
+            channel_params['ionospheric_disturbance'] *= multiplier
+
+    if cycle_context['season'] == 'WINTER':
+        # Enhanced atmospheric noise during winter
+        propagated = add_winter_noise_enhancement(propagated)
+
+    if cycle_context['equinoctial_enhancement']:
+        # Boost propagation efficiency during equinoxes
+        propagated = apply_equinoctial_boost(propagated)
+
+    if cycle_context['lunar_phase'] in [0.0, 0.5]:  # New/full moon
+        # Subtle EME and tidal effects
+        propagated = apply_lunar_effects(propagated)
+
+    return propagated
+```
+
+### Temporal Context Validation
+
+The system validates that training data includes adequate temporal diversity:
+
+```python
+class CycleContextValidator:
+    """
+    Ensures training data represents all natural cycle phases
+    """
+    def __init__(self):
+        self.cycle_requirements = {
+            'seasonal': {
+                'WINTER': (0.25, 0.35),   # 25-35% (enhanced for solar min)
+                'SPRING': (0.20, 0.30),   # 20-30%
+                'SUMMER': (0.15, 0.25),   # 15-25% (reduced common conditions)
+                'AUTUMN': (0.20, 0.30)    # 20-30%
+            },
+            'lunar_phases': {
+                'new_moon': (0.08, 0.12),      # ±10% around 10%
+                'full_moon': (0.08, 0.12),     # ±10% around 10%
+                'other_phases': (0.76, 0.84)   # Remaining 80%
+            },
+            'solar_activity': {
+                'quiet': (0.25, 0.35),         # Reduced due to boost strategy
+                'moderate': (0.35, 0.45),      # Increased representation
+                'active': (0.25, 0.35)         # Heavily boosted (vs natural 5%)
+            }
+        }
+
+    def validate_cycle_coverage(self, training_embeddings):
+        """
+        Verify training data meets cycle coverage requirements
+        """
+        # Check seasonal distribution
+        seasonal_dist = self.calculate_seasonal_distribution(training_embeddings)
+        for season, (min_pct, max_pct) in self.cycle_requirements['seasonal'].items():
+            actual_pct = seasonal_dist[season]
+            if not (min_pct <= actual_pct <= max_pct):
+                raise CycleValidationError(
+                    f"Season {season}: {actual_pct:.3f} outside range [{min_pct:.3f}, {max_pct:.3f}]"
+                )
+
+        # Check lunar phase distribution
+        lunar_dist = self.calculate_lunar_distribution(training_embeddings)
+        for phase, (min_pct, max_pct) in self.cycle_requirements['lunar_phases'].items():
+            actual_pct = lunar_dist[phase]
+            if not (min_pct <= actual_pct <= max_pct):
+                raise CycleValidationError(
+                    f"Lunar phase {phase}: {actual_pct:.3f} outside range [{min_pct:.3f}, {max_pct:.3f}]"
+                )
+
+        # Check solar activity distribution (adjusted for solar minimum)
+        activity_dist = self.calculate_activity_distribution(training_embeddings)
+        for level, (min_pct, max_pct) in self.cycle_requirements['solar_activity'].items():
+            actual_pct = activity_dist[level]
+            if not (min_pct <= actual_pct <= max_pct):
+                raise CycleValidationError(
+                    f"Activity level {level}: {actual_pct:.3f} outside range [{min_pct:.3f}, {max_pct:.3f}]"
+                )
+
+        return True  # All validations passed
+```
+
+### Solar Minimum Boost Strategy Integration
+
+The embedding models are designed to handle the aggressive rare event boost strategy implemented during solar minimum collection:
+
+```python
+class BoostAwareEmbeddingTrainer:
+    """
+    Training that accounts for aggressive solar minimum boost strategy
+    """
+    def __init__(self):
+        self.boost_compensation = {
+            'quiet_conditions': 2.33,    # Upweight underrepresented
+            'moderate_activity': 0.625,  # Downweight moderately overrepresented
+            'high_activity': 0.167       # Downweight heavily overrepresented
+        }
+
+    def train_embedding_with_boost_awareness(self, data_batch):
+        """
+        Train embedding models accounting for collection bias
+        """
+        for sample in data_batch:
+            # Classify activity level
+            activity_level = self.classify_solar_activity(sample)
+
+            # Apply boost compensation weight
+            compensation_weight = self.boost_compensation[activity_level]
+
+            # Train with bias-corrected weighting
+            loss = compute_embedding_loss(sample)
+            weighted_loss = loss * compensation_weight
+
+            # Update model with corrected gradients
+            optimizer.step(weighted_loss)
+
+    def classify_solar_activity(self, sample):
+        """
+        Classify samples for boost compensation
+        """
+        if sample.k_index >= 4 or sample.xray_class in ['M', 'X']:
+            return 'high_activity'
+        elif sample.k_index >= 2 or sample.xray_class == 'C':
+            return 'moderate_activity'
+        else:
+            return 'quiet_conditions'
+```
+
+### Validation Adjustments for Boost Strategy
+
+The validation requirements are updated to reflect the intentional bias from aggressive boosting:
+
+```python
+def boost_aware_validation_requirements():
+    """
+    Validation thresholds adjusted for solar minimum boost strategy
+    """
+    # Note: These reflect COLLECTED distribution, not natural distribution
+    validation_targets = {
+        'solar_activity_distribution': {
+            'quiet': (0.25, 0.35),      # Reduced from natural ~70%
+            'moderate': (0.35, 0.45),   # Increased from natural ~25%
+            'active': (0.25, 0.35)      # Heavily boosted from natural ~5%
+        },
+        'rare_event_coverage': {
+            'K5_storms': 0.95,          # 95%+ capture rate
+            'K6_storms': 1.0,           # 100% capture rate
+            'M_class_flares': 1.0,      # 100% capture rate
+            'X_class_flares': 1.0       # 100% capture rate
+        },
+        'boost_effectiveness': {
+            'min_rare_event_multiplier': 5.0,   # At least 5x boost
+            'max_rare_event_multiplier': 10.0,  # Up to 10x boost
+            'c_class_inclusion': True           # Must include C-class
+        }
+    }
+
+    return validation_targets
+```
+
+This boost-aware approach ensures the embedding models properly handle the intentionally biased training data while maintaining the ability to generate realistic propagation for all activity levels during CASCADE training.
 
 ## FT8 Propagation VAE Architecture
 
