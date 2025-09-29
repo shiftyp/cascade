@@ -1,0 +1,288 @@
+openapi: 3.0.0
+info:
+  title: Signal Processor API
+  version: 1.0.0
+  description: Interface for FT8/WSPR decoding and QRN analysis
+
+paths:
+  /processor/ft8/decode:
+    post:
+      summary: Decode FT8 signals from IQ recording
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - file_path
+                - center_frequency_hz
+              properties:
+                file_path:
+                  type: string
+                  description: Path to IQ WAV file
+                center_frequency_hz:
+                  type: integer
+                  example: 14074000
+                time_offset_seconds:
+                  type: number
+                  default: 0
+      responses:
+        200:
+          description: FT8 decoding complete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FT8DecodeResult'
+
+  /processor/wspr/decode:
+    post:
+      summary: Decode WSPR signals from IQ recording
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - file_path
+                - center_frequency_hz
+              properties:
+                file_path:
+                  type: string
+                center_frequency_hz:
+                  type: integer
+      responses:
+        200:
+          description: WSPR decoding complete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WSPRDecodeResult'
+
+  /processor/qrn/analyze:
+    post:
+      summary: Analyze QRN characteristics
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - file_path
+                - frequency_range
+              properties:
+                file_path:
+                  type: string
+                frequency_range:
+                  type: object
+                  properties:
+                    start_hz:
+                      type: integer
+                    end_hz:
+                      type: integer
+                window_seconds:
+                  type: number
+                  default: 1.0
+      responses:
+        200:
+          description: QRN analysis complete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QRNAnalysisResult'
+
+  /processor/propagation/extract:
+    post:
+      summary: Extract propagation mutations from signal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - file_path
+                - signal_info
+              properties:
+                file_path:
+                  type: string
+                signal_info:
+                  type: object
+                  properties:
+                    mode:
+                      type: string
+                      enum: [FT8, WSPR]
+                    frequency_hz:
+                      type: integer
+                    timestamp:
+                      type: string
+                      format: date-time
+                    callsign:
+                      type: string
+                    grid:
+                      type: string
+      responses:
+        200:
+          description: Propagation extraction complete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PropagationMutation'
+
+components:
+  schemas:
+    FT8DecodeResult:
+      type: object
+      properties:
+        decode_count:
+          type: integer
+        signals:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              frequency_offset_hz:
+                type: number
+              snr_db:
+                type: number
+              callsign_hash:
+                type: string
+                description: Anonymized callsign
+              grid:
+                type: string
+                maxLength: 4
+              message_type:
+                type: string
+              drift_hz:
+                type: number
+              decoded_symbols:
+                type: array
+                items:
+                  type: integer
+
+    WSPRDecodeResult:
+      type: object
+      properties:
+        decode_count:
+          type: integer
+        signals:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              frequency_hz:
+                type: integer
+              snr_db:
+                type: number
+              callsign_hash:
+                type: string
+              grid:
+                type: string
+                maxLength: 4
+              power_dbm:
+                type: integer
+              drift_hz:
+                type: number
+
+    QRNAnalysisResult:
+      type: object
+      properties:
+        samples_analyzed:
+          type: integer
+        time_windows:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              noise_floor_dbm:
+                type: number
+              peak_amplitude_dbm:
+                type: number
+              rms_amplitude_dbm:
+                type: number
+              impulse_count:
+                type: integer
+              occupancy_percent:
+                type: number
+        statistics:
+          type: object
+          properties:
+            mean_noise_dbm:
+              type: number
+            variance:
+              type: number
+            skewness:
+              type: number
+            kurtosis:
+              type: number
+            percentiles:
+              type: object
+              properties:
+                p10:
+                  type: number
+                p50:
+                  type: number
+                p90:
+                  type: number
+
+    PropagationMutation:
+      type: object
+      properties:
+        signal_id:
+          type: string
+          format: uuid
+        mode:
+          type: string
+          enum: [FT8, WSPR]
+        mutations:
+          type: object
+          properties:
+            frequency_drift:
+              type: array
+              items:
+                type: number
+              description: Hz drift per symbol
+            amplitude_fading:
+              type: array
+              items:
+                type: number
+              description: Relative amplitude per symbol
+            phase_rotation:
+              type: array
+              items:
+                type: number
+              description: Phase shift per symbol (radians)
+            multipath:
+              type: object
+              properties:
+                delays_ms:
+                  type: array
+                  items:
+                    type: number
+                amplitudes:
+                  type: array
+                  items:
+                    type: number
+        channel_characterization:
+          type: object
+          properties:
+            delay_spread_ms:
+              type: number
+            coherence_bandwidth_hz:
+              type: number
+            doppler_spread_hz:
+              type: number
+            propagation_mode:
+              type: string
+              enum: [F2, F1, E, Es, meteor, aircraft]
