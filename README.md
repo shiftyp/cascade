@@ -32,7 +32,7 @@ CASCADE's fundamental innovation is the strict separation between discrete proto
 - **WHEN**: Fragment duration, ACK window detection
 - **HOW MUCH**: Bandwidth allocation, power distribution, redundancy factors
 
-This separation ensures:
+This separation ensures:s
 - Protocol correctness remains verifiable
 - Model improvements don't break compatibility
 - System behavior is comprehensible to operators
@@ -155,18 +155,17 @@ cascade2/
 ## Documentation
 
 ### Primary Documents
-- **[Scientific Paper](../CASCADE_Scientific_Paper.md)**: Comprehensive technical paper with full system details
-- **[Protocol Documentation](protocol/README.md)**: Discrete decision layer
-- **[Model Documentation](model/README.md)**: Neural network architecture
-- **[Training Documentation](training/README.md)**: Training methodology
-- **[Interface Specification](interface/README.md)**: Clean boundary definition
+- **[Protocol Documentation](docs/protocol/README.md)**: Discrete decision layer
+- **[Model Documentation](docs/model/README.md)**: Neural network architecture
+- **[Training Documentation](docs/training/README.md)**: Training methodology
+- **[Interface Specification](docs/interface/README.md)**: Clean boundary definition
 
 ### Key Concepts
-- **[Hierarchical Patterns](model/patterns.md)**: 64 orthogonal patterns with graceful degradation
-- **[Expert Networks](model/experts/)**: Specialized neural networks for signal processing
-- **[Federated Learning](training/federated.md)**: Privacy-preserving continuous improvement
-- **[Beacon System](protocol/beacons.md)**: Efficiency-protected coordination
-- **[Priority Handling](protocol/priority_handling.md)**: Emergency-aware traffic management
+- **[Hierarchical Patterns](docs/model/patterns.md)**: 64 orthogonal patterns with graceful degradation
+- **[Expert Networks](docs/model/experts/)**: Specialized neural networks for signal processing
+- **[Federated Learning](docs/training/federated.md)**: Privacy-preserving continuous improvement
+- **[Beacon System](docs/protocol/beacons.md)**: Efficiency-protected coordination
+- **[Priority Handling](docs/protocol/priority_handling.md)**: Emergency-aware traffic management
 
 ## Expected Performance
 
