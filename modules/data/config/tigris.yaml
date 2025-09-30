@@ -1,0 +1,91 @@
+# Tigris Storage Configuration for CASCADE Data Collector
+# All storage uses Tigris for zero egress fees
+
+storage:
+  provider: tigris
+  endpoint: https://fly.storage.tigris.dev
+  region: auto  # Tigris uses 'auto' region
+
+  # Buckets (automatically created by deploy.sh)
+  buckets:
+    main_archive:
+      name: cascade-iq-data
+      purpose: "Main IQ data archive (40-50TB)"
+      retention_days: -1  # Keep forever
+      compression: flac
+      expected_size_tb: 50
+      access_pattern: write_once_read_rarely
+
+    qa_samples:
+      name: cascade-qa-samples
+      purpose: "QA samples for training (2TB)"
+      retention_days: -1  # Keep forever
+      compression: none  # Keep uncompressed for fast access
+      expected_size_tb: 2
+      access_pattern: read_frequently_for_training
+
+  # Cost projections
+  costs:
+    storage_per_gb_month: 0.02
+    egress_per_gb: 0.00  # FREE!
+    put_per_1000: 0.005
+    get_per_1000: 0.0004
+
+    monthly_estimates:
+      month_1: 20    # 1TB
+      month_6: 200   # 10TB
+      month_12: 600  # 30TB
+      month_18: 1000 # 50TB
+
+# Local cache configuration
+local_cache:
+  path: /nvme/qa_cache
+  size_gb_limit: 100
+  cost_per_gb_month: 0.15  # Fly.io volume pricing
+  purpose: "Active training batch cache"
+
+# Training schedule
+training:
+  micro_model:
+    schedule: weekly
+    download_size_gb: 50  # One week of QA samples
+    download_time_hours: 1.5  # With good connection
+    training_time_hours: 4
+    model_size_mb: 50  # Tiny model
+
+# Collection phases
+collection:
+  phases:
+    - name: bootstrap
+      months: [1, 2]
+      qa_rate: 0.03  # 3% random
+      method: random
+
+    - name: hybrid
+      months: [3, 4]
+      qa_rate: 0.08  # 5% random + 3% intelligent
+      method: mixed
+
+    - name: production
+      months: [5, 18]
+      qa_rate: 0.12  # 10% intelligent + 2% random
+      method: intelligent
+
+# Benefits of Tigris approach
+benefits:
+  - "Zero egress fees (vs $0.09/GB on AWS)"
+  - "Simple pricing model"
+  - "S3-compatible API"
+  - "Fly.io native integration"
+  - "No cold storage delays"
+  - "Weekly model training viable"
+  - "Unlimited experimentation"
+
+# Migration path (if needed later)
+future_options:
+  hybrid_with_glacier:
+    description: "Move old data to S3 Glacier Deep Archive"
+    threshold_months: 6
+    expected_savings_per_month: 760  # $800 → $40
+    retrieval_time_hours: 12
+    use_case: "If archive grows beyond budget"

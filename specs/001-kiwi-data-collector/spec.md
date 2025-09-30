@@ -58,7 +58,7 @@ When creating this spec from a user prompt:
 ### Session 2025-09-29
 - Q: What is the target collection timeline for the 100-500 hours of QRN data? → A: seasonal cycle geographic diversity
 - Q: What is the primary collection strategy for the 18-month period? → A: all (continuous baseline + event-triggered + FT8/WSPR focused)
-- Q: What are the storage requirements and retention policies? → A: 40-50TB total for 200,000-250,000 hours of compressed data
+- Q: What are the storage requirements and retention policies? → A: 35-75TB total for 200,000-300,000 hours of compressed data (range reflects seasonal/event weighting variance)
 - Q: What is the recording bandwidth and format specification? → A: 12 kHz IQ, 16-bit, 12kHz sample rate, FLAC compressed
 - Q: How many simultaneous KiwiSDR stations for baseline collection? → A: Variable (50-100 baseline, 100-200 during events)
 - Q: What is the data quality validation threshold? → A: Keep all data (complete archive)
@@ -97,7 +97,7 @@ As a CASCADE developer, I need to collect real-world atmospheric noise (QRN) and
 ### Functional Requirements
 - **FR-001**: System MUST connect to public KiwiSDR and WebSDR receivers programmatically using appropriate APIs and protocols
 - **FR-002**: System MUST record atmospheric noise (QRN) from HF bands (10 kHz - 30 MHz)
-- **FR-003**: System MUST collect MINIMUM 4,000 hours per HF band (24,000 hours baseline) with expanded event-driven collection targeting 200,000-250,000 total hours over 18 months from geographically and temporally diverse locations, using hybrid KiwiSDR/WebSDR collection strategy
+- **FR-003**: System MUST collect MINIMUM 4,000 hours per HF band (24,000 hours baseline) with expanded event-driven collection targeting 200,000-300,000 total hours over 18 months from geographically and temporally diverse locations, using hybrid KiwiSDR/WebSDR collection strategy with weighted collection rates (200-500 hrs/day) accounting for seasonal variance and event scaling
 - **FR-004**: System MUST extract propagation data from FT8 and WSPR transmissions
 - **FR-005**: System MUST anonymize all callsigns and location information
 - **FR-006**: System MUST preserve GPS timestamps for all recordings
@@ -111,7 +111,7 @@ As a CASCADE developer, I need to collect real-world atmospheric noise (QRN) and
 - **FR-014**: System MUST respect public receiver usage policies including KiwiSDR 30-90 minute daily limits and WebSDR institutional policies, avoiding peak usage hours per geographic region
 - **FR-015**: System MUST organize recordings by date, frequency, and location metadata
 - **FR-016**: System MUST implement continuous baseline collection using 50-100 simultaneous SDRs with intelligent rotation respecting 30-90 minute daily limits per receiver, ensuring propagation cycle coverage (diurnal, geographic, seasonal), scaling to 200+ SDRs during events
-- **FR-017**: System MUST maintain expandable storage capacity starting at 20TB, scaling to 50TB+ for 200,000-250,000 hours of compressed IQ data using hybrid KiwiSDR/WebSDR collection
+- **FR-017**: System MUST maintain expandable storage capacity starting at 20TB, scaling to 35-75TB for 200,000-300,000 hours of compressed IQ data using hybrid KiwiSDR/WebSDR collection (range accounts for seasonal/event variance in weighted collection rates)
 - **FR-018**: System MUST support variable station count (50-100 baseline respecting daily limits, 100-200+ during geomagnetic storms, 300+ during rare events)
 - **FR-019**: System MUST retain all collected data regardless of quality for complete archive (validation from FR-013 logs issues but does not reject data)
 - **FR-020**: System MUST capture 12 kHz windows centered on FT8 frequencies to include both signals and adjacent quiet zones
@@ -175,7 +175,6 @@ As a CASCADE developer, I need to collect real-world atmospheric noise (QRN) and
 - **FR-058**: System MUST integrate cycle-aware factors into rarity scoring algorithm to properly weight events based on their natural frequency within current cycle phases
 - **FR-060**: System MUST implement intelligent SDR time limit management respecting 30-90 minute daily usage restrictions per IP address and implementing automatic rotation strategies
 - **FR-061**: System MUST maintain database of SDR usage policies including daily time limits, peak hour restrictions, and owner contact information for coordination
-- **FR-062**: System MUST implement multi-IP rotation strategy using VPN or proxy services to maximize available collection time while respecting individual SDR limits
 - **FR-063**: System MUST prioritize SDR relationship management with direct owner coordination for research access agreements allowing extended usage periods
 - **FR-064**: System MUST implement graceful session management with automatic disconnection before time limits and seamless handoff to alternative SDRs
 - **FR-065**: System MUST integrate WebSDR receivers to complement KiwiSDR collection, leveraging WebSDR's higher user capacity and institutional backing

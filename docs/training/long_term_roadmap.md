@@ -733,14 +733,14 @@ Long-term projects face numerous risks. CASCADE includes explicit contingency pl
 
 ### Funding and Sustainability
 
-**Cost Projections (2025-2040)**:
+**Cost Projections (2025-2040)** (Updated with Tigris zero egress):
 ```python
 fifteen_year_costs = {
     'data_collection': {
         'sdr_coordination': 500 * 12 * 15,      # $90k (manual + tooling)
-        'storage': 19_000 * 15,                  # $285k (tiered archival)
-        'bandwidth': 200 * 12 * 15,              # $36k (uploads/downloads)
-        'subtotal': 411_000
+        'storage': 19_000 * 15,                  # $285k (tiered archival, Tigris + archives)
+        # bandwidth: $0 (Tigris has zero egress fees!)
+        'subtotal': 375_000
     },
 
     'compute': {
@@ -756,8 +756,8 @@ fifteen_year_costs = {
         'subtotal': 1_700_000
     },
 
-    'total_15_year': 2_194_000,  # ~$2.2M over 15 years
-    'annual_average': 146_000     # ~$146k/year
+    'total_15_year': 2_158_000,  # ~$2.16M over 15 years ($36k savings from zero egress!)
+    'annual_average': 144_000     # ~$144k/year
 }
 ```
 
