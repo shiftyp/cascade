@@ -317,3 +317,10 @@ CASCADE's TFP dimensions work like a city's transportation system:
 - **Time** is like the natural flow of traffic without rigid traffic light schedules
 
 Just as experienced drivers learn to navigate efficiently without central control, CASCADE's model learns to optimize communication without rigid slot assignments. The patterns provide enough structure to prevent chaos (like having roads), while the continuous optimization allows efficient use of resources (like choosing the best route).
+
+## See Also
+
+- **[Pattern Constellation](patterns.md)** - The 64 orthogonal patterns that enable TFP separation
+- **[Signal Expert](experts.md#signal-expert-network)** - Multi-user separation implementation
+- **[Spectrum Allocation Expert](experts.md#spectrum-allocation-expert-network)** - Frequency dimension optimization
+- **[Model README](README.md)** - Overall architecture overview

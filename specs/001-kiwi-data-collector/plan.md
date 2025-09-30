@@ -17,18 +17,18 @@
 ```
 
 ## Summary
-Collect 150,000-300,000 hours of real-world atmospheric noise and propagation data from global KiwiSDR receivers over 18 months (minimum 10,000 per HF band baseline). Implement aggressive event-driven scaling for rare propagation phenomena. Process FT8/WSPR signals to extract propagation mutations while preserving privacy through anonymization. Store compressed IQ data and extracted features in expandable 35-75TB archive for comprehensive CASCADE neural network training.
+Collect 200,000-250,000 hours of real-world atmospheric noise and propagation data from global KiwiSDR and WebSDR receivers over 18 months (minimum 10,000 per HF band baseline). Implement hybrid collection strategy leveraging WebSDR's higher capacity and KiwiSDR's geographic diversity. Process FT8/WSPR signals to extract propagation characteristics while preserving privacy through anonymization. Store compressed IQ data and extracted features in expandable 40-50TB archive for comprehensive CASCADE neural network training.
 
 ## Technical Context
 **Language/Version**: Python 3.11
-**Primary Dependencies**: kiwiclient, numpy, scipy, pandas, pyFT8, wsjtx-lib, redis-py
+**Primary Dependencies**: kiwiclient, websdr-client, numpy, scipy, pandas, pyFT8, wsjtx-lib, redis-py
 **Storage**: File-based (FLAC compressed) with PostgreSQL metadata database, Redis/KeyDB for coordination
-**Testing**: pytest, pytest-mock for KiwiSDR mocking
+**Testing**: pytest, pytest-mock for KiwiSDR and WebSDR mocking
 **Target Platform**: Fly.io distributed (2-10 machines), Ubuntu 22.04 LTS base
 **Project Type**: Data Module in CASCADE monorepo
-**Performance Goals**: Process 200-500 hours/day across 6-50 concurrent streams
-**Constraints**: Respect KiwiSDR 90-min daily limits, anonymize all PII
-**Scale/Scope**: 150,000-300,000 hours collection, 35-75TB storage, 18-month timeline
+**Performance Goals**: Process 300-400 hours/day across 50-100 concurrent streams from pool of 800-1100 SDRs
+**Constraints**: Respect KiwiSDR (600-800 available) 30-90 minute daily limits and WebSDR (200-300 available) institutional policies, anonymize all PII
+**Scale/Scope**: 200,000-250,000 hours collection, 40-50TB storage, 18-month timeline, hybrid KiwiSDR/WebSDR strategy
 **Deployment**: Fly.io with auto-scaling, Redis/KeyDB for distributed coordination
 
 ## Constitution Check

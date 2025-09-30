@@ -2,6 +2,8 @@
 
 Training the model to ensure smooth transitions across SNR ranges, preventing jarring changes that could lose synchronization.
 
+Related: [Pattern Complexity Expert](../model/experts.md#pattern-complexity-expert-network) implements these transitions at inference.
+
 ## Overview
 
 One of the most challenging aspects of adaptive communication systems is handling transitions. When a system changes modes - whether shifting constellation size, coding rate, or modulation type - there's a risk of losing synchronization. Traditional systems handle this through explicit mode negotiation protocols, adding overhead and complexity.
@@ -547,3 +549,9 @@ This learned smoothness is more robust than designed smoothness because it adapt
 In operational deployment, smoothness training makes the difference between a system that constantly drops and reacquires sync versus one that maintains continuous communication through challenging conditions. Users experience this as the difference between choppy, interrupted communication and smooth, reliable connectivity.
 
 For emergency communications where every second counts, the ability to maintain sync through transitions can be literally life-saving. The small efficiency penalty paid for smoothness is vastly outweighed by the reliability gained.
+
+## See Also
+
+- **[Pattern Complexity Expert](../model/experts.md#pattern-complexity-expert-network)** - Network that implements smooth transitions
+- **[Hysteresis Prevention](../model/experts.md#hysteresis-prevention)** - Preventing mode oscillation
+- **[Training README](README.md)** - Overall training strategy including smoothness objectives

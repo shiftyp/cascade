@@ -2,6 +2,51 @@
 
 The model layer handles all continuous optimization in CASCADE. These are parameters best determined through gradient descent and machine learning.
 
+## Table of Contents
+
+1. [Executive Summary](#executive-summary)
+2. [Responsibilities](#responsibilities)
+3. [Expert Networks](#expert-networks)
+4. [Conductor Network](#conductor-network)
+5. [Fixed Pattern Constellation](#fixed-pattern-constellation)
+6. [Frame Processing](#frame-processing)
+7. [Pairwise Link Adaptation](#pairwise-link-adaptation)
+8. [Training Strategy](#training-strategy)
+9. [Performance Targets](#performance-targets)
+
+## Executive Summary
+
+CASCADE's model layer implements a **mixture-of-experts architecture** where five specialized neural networks handle different aspects of adaptive radio communication. A conductor network dynamically weights these experts based on current conditions, enabling optimal performance across diverse scenarios.
+
+**Architecture**:
+- **[Shared Encoder](shared_encoder.md)** (1024D features): Processes raw IQ samples, extracts universal features
+- **[5 Expert Networks](experts.md)** (512D outputs each): Specialize in noise suppression, propagation compensation, multi-user separation, constellation adaptation, and spectrum allocation
+- **[Conductor Network](conductor_details.md)**: Learns optimal expert weighting based on channel conditions
+- **Decoder**: Combines weighted expert outputs to recover transmitted data
+
+**Key Innovation**: The model decides **HOW, WHEN, and HOW MUCH** continuously:
+- **HOW**: Error correction strength, pattern selection, constellation complexity
+- **WHEN**: Fragment duration, transmission timing, ACK windows
+- **HOW MUCH**: Redundancy factor, bandwidth allocation, power distribution
+
+**Expert Specialization**:
+- **Noise Expert** (~1M params, ~2ms): Suppresses QRN/QRM while preserving signal (15-20 dB improvement)
+- **Propagation Expert** (~900K params, ~2.5ms): Compensates multipath, fading, Doppler (10-15 dB improvement)
+- **Signal Expert** (~1.2M params, ~3ms): Separates 1-50 simultaneous users (>20 dB isolation)
+- **Pattern Complexity Expert** (~500K params, ~1ms): Adapts 64→16→4→2 pattern collapse (83-93% Shannon efficiency)
+- **Spectrum Allocation Expert** (~800K params, ~2ms): Packs users efficiently in 2.5 kHz (85-95% utilization)
+
+**Training Strategy**:
+1. **Pass 1** - Random kernel training: Builds robustness to unknown conditions
+2. **Pass 2** - Generated kernel optimization: Uses Pass 1 model for realistic hints
+3. **Three-stage expert training**: Independent → conductor → joint fine-tuning
+
+**Operational Performance**:
+- Total inference: <10ms on [Raspberry Pi 4](#performance-targets)
+- SNR range: -25 to +15 dB (40 dB dynamic range)
+- [Multi-user capacity](experts.md#signal-expert-network): 1-50 simultaneous users
+- [Shannon efficiency](experts.md#shannon-efficiency-targets): 83-93% across all conditions
+
 ## Responsibilities
 
 ### HOW - Encoding Optimization
@@ -27,12 +72,12 @@ The model layer handles all continuous optimization in CASCADE. These are parame
 
 ## Expert Networks
 
-Detailed specifications for each expert:
-- [Noise Expert](experts/noise_expert.md) - QRN/QRM suppression
-- [Signal Expert](experts/signal_expert.md) - Multi-user separation
-- [Propagation Expert](experts/propagation_expert.md) - Channel compensation
-- [Pattern Complexity Expert](experts/pattern_complexity_expert.md) - Constellation adaptation
-- [Spectrum Allocation Expert](experts/spectrum_allocation_expert.md) - Frequency optimization
+CASCADE employs five specialized expert networks - see [experts.md](experts.md) for detailed specifications:
+- **Noise Expert** - QRN/QRM suppression
+- **Signal Expert** - Multi-user separation
+- **Propagation Expert** - Channel compensation
+- **Pattern Complexity Expert** - Constellation adaptation
+- **Spectrum Allocation Expert** - Frequency optimization
 
 ### Expert Summary
 
@@ -61,8 +106,8 @@ Advanced coordination strategies - see [conductor_details.md](conductor_details.
 
 ## Fixed Pattern Constellation
 
-64 orthogonal patterns with hierarchical clustering - see [patterns.md](patterns.md):
-- **Level 0**: 64 patterns (6 bits/symbol)
+[64 orthogonal patterns](patterns.md) with [hierarchical clustering](patterns.md#hierarchical-clustering):
+- **Level 0**: [64 patterns](patterns.md#pattern-design-principles) (6 bits/symbol)
 - **Level 1**: 16 clusters (4 bits/symbol)
 - **Level 2**: 4 clusters (2 bits/symbol)
 - **Level 3**: 2 clusters (1 bit/symbol)
@@ -73,7 +118,7 @@ Advanced coordination strategies - see [conductor_details.md](conductor_details.
 - Model receives constant frame size
 - Decides stretch/compression factor (0.5x-10x)
 - Creates natural fragments via sliding window
-- Streams to protocol layer
+- Streams to [protocol layer](../protocol/README.md)
 
 ### Kernel Generation
 - **Bidirectional optimization**: Receiver generates, transmitter uses

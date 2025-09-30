@@ -364,3 +364,10 @@ def search_conductor_architecture():
     )
     return best_architecture
 ```
+
+## See Also
+
+- **[Expert Networks](experts.md)** - The five experts that the conductor coordinates
+- **[Shared Encoder](shared_encoder.md)** - Generates the 1024D features experts process
+- **[Model README](README.md)** - Overall architecture and conductor's role
+- **[Training Strategy](../training/README.md#stage-2-conductor-training)** - How the conductor is trained

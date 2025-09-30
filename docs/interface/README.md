@@ -256,3 +256,10 @@ class MockProtocol:
 - Total interface: <200KB
 
 This interface ensures clean separation while enabling optimal performance through learned parameters.
+
+## See Also
+
+- **[Protocol Layer](../protocol/README.md)** - Discrete decision-making and protocol constraints
+- **[Model Layer](../model/README.md)** - Continuous optimization within constraints
+- **[Augmented Inference](augmented_inference.md)** - Runtime inference optimizations
+- **[Expert Networks](../model/experts.md)** - How model optimizations are computed

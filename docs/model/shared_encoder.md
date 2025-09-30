@@ -1,12 +1,12 @@
 # Shared Feature Encoder
 
-A common encoder shared by all expert networks, reducing parameters by 62% while ensuring consistent feature extraction.
+A common encoder shared by all [expert networks](experts.md), reducing parameters by 62% while ensuring consistent feature extraction.
 
 ## Overview
 
 Traditional ensemble approaches to neural networks often duplicate feature extraction across different expert networks. If you have five experts, you might have five separate encoders learning similar low-level features from the raw data. This is wasteful and can lead to inconsistent feature representations.
 
-CASCADE uses a single shared encoder that all expert networks build upon. This is like having one set of eyes that multiple brain regions interpret, rather than each brain region having its own eyes. The shared encoder learns universal radio features (energy patterns, phase relationships, frequency components) that all experts need, while each expert's "head" network specializes in interpreting these features for its specific task.
+CASCADE uses a single shared encoder that all [expert networks](experts.md) build upon. This is like having one set of eyes that multiple brain regions interpret, rather than each brain region having its own eyes. The shared encoder learns universal radio features (energy patterns, phase relationships, frequency components) that all experts need, while each expert's "head" network specializes in interpreting these features for its specific task.
 
 This architecture provides three critical benefits:
 1. **Dramatic parameter reduction** - One encoder instead of five cuts model size by over 60%
@@ -63,6 +63,9 @@ class SharedFeatureEncoder(nn.Module):
         """
         Extract shared features from raw IQ samples
         Input: [batch, 2, sequence_length] (I/Q channels)
+            - sequence_length: Variable, typically 0.5-5 seconds of samples
+            - At 12 kHz sample rate: 6,000-60,000 samples
+            - Adaptive pooling handles any input length
         Output: [batch, 1024] feature vector
         """
 
@@ -385,3 +388,10 @@ The shared encoder architecture enables exciting future possibilities:
 - **Hardware Acceleration**: Single encoder is easier to optimize in hardware
 
 The shared encoder is not just an optimization - it's a fundamental design principle that enables CASCADE's sophisticated capabilities while remaining deployable on resource-constrained hardware.
+
+## See Also
+
+- **[Expert Networks](experts.md)** - The five experts that use these shared features
+- **[Conductor Details](conductor_details.md)** - How expert outputs are weighted and combined
+- **[Model README](README.md)** - Overall architecture and responsibilities
+- **[Training Strategy](../training/README.md#three-stage-expert-training)** - How the shared encoder is trained

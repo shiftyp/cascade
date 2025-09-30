@@ -47,26 +47,34 @@ Represents a single continuous recording from one KiwiSDR on one frequency.
 - pending → processing → completed
 - pending → processing → failed
 
-### KiwiSDRSource
-Registry of available KiwiSDR receivers with complete metadata and usage tracking.
+### SDRSource
+Registry of available SDR receivers (KiwiSDR and WebSDR) with complete metadata and usage tracking.
 
 **Attributes:**
-- `kiwisdr_id`: UUID - Unique identifier
-- `url`: String - KiwiSDR URL (host:port)
-- `name`: String - Friendly name from KiwiSDR config
+- `sdr_id`: UUID - Unique identifier
+- `sdr_type`: Enum - [KIWISDR, WEBSDR]
+- `url`: String - SDR URL (host:port for KiwiSDR, base URL for WebSDR)
+- `name`: String - Friendly name from receiver config
+- `institution_type`: Enum - [INDIVIDUAL, UNIVERSITY, RESEARCH_INSTITUTE, AMATEUR_CLUB]
 - `grid_square`: String - 4-character Maidenhead locator
 - `latitude`: Float - Exact latitude (internal use only)
 - `longitude`: Float - Exact longitude (internal use only)
 - `altitude_m`: Integer - Altitude in meters
 - `antenna_type`: String - Antenna description from config
-- `daily_limit_minutes`: Integer - Usage limit per day
-- `session_limit_minutes`: Integer - Max session duration
+- `daily_limit_minutes`: Integer - Usage limit per day (typically 30-90)
+- `session_limit_minutes`: Integer - Max session duration (typically 30)
+- `peak_hours_local`: JSON - Restricted hours in receiver local time
+- `usage_policy`: Enum - [PUBLIC_LIMITED, RESEARCH_AGREEMENT, COOPERATIVE, RESTRICTED]
+- `owner_contact`: String - Contact for research coordination (hashed)
+- `research_approved`: Boolean - Approved for extended research usage
 - `last_used`: DateTime - Last connection time
-- `usage_today_minutes`: Integer - Minutes used today
+- `usage_today_minutes`: Integer - Minutes used today from our IPs
+- `total_ips_used`: Integer - Number of IP addresses used today
+- `next_available`: DateTime - When daily quota resets
 - `reliability_score`: Float - 0.0-1.0 uptime metric
 - `is_active`: Boolean - Currently available
 - `has_gps`: Boolean - GPS timestamps available
-- `kiwi_metadata`: JSON - Complete KiwiSDR configuration
+- `sdr_metadata`: JSON - Complete SDR configuration (format varies by type)
   - `version`: KiwiSDR software version
   - `fpga_version`: FPGA firmware version
   - `board_type`: Hardware revision
@@ -97,9 +105,11 @@ Registry of available KiwiSDR receivers with complete metadata and usage trackin
 
 **Constraints:**
 - url unique
-- daily_limit_minutes >= 0
+- daily_limit_minutes >= 0 (0 = unlimited for some WebSDRs)
 - reliability_score between 0.0 and 1.0
 - grid_square matches [A-R]{2}[0-9]{2} pattern
+- sdr_type in [KIWISDR, WEBSDR]
+- institution_type required if sdr_type = WEBSDR
 
 ### QRNSample
 Characterization of atmospheric noise within a recording.

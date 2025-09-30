@@ -58,9 +58,9 @@ When creating this spec from a user prompt:
 ### Session 2025-09-29
 - Q: What is the target collection timeline for the 100-500 hours of QRN data? → A: seasonal cycle geographic diversity
 - Q: What is the primary collection strategy for the 18-month period? → A: all (continuous baseline + event-triggered + FT8/WSPR focused)
-- Q: What are the storage requirements and retention policies? → A: 35-75TB total for 150,000-300,000 hours of compressed data
+- Q: What are the storage requirements and retention policies? → A: 40-50TB total for 200,000-250,000 hours of compressed data
 - Q: What is the recording bandwidth and format specification? → A: 12 kHz IQ, 16-bit, 12kHz sample rate, FLAC compressed
-- Q: How many simultaneous KiwiSDR stations for baseline collection? → A: Variable (6 quiet, 20+ active)
+- Q: How many simultaneous KiwiSDR stations for baseline collection? → A: Variable (50-100 baseline, 100-200 during events)
 - Q: What is the data quality validation threshold? → A: Keep all data (complete archive)
 
 ## Module Context *(mandatory for CASCADE)*
@@ -95,24 +95,24 @@ As a CASCADE developer, I need to collect real-world atmospheric noise (QRN) and
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
-- **FR-001**: System MUST connect to public KiwiSDR receivers programmatically
+- **FR-001**: System MUST connect to public KiwiSDR and WebSDR receivers programmatically using appropriate APIs and protocols
 - **FR-002**: System MUST record atmospheric noise (QRN) from HF bands (10 kHz - 30 MHz)
-- **FR-003**: System MUST collect MINIMUM 10,000 hours per HF band (60,000 hours baseline) with expanded event-driven collection targeting 150,000-300,000 total hours over 18 months from geographically and temporally diverse locations
+- **FR-003**: System MUST collect MINIMUM 4,000 hours per HF band (24,000 hours baseline) with expanded event-driven collection targeting 200,000-250,000 total hours over 18 months from geographically and temporally diverse locations, using hybrid KiwiSDR/WebSDR collection strategy
 - **FR-004**: System MUST extract propagation data from FT8 and WSPR transmissions
 - **FR-005**: System MUST anonymize all callsigns and location information
 - **FR-006**: System MUST preserve GPS timestamps for all recordings
 - **FR-007**: System MUST store audio in FLAC format (lossless compressed) with 12 kHz IQ, 16-bit depth, 12kHz sample rate
-- **FR-008**: System MUST rotate between multiple KiwiSDR sources to avoid overuse
+- **FR-008**: System MUST rotate between multiple sources from pool of 600-800 KiwiSDRs and 200-300 WebSDRs to avoid overuse and respect usage policies
 - **FR-009**: System MUST handle receiver disconnections gracefully with automatic retry
 - **FR-010**: System MUST log all collection activities for audit purposes
 - **FR-011**: Users MUST be able to configure recording duration and schedule via configuration files and CLI parameters
 - **FR-012**: Users MUST be able to specify frequency ranges and modes through configuration files
 - **FR-013**: System MUST validate data quality before storage (GPS lock present, sample rate within ±1%, no gaps >1 second, SNR measurement capability down to -30dB)
-- **FR-014**: System MUST respect public receiver usage policies (daily limits)
+- **FR-014**: System MUST respect public receiver usage policies including KiwiSDR 30-90 minute daily limits and WebSDR institutional policies, avoiding peak usage hours per geographic region
 - **FR-015**: System MUST organize recordings by date, frequency, and location metadata
-- **FR-016**: System MUST implement continuous baseline collection using 6-10 simultaneous SDRs with intelligent rotation for propagation cycle coverage (diurnal, geographic, seasonal), scaling to 20-50 SDRs during events
-- **FR-017**: System MUST maintain expandable storage capacity starting at 35TB, scaling to 75TB+ for 150,000-300,000 hours of compressed IQ data
-- **FR-018**: System MUST support variable station count (6-10 baseline, 20+ during geomagnetic storms, 50+ during rare events)
+- **FR-016**: System MUST implement continuous baseline collection using 50-100 simultaneous SDRs with intelligent rotation respecting 30-90 minute daily limits per receiver, ensuring propagation cycle coverage (diurnal, geographic, seasonal), scaling to 200+ SDRs during events
+- **FR-017**: System MUST maintain expandable storage capacity starting at 20TB, scaling to 50TB+ for 200,000-250,000 hours of compressed IQ data using hybrid KiwiSDR/WebSDR collection
+- **FR-018**: System MUST support variable station count (50-100 baseline respecting daily limits, 100-200+ during geomagnetic storms, 300+ during rare events)
 - **FR-019**: System MUST retain all collected data regardless of quality for complete archive (validation from FR-013 logs issues but does not reject data)
 - **FR-020**: System MUST capture 12 kHz windows centered on FT8 frequencies to include both signals and adjacent quiet zones
 - **FR-021**: System MUST record at these specific center frequencies to maximize quiet spectrum coverage while capturing propagation indicators:
@@ -173,10 +173,19 @@ As a CASCADE developer, I need to collect real-world atmospheric noise (QRN) and
 - **FR-056**: System MUST ensure equinoctial period coverage (March 15-April 15, September 15-October 15) receives 30% collection weight increase due to enhanced propagation conditions
 - **FR-057**: System MUST maintain seasonal collection quotas with automatic rebalancing when any season falls below 20% or exceeds 30% of total collection hours
 - **FR-058**: System MUST integrate cycle-aware factors into rarity scoring algorithm to properly weight events based on their natural frequency within current cycle phases
+- **FR-060**: System MUST implement intelligent SDR time limit management respecting 30-90 minute daily usage restrictions per IP address and implementing automatic rotation strategies
+- **FR-061**: System MUST maintain database of SDR usage policies including daily time limits, peak hour restrictions, and owner contact information for coordination
+- **FR-062**: System MUST implement multi-IP rotation strategy using VPN or proxy services to maximize available collection time while respecting individual SDR limits
+- **FR-063**: System MUST prioritize SDR relationship management with direct owner coordination for research access agreements allowing extended usage periods
+- **FR-064**: System MUST implement graceful session management with automatic disconnection before time limits and seamless handoff to alternative SDRs
+- **FR-065**: System MUST integrate WebSDR receivers to complement KiwiSDR collection, leveraging WebSDR's higher user capacity and institutional backing
+- **FR-066**: System MUST maintain separate usage tracking for KiwiSDR (30-90 minute daily limits) and WebSDR (institutional policies) with appropriate connection strategies
+- **FR-067**: System MUST implement hybrid SDR selection algorithm prioritizing WebSDR for longer sessions (>90 minutes) and KiwiSDR for shorter sessions
+- **FR-068**: System MUST coordinate with university and institutional WebSDR operators for research access agreements and extended usage permissions
 
 ### Key Entities *(include if feature involves data)*
 - **Recording Session**: Represents a single data collection session with start/end times, source receiver, frequency, mode, quality metrics, and correlation ID for linking related samples
-- **KiwiSDR Source**: Represents a public receiver with URL, location (anonymized), available frequency ranges, and usage statistics
+- **SDR Source**: Represents a public receiver from pool of ~600-800 KiwiSDRs or ~200-300 WebSDRs with URL, location (anonymized), available frequency ranges, usage statistics, daily time limits, peak hour restrictions, owner relationship status, and receiver type-specific policies
 - **QRN Sample**: Atmospheric noise recording with timestamp, frequency, bandwidth, signal characteristics, geographic region, quiet period markers, and correlation ID
 - **Propagation Record**: Extracted FT8/WSPR data showing signal strength, path distance, frequency, time, detected propagation mode, confidence score, and correlation ID (no message content)
 - **SpaceWeatherData**: Solar and geomagnetic conditions including K-index, solar flux, X-ray class and flux values for event correlation, enhanced with natural cycle tracking (solar cycle phase, QBO index, lunar phase, seasonal balance factors)

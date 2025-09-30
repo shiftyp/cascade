@@ -2,20 +2,54 @@
 
 CASCADE's training approach emphasizes learning from real-world conditions while maintaining privacy and enabling continuous improvement. The complete training pipeline spans 21 months, from initial data collection through final model deployment.
 
+## Table of Contents
+
+1. [Training Pipeline Overview](#training-pipeline-overview)
+2. [Advanced Training Strategies](#advanced-training-strategies-from-embedding-analytics)
+3. [Two-Pass Kernel Training](#two-pass-kernel-training)
+4. [Three-Stage Expert Training](#three-stage-expert-training)
+5. [Data Sources](#data-sources)
+6. [Temporal Diversity Assurance](#temporal-diversity-assurance)
+7. [Validation Through Real-World Testing](#validation-through-real-world-testing)
+8. [Continuous Learning](#continuous-learning)
+9. [Training Infrastructure](#training-infrastructure)
+
+## Executive Summary
+
+CASCADE's training strategy solves a fundamental challenge: how to train an adaptive HF radio system without existing CASCADE deployments. The solution uses **three-stage knowledge transfer**:
+
+1. **Data Collection (Months 1-18)**: Collect 200k-250k hours of real HF propagation from [800-1100 SDRs](data_pipeline.md#sdr-usage-management) worldwide, capturing FT8/WSPR signals and atmospheric noise (see [Data Pipeline](data_pipeline.md))
+2. **Knowledge Compression (Month 19)**: Train [embedding VAEs](embedding_models.md) that compress 40-50TB of IQ data into 15-25GB of embeddings, preserving propagation diversity
+3. **CASCADE Training (Months 20-21)**: Train CASCADE on synthetic signals augmented with real embeddings, learning to handle authentic propagation conditions
+
+**Key Innovation**: Embeddings are used **only during training** to create realistic conditions. At inference, CASCADE processes raw IQ samples end-to-end, requiring no separate embedding computation.
+
+**Training Philosophy**:
+- **Real data only**: No synthetic propagation models, only authentic recordings
+- **[Diversity-biased sampling](data_pipeline.md#diversity-biased-sampling)**: Rare events (K≥5 storms, M/X flares) get 100x training weight
+- **[Natural correlation preservation](data_pipeline.md#correlation-preservation)**: Noise and propagation from same time/place stay paired
+- **[Privacy-first](../privacy.md)**: Callsigns hashed, grid squares preserved, no message content stored
+
+**Training Scale**:
+- Data: 200k-250k hours raw → 3-5TB curated → 15-25GB [embeddings](embedding_models.md)
+- Duration: 18 months collection + 3 months processing/training
+- Compute: 4× RTX 4090 GPUs for 1-2 weeks (CASCADE training)
+- Storage: [40-50TB cold storage](data_pipeline.md#storage-requirements), 3-5TB hot NVMe, 15-25GB embeddings
+
 ## Training Pipeline Overview
 
 The CASCADE training process follows a carefully orchestrated sequence:
 
-1. **Months 1-18**: Collect 35-75TB of raw IQ recordings from global KiwiSDR network
-2. **Month 19**: Create diversity-biased training dataset (5TB) and train embedding models
+1. **Months 1-18**: Collect 40-50TB of raw IQ recordings from global KiwiSDR/WebSDR network
+2. **Month 19**: Create diversity-biased training dataset (3-5TB) and train embedding models
 3. **Months 19-20**: Generate channel embeddings from curated dataset
 4. **Months 20-21**: Train CASCADE model using correlated embedding pairs
 
 This approach maximizes the diversity of training conditions while maintaining computational efficiency. For detailed information on each stage, see:
-- [Data Pipeline](data_pipeline.md) - Complete data flow from collection to training
-- [Embedding Models](embedding_models.md) - VAE architectures for channel representation
-- [Propagation Augmentation](propagation_augmentation.md) - Applying real propagation to synthetic signals
-- [Embedding Analytics](embedding_analytics.md) - Storage strategies and clustering insights
+- [Data Pipeline](data_pipeline.md) - Complete data flow from collection to training including geographic diversity strategies
+- [Embedding Models](embedding_models.md) - VAE architectures, propagation augmentation, and embedding analytics
+- [Continuous Improvement](continuous_improvement.md) - Privacy-preserving telemetry and federated learning
+- [Long-Term Roadmap](long_term_roadmap.md) - Multi-decadal planning, climate adaptation, and scientific legacy (2025-2040)
 
 ## Advanced Training Strategies from Embedding Analytics
 
@@ -124,15 +158,15 @@ for epoch in range(100):
 ## Three-Stage Expert Training
 
 ### Stage 1: Independent Expert Training
-Train all expert networks in parallel with their specific data:
-- **Noise Expert**: QRN/QRM recordings from WebSDRs
-- **Signal Expert**: Multi-user synthetic scenarios
-- **Propagation Expert**: FT8/WSPR propagation reports
-- **Pattern Expert**: Shannon optimization tasks
-- **Spectrum Expert**: Interference avoidance scenarios
+Train all [expert networks](../model/experts.md) in parallel with their specific data:
+- **[Noise Expert](../model/experts.md#noise-expert-network)**: QRN/QRM recordings from WebSDRs
+- **[Signal Expert](../model/experts.md#signal-expert-network)**: Multi-user synthetic scenarios
+- **[Propagation Expert](../model/experts.md#propagation-expert-network)**: FT8/WSPR propagation reports
+- **[Pattern Expert](../model/experts.md#pattern-complexity-expert-network)**: Shannon optimization tasks
+- **[Spectrum Expert](../model/experts.md#spectrum-allocation-expert-network)**: Interference avoidance scenarios
 
 ### Stage 2: Conductor Training
-Freeze expert networks and train conductor to coordinate:
+Freeze expert networks and train [conductor](../model/conductor_details.md) to coordinate:
 ```python
 for expert in experts:
     expert.freeze()
@@ -164,14 +198,14 @@ Adjust compute allocation based on results - if conductor struggles, allocate mo
 
 The training data comes entirely from real-world recordings, with no synthetic propagation mixing:
 
-- **Scale**: 150,000-300,000 hours of IQ recordings over 18 months
-- **Sources**: 30+ KiwiSDR receivers worldwide, rotated for geographic diversity
+- **Scale**: 200,000-250,000 hours of IQ recordings over 18 months
+- **Sources**: 800-1100 receivers globally (600-800 KiwiSDRs + 200-300 WebSDRs), with 50-100 concurrent connections rotating through usage limits
 - **Bands**: Six HF amateur bands (80m, 40m, 20m, 15m, 10m, 6m)
 - **Content**: FT8/WSPR signals for propagation, quiet periods for noise characterization
 
 ### Diversity-Biased Training Set
 
-From the full collection, a 5TB curated subset is created that oversamples rare events:
+From the full collection, a 3-5TB curated subset is created that oversamples rare events:
 
 - **Ultra-rare events** (100% included): K≥8 storms, X-class flares, exotic propagation
 - **Very rare events** (80% sampled): K=6-7 storms, M-class flares, aurora
@@ -506,6 +540,192 @@ def validate_temporal_diversity(training_dataset):
 
 This systematic temporal diversity assurance ensures CASCADE trains on truly representative HF propagation conditions across all relevant natural cycles, providing robust performance despite the 18-month solar minimum data collection period.
 
+## Validation Through Real-World Testing
+
+CASCADE validation employs a comprehensive two-stage approach combining controlled laboratory testing with innovative real-world geographic diversity testing using the global amateur radio infrastructure.
+
+### Laboratory Testing Infrastructure
+
+**Software-Defined Radio Simulation:**
+```python
+class ControlledPropagationTesting:
+    """
+    Laboratory validation using SDR hardware and GNU Radio channel models
+    """
+    def __init__(self):
+        self.tx_sdr = USRP_B210()  # Or HackRF, BladeRF
+        self.rx_sdr = USRP_B210()
+        self.channel_sim = GNURadio_Channel_Model()
+
+    def test_cascade_adaptation(self, test_conditions):
+        results = {}
+
+        for condition in test_conditions:
+            # Configure controlled channel
+            self.channel_sim.configure(
+                multipath_delays=condition['delays'],
+                fading_rate=condition['fading_hz'],
+                doppler_spread=condition['doppler_hz'],
+                snr_db=condition['target_snr']
+            )
+
+            # Generate CASCADE transmission
+            test_signal = cascade_encode(test_data, adaptive_params=None)
+
+            # Apply controlled propagation
+            received = self.channel_sim.apply(test_signal)
+
+            # Test CASCADE adaptation
+            decoded, adaptation_time = cascade_decode_with_timing(received)
+
+            results[condition['name']] = {
+                'ber': calculate_ber(test_data, decoded),
+                'adaptation_ms': adaptation_time,
+                'snr_threshold': find_minimum_snr(condition),
+                'success_rate': calculate_success_rate(decoded)
+            }
+
+        return results
+```
+
+**Multi-User Interference Testing:**
+```python
+def validate_pattern_system(num_users=10):
+    """
+    Test CASCADE's interference avoidance with multiple simultaneous users
+    """
+    # Generate unique patterns for each user
+    patterns = [cascade_generate_pattern(user_id=i) for i in range(num_users)]
+
+    # Create test signals for each user
+    user_signals = []
+    for i, pattern in enumerate(patterns):
+        signal = cascade_encode(test_data[i], pattern=pattern)
+        user_signals.append(signal)
+
+    # Combine all signals (simulate shared frequency)
+    combined_signal = sum(user_signals) + add_realistic_noise(snr=-15)
+
+    # Test each user's decoder independently
+    success_rates = []
+    for i, pattern in enumerate(patterns):
+        decoded = cascade_decode(combined_signal, pattern=pattern)
+        success_rate = calculate_success_rate(test_data[i], decoded)
+        success_rates.append(success_rate)
+
+    return {
+        'users_successful': len([r for r in success_rates if r > 0.9]),
+        'average_success_rate': np.mean(success_rates),
+        'pattern_collision_rate': calculate_pattern_collisions(patterns),
+        'interference_rejection_db': measure_interference_rejection(combined_signal)
+    }
+```
+
+### Real-World Multi-Path Testing
+
+**Remote Transceiver Network Coordination:**
+```python
+class GeographicDiversityTesting:
+    """
+    Coordinate remote transmissions with global SDR reception network
+    """
+    def __init__(self):
+        self.remote_tx_pool = RemoteTransceiverPool()
+        self.sdr_rx_network = HybridSDRNetwork()
+        self.real_time_optimizer = CascadeOptimizer()
+
+    def execute_geographic_diversity_test(self):
+        # Schedule coordinated transmissions from multiple continents
+        test_session = {
+            'tx_stations': [
+                {'service': 'RemoteHams', 'location': 'VK2', 'grid': 'QF56'},
+                {'service': 'University_WebSDR', 'location': 'JA1', 'grid': 'PM95'},
+                {'service': 'Amateur_Volunteer', 'location': 'G0', 'grid': 'IO91'}
+            ],
+            'frequency': 14080000,  # 20m test frequency
+            'duration': 600,        # 10-minute coordinated test
+            'test_data': generate_test_payload()
+        }
+
+        # Coordinate simultaneous reception across global SDR network
+        rx_stations = self.sdr_rx_network.select_geographic_coverage(
+            tx_locations=[s['grid'] for s in test_session['tx_stations']],
+            path_types=['short', 'long', 'polar', 'equatorial'],
+            min_receivers_per_tx=5  # At least 5 receivers per transmitter
+        )
+
+        # Execute real-time multi-path optimization
+        results = {}
+        for tx_station in test_session['tx_stations']:
+            path_results = self.coordinate_real_time_test(
+                tx_station, rx_stations, test_session['test_data']
+            )
+            results[tx_station['location']] = path_results
+
+        return self.analyze_geographic_performance(results)
+
+    def coordinate_real_time_test(self, tx_station, rx_stations, test_data):
+        """
+        Real-time optimization during live transmission
+        """
+        transmission_results = []
+
+        for minute in range(10):  # 10-minute test
+            # Current CASCADE parameters
+            current_params = self.real_time_optimizer.get_current_params()
+
+            # Transmit CASCADE signal with current parameters
+            tx_result = self.remote_tx_pool.transmit(
+                station=tx_station,
+                data=test_data,
+                cascade_params=current_params
+            )
+
+            # Collect simultaneous reception across multiple SDRs
+            rx_results = []
+            for rx_sdr in rx_stations:
+                reception = self.sdr_rx_network.receive_and_decode(
+                    sdr=rx_sdr,
+                    target_tx=tx_station,
+                    expected_data=test_data
+                )
+                rx_results.append(reception)
+
+            # Analyze path performance
+            path_analysis = self.analyze_propagation_paths(
+                tx_station, rx_results
+            )
+
+            # Real-time parameter optimization
+            optimized_params = self.real_time_optimizer.optimize_for_paths(
+                current_performance=path_analysis,
+                target_objectives=['reliability', 'throughput', 'fairness']
+            )
+
+            # Update parameters for next transmission
+            self.real_time_optimizer.update_params(optimized_params)
+
+            transmission_results.append({
+                'minute': minute,
+                'tx_params': current_params,
+                'path_performance': path_analysis,
+                'optimization_delta': calculate_parameter_delta(
+                    current_params, optimized_params
+                )
+            })
+
+        return transmission_results
+```
+
+**Multi-Path Optimization Validation:**
+- **Adaptive Convergence**: Measure how quickly CASCADE optimizes for multiple paths
+- **Path Fairness**: Ensure optimization doesn't sacrifice weak paths for strong ones
+- **Geographic Scaling**: Validate performance improvement with increased receiver diversity
+- **Real-Time Response**: Test adaptation speed to changing propagation conditions
+- **Emergency Readiness**: Simulate emergency scenarios with multiple coordinated stations
+
+This enhanced testing methodology demonstrates CASCADE's capabilities through rigorous, innovative validation that leverages the global amateur radio infrastructure for unprecedented real-world testing while maintaining amateur radio community focus and regulatory compliance.
+
 ## Continuous Learning
 
 ### ACK-Based Adaptation
@@ -530,10 +750,47 @@ def process_ack(ack_message):
 ```
 
 ### Privacy-Preserving Telemetry
-- **Differential Privacy**: ε=1.0 on all samples
-- **No PII**: No callsigns or message content
-- **Generalization**: Grid squares to 1000km
-- **K-Anonymity**: Minimum K=10 samples
+
+**Geographic Gap Closure Strategy:**
+Telemetry becomes CASCADE's primary tool for addressing geographic bias post-deployment:
+
+```python
+def geographic_telemetry_strategy():
+    """
+    Use telemetry to progressively achieve global coverage
+    """
+    return {
+        'privacy_guarantees': {
+            'differential_privacy': 1.0,      # ε=1.0 noise addition
+            'k_anonymity': 10,                # Minimum 10 reports per region
+            'grid_precision': 'maidenhead_4', # ~70x35 mile areas
+            'temporal_precision': 'hourly',   # Round to nearest hour
+            'no_pii': True                    # No callsigns or content
+        },
+        'collection_priority': {
+            'africa': 5.0,                    # Maximum priority
+            'pacific_islands': 5.0,           # Maximum priority
+            'polar_regions': 4.5,             # Very high priority
+            'south_america': 4.0,             # High priority
+            'middle_east': 3.5,               # High priority
+            'north_america': 0.5,             # Low (well-covered)
+            'europe': 0.4                     # Lowest (overcovered)
+        },
+        'progressive_improvement': {
+            'month_0': '40-50% in gaps',      # Initial deployment
+            'month_6': '75-85% in gaps',      # First telemetry update
+            'month_12': '80-90% in gaps',     # Seasonal coverage
+            'month_18': '85-95% globally'     # Full integration
+        }
+    }
+```
+
+**Telemetry Schema:**
+- **Location**: Grid square only (FK29 = Fiji region)
+- **Propagation**: Detected mode, multipath, Doppler
+- **Noise**: QRN level, type, temporal stability
+- **Performance**: Adaptation time, efficiency achieved
+- **No Content**: Never transmit decoded messages
 
 ### Model Updates
 - Collect telemetry for 30 days
@@ -557,9 +814,9 @@ The complete pipeline requires different computational resources at each stage:
 
 Different storage tiers optimize cost and performance:
 
-- **Archive Storage** (35-75TB): Cold storage/NAS for complete IQ collection
-- **Training Storage** (5TB): Fast NVMe array for curated dataset
-- **Embedding Database** (25GB): RAM/SSD for rapid random access
+- **Archive Storage** (40-50TB): Tigris S3 cold storage for complete IQ collection
+- **Training Storage** (3-5TB): Fast NVMe array for curated dataset
+- **Embedding Database** (15-25GB): RAM/SSD for rapid random access
 - **Model Storage** (1GB): Version-controlled model checkpoints
 
 ### Software Stack

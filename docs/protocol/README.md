@@ -72,3 +72,11 @@ The protocol provides constraints to the model:
 - Target destination
 
 The model returns optimizations within these constraints.
+
+## See Also
+
+- **[Model Layer](../model/README.md)** - Continuous optimization that works within protocol constraints
+- **[Interface Documentation](../interface/README.md)** - Detailed protocol/model boundary definitions
+- **[Priority Handling](priority_handling.md)** - Emergency and priority message processing
+- **[Beacons](beacons.md)** - Network discovery and capabilities exchange
+- **[Link Adaptation](link_adaptation.md)** - Pairwise communication optimization

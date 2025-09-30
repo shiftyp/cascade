@@ -151,3 +151,9 @@ While the full 64-pattern table is large, here's the structure:
 | 60-63   | [0,0,1,0,0,1,0,1] | Varied | 15 | 1 |
 
 The complete pattern table is stored in the model binary and loaded at initialization.
+
+## See Also
+
+- **[Pattern Complexity Expert](experts.md#pattern-complexity-expert-network)** - Network that selects optimal pattern complexity
+- **[TFP Dimensions](tfp_dimensions.md)** - How patterns enable multi-user separation
+- **[Model README](README.md#fixed-pattern-constellation)** - Overview of pattern-based architecture
