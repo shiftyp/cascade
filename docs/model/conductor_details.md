@@ -35,6 +35,85 @@ t=2: weights = [0.1, 0.2, 0.5, 0.2, 0.0]  # Emphasize propagation
 t=3: weights = [0.1, 0.1, 0.3, 0.4, 0.1]  # Final complexity adjustment
 ```
 
+## Telemetry Interpretation
+
+The conductor's attention weights (5-D vector) captured in telemetry reveal which experts CASCADE relied on during operation, enabling diagnostic analysis and training insights.
+
+### Reading Conductor Weights
+
+**Weight vector format:** `[noise, signal, propagation, pattern, spectrum]`
+
+**Example interpretations:**
+
+```markdown
+## High SNR, Single User
+weights = [0.1, 0.2, 0.1, 0.5, 0.1]
+- Pattern Expert dominant (0.5): Clean conditions, focus on constellation optimization
+- Low noise/propagation: Channel is clean and stable
+- **Interpretation**: Ideal conditions, maximizing throughput via complex patterns
+
+## Low SNR, Multiple Users
+weights = [0.4, 0.3, 0.2, 0.05, 0.05]
+- Noise Expert highest (0.4): Suppressing QRN/QRM
+- Signal Expert active (0.3): Separating multiple users
+- **Interpretation**: Challenging conditions, focus on robustness over throughput
+
+## Heavy Multipath/Fading
+weights = [0.1, 0.1, 0.6, 0.1, 0.1]
+- Propagation Expert dominant (0.6): Compensating for channel distortion
+- Other experts reduced
+- **Interpretation**: Channel equalization critical, likely skip/selective fading
+
+## Spectrum Congestion
+weights = [0.15, 0.25, 0.15, 0.15, 0.30]
+- Spectrum Expert elevated (0.30): Avoiding interference
+- Balanced other experts
+- **Interpretation**: Frequency coordination needed, possibly contest/high activity
+```
+
+### Diagnostic Patterns
+
+**Attention weight patterns reveal system health:**
+
+**Healthy operation:**
+- Weights sum to ~1.0 (±0.05)
+- Smooth temporal transitions
+- Contextually appropriate (high noise → high noise expert)
+
+**Problematic patterns:**
+- All weights near 0.2 (conductor indecisive, may indicate OOD conditions)
+- Rapid oscillation (instability, possibly undertrained conductor)
+- Inappropriate activation (high propagation weight but no multipath detected)
+
+### Training Insights from Telemetry
+
+**Conductor weight telemetry enables:**
+
+1. **Expert utilization analysis**: Which experts are underutilized?
+2. **Condition-expert correlation**: Do weights match ground truth conditions?
+3. **Temporal stability**: Are transitions smooth or erratic?
+4. **Model improvement**: Fine-tune conductor to activate experts more appropriately
+
+```python
+def analyze_conductor_telemetry(telemetry_batch):
+    """Extract insights from conductor weights"""
+
+    for sample in telemetry_batch:
+        weights = sample['conductor_weights']  # [noise, signal, prop, pattern, spectrum]
+        conditions = sample['application_state']
+
+        # Check if expert activation matches conditions
+        if conditions['users_on_frequency'] > 5:
+            # Expect signal expert to be active
+            if weights[1] < 0.2:  # Signal expert index
+                flag_as_undertrained(sample, "Signal expert inactive during multi-user")
+
+        if conditions['measured_snr_db'] < -10:
+            # Expect noise expert to dominate
+            if weights[0] < 0.3:  # Noise expert index
+                flag_as_undertrained(sample, "Noise expert weak during low SNR")
+```
+
 ## Advanced Architectures
 
 ### Attention-Based Weighting

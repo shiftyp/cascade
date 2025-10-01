@@ -17,11 +17,60 @@ CASCADE collects anonymized performance data to understand real-world usage patt
 
 ### Telemetry Data Structure
 
-The telemetry system collects three categories of information, all quantized and anonymized:
+CASCADE telemetry captures the complete internal state of the model during operation, providing rich training data for continuous improvement. The system collects CASCADE's neural network activations alongside anonymized application metadata.
+
+#### Internal Model State Telemetry
+
+The core telemetry data consists of CASCADE's internal neural network activations, captured with zero computational overhead.
+
+**TX vs RX Telemetry Asymmetry:**
+
+CASCADE generates different telemetry for transmission vs reception due to the encoding/decoding asymmetry:
+
+- **RX Telemetry** (3581-D): Captures all expert outputs
+  - All 5 experts active during decoding (noise suppression, signal separation, propagation compensation, etc.)
+  - Conductor coordinates experts to decode received signals
+  - Full internal state needed to understand decoding decisions
+
+- **TX Telemetry** (1040-D): Captures encoding-relevant experts only
+  - Pattern Expert (512-D): Selects which of 64 patterns to use
+  - Spectrum Expert (512-D): Allocates frequency bandwidth
+  - Station Fingerprint (16-D): Characterizes own equipment
+  - Noise/Signal/Propagation experts not used during encoding (they're for RX)
+
+This asymmetry reflects CASCADE's architecture: encoding selects parameters, decoding processes signals.
 
 ```python
+class CascadeInternalStateTelemetry:
+    """CASCADE's complete internal representation during operation"""
+
+    def __init__(self):
+        # CASCADE's internal neural network state (3581-D total)
+        # All of these are ALREADY COMPUTED during normal operation
+
+        self.neural_state = {
+            # Shared encoder output (universal features)
+            'shared_encoder': np.ndarray,      # 1024-D, FP32
+
+            # Expert network outputs (specialized processing)
+            'noise_expert': np.ndarray,        # 512-D, FP32
+            'signal_expert': np.ndarray,       # 512-D, FP32
+            'propagation_expert': np.ndarray,  # 512-D, FP32
+            'pattern_expert': np.ndarray,      # 512-D, FP32
+            'spectrum_expert': np.ndarray,     # 512-D, FP32
+
+            # Conductor attention (which experts were active)
+            'conductor_weights': np.ndarray    # 5-D, FP32
+        }
+
+        # Stored as INT8 for 4× compression (dequantized during training)
+        self.quantization_params = {
+            'scale': float,         # For INT8 → FP32 conversion
+            'zero_point': int       # Quantization offset
+        }
+
 class TelemetrySample:
-    """Anonymized performance data"""
+    """Complete telemetry sample (RX or TX)"""
 
     def __init__(self):
         # NO personally identifiable information
@@ -29,29 +78,141 @@ class TelemetrySample:
         # NO exact locations
         # NO callsigns
 
+        # Type of telemetry
+        self.type = 'rx' or 'tx'
+
+        # CASCADE's internal state (main training signal)
+        self.neural_state = CascadeInternalStateTelemetry()
+
+        # Application-level metadata (anonymized)
         self.metadata = {
-            'timestamp': round_to_hour(),  # Hour precision only
-            'grid_square': grid[:4],       # 4-char grid (70×35 km area)
-            'band': frequency_band,         # e.g., "20m"
+            'timestamp': round_to_hour(),      # Hour precision only
+            'grid_square': grid[:4],           # 4-char grid (70×35 km area)
+            'band': frequency_band,            # e.g., "20m"
             'mode': 'CASCADE-1.0'
         }
 
-        self.channel_features = {
-            'snr_class': quantize_snr(),   # Low/Med/High bins
-            'qrm_type': classify_qrm(),    # Generic categories
-            'qrn_level': round(qrn_db, 5), # 5 dB steps
-            'multipath': boolean,           # Present/absent
-            'time_of_day': hour_utc // 6   # 4 time bins
+        self.application_state = {
+            # Network topology (anonymized)
+            'active_links': int,               # Count only
+            'relay_depth': int,                # Hop count, not path
+            'network_diameter': int,
+
+            # Traffic patterns
+            'message_priority': str,           # Emergency/High/Normal/Low
+            'queue_depth': int,
+            'average_latency_ms': int,
+
+            # Protocol decisions
+            'patterns_in_use': int,            # Count of active patterns
+            'bandwidth_allocated_hz': int,
+            'fragment_duration_s': float,
+            'fec_rate': float,
+
+            # Multi-user coordination
+            'users_on_frequency': int,
+            'spectrum_efficiency_bps_hz': float,
+
+            # Channel measurements
+            'measured_snr_db': float,
+            'decode_success': bool,
+            'decode_success_rate_10min': float
         }
 
         self.performance = {
             'decode_success': boolean,
-            'patterns_used': pattern_count,  # Not which patterns
-            'confidence': round(conf, 0.1),
             'computation_ms': round(time),
             'retry_count': min(retries, 3)
         }
 ```
+
+#### Storage Format
+
+Telemetry is quantized to INT8 for storage efficiency while maintaining training quality:
+
+**Uncompressed sizes:**
+- RX telemetry: 3581-D neural state + ~500 bytes metadata = 14.3KB (FP32) or 3.6KB (INT8)
+- TX telemetry: 1040-D neural state + ~500 bytes metadata = 4.2KB (FP32) or 1.0KB (INT8)
+
+**Compressed (zstd, batched):**
+- 1800 RX samples/hour: 6.4MB (INT8) → ~2-3MB compressed
+- 20 TX samples/hour: 20KB → ~10KB compressed
+- **Total: ~3MB/hour per radio**
+
+**INT8 quantization preserves training quality** with <0.4% reconstruction error - the activations are dequantized to FP32 during fine-tuning with negligible impact on model accuracy.
+
+#### INT8 Quantization Specification
+
+CASCADE uses per-tensor symmetric quantization for telemetry storage:
+
+**Quantization Scheme:**
+```python
+def quantize_neural_state_to_int8(features_fp32):
+    """
+    Per-tensor symmetric quantization
+
+    Args:
+        features_fp32: Neural network activations (FP32)
+
+    Returns:
+        Quantized INT8 values with scale factor
+    """
+    # Find maximum absolute value in tensor
+    abs_max = np.max(np.abs(features_fp32))
+
+    # Calculate scale factor (map to [-127, 127])
+    scale = abs_max / 127.0
+
+    # Quantize to INT8
+    features_int8 = np.round(features_fp32 / scale).astype(np.int8)
+
+    return {
+        'values': features_int8,       # 3581 bytes (vs 14324 bytes FP32)
+        'scale': scale,                # Single float for entire tensor
+        'dtype': 'int8_symmetric'
+    }
+
+def dequantize_for_training(quantized_telemetry):
+    """
+    Restore FP32 for fine-tuning (happens on training server)
+    """
+    features_fp32 = quantized_telemetry['values'].astype(np.float32) * quantized_telemetry['scale']
+    return features_fp32
+```
+
+**Quantization Parameters:**
+- **Scheme**: Symmetric (zero-point = 0)
+- **Range**: [-127, 127] (preserves sign bit)
+- **Granularity**: Per-tensor (one scale factor per 3581-D vector)
+- **Accuracy**: 48 dB SNR, <0.4% mean error
+- **Calibration**: None required (determined per-sample from max value)
+
+**Storage Impact:**
+- FP32: 3581 floats × 4 bytes = 14,324 bytes
+- INT8: 3581 bytes + 4 bytes (scale) = 3,585 bytes
+- **Compression ratio**: 4.0×
+
+**Training Pipeline Integration:**
+```python
+# Training server loads telemetry
+def load_telemetry_batch(batch_ids):
+    # Download INT8 telemetry from Tigris
+    telemetry_int8 = download_from_storage(batch_ids)
+
+    # Dequantize to FP32 for training
+    telemetry_fp32 = [
+        dequantize_for_training(sample)
+        for sample in telemetry_int8
+    ]
+
+    # Fine-tune CASCADE with FP32 activations
+    fine_tune_model(telemetry_fp32)
+```
+
+**Quality Validation:**
+- Reconstruction error: <0.4% RMSE
+- Training impact: <0.1% accuracy degradation
+- Proven approach: Standard for BERT, ResNet, Transformer deployment
 
 ### Privacy Guarantees
 
@@ -702,6 +863,47 @@ def prevent_correlation():
     samples = mix_with_other_users(samples)
 ```
 
+### Telemetry Across Hardware Tiers
+
+Hardware diversity enriches the telemetry dataset:
+
+**Raspberry Pi 4 telemetry** (10-20 user scenarios):
+```python
+telemetry_rpi = {
+    'neural_state': {...},  # 3581-D
+    'metadata': {
+        'hardware_tier': 'rpi4',
+        'users_decoded': 12,              # Capacity-limited
+        'users_detected': 45,             # Heard but couldn't decode
+        'decode_success_rate': 0.27       # 12/45 = 27%
+    }
+}
+```
+
+**Coral TPU telemetry** (50+ user scenarios):
+```python
+telemetry_coral = {
+    'neural_state': {...},  # 3581-D (same format!)
+    'metadata': {
+        'hardware_tier': 'coral',
+        'users_decoded': 52,
+        'users_detected': 54,
+        'decode_success_rate': 0.96       # Nearly everyone
+    }
+}
+```
+
+**Training benefits from diversity**:
+- RPi telemetry shows **constrained scenarios** (how model behaves under limits)
+- Coral telemetry shows **full scenarios** (how model performs unconstrained)
+- Model learns to adapt strategies based on available capacity
+- Validates graceful degradation (same model works on both)
+
+**Storage implications**:
+- All hardware tiers generate identical 3581-D neural state format
+- Metadata adds ~500 bytes (includes hardware_tier field)
+- Unified training pipeline (no separate models per hardware)
+
 ## Benefits and Metrics
 
 ### Model Improvement Benefits
@@ -709,24 +911,26 @@ def prevent_correlation():
 Continuous learning enables CASCADE to:
 - Identify and fix common failure modes
 - Discover unexpected propagation conditions
-- Optimize for real-world usage patterns
+- Optimize for real-world usage patterns across all hardware tiers
 - Adapt to changing solar and geomagnetic conditions
+- Learn hardware-specific optimization strategies
 
 ### Network Benefits
 
 Aggregated telemetry helps improve overall system performance:
-- Better understanding of spectrum usage patterns
-- Improved multi-user coordination
-- Enhanced interference avoidance
-- More efficient resource allocation
+- Better understanding of spectrum usage patterns across heterogeneous hardware
+- Improved multi-user coordination via kernel hint refinement
+- Enhanced interference avoidance through anti-kernel learning
+- More efficient resource allocation (Shannon-optimal across hardware tiers)
 
 ### User Benefits
 
 Individual users benefit from collective improvement:
 - Better performance over time without manual updates
-- Adaptation to local propagation conditions
+- Adaptation to local propagation conditions AND local hardware
 - Reduced failure rates in challenging conditions
-- Access to improvements from global user community
+- Access to improvements from global user community (including better hardware)
+- Hardware upgrade provides immediate benefits (model already trained for it)
 
 ## Summary
 

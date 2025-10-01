@@ -95,6 +95,116 @@ ANON_A3F2B91C ANON_7E4D8C2A FN42 -06
 | Frequency | None | No personal information |
 | Signal Report | None | Technical data only |
 | Timestamp | Low | UTC time, no correlation to individuals |
+| **Neural State** | **Low-Medium** | **See Neural State Privacy below** |
+
+## Neural State Privacy (Telemetry)
+
+CASCADE [telemetry](training/continuous_improvement.md#telemetry-data-structure) captures internal neural network activations (3581-D vectors) from deployed radios. This section analyzes privacy implications of transmitting model internal state.
+
+### What Neural Activations Contain
+
+**Neural network activations are abstract feature representations**, not raw data:
+
+```python
+# Example: Shared encoder output (1024-D)
+shared_features = [0.234, -0.891, 0.456, 0.123, ...]
+
+# These values represent:
+# - Learned features (not interpretable as raw IQ)
+# - Statistical patterns (multi-path, fading rates)
+# - Channel characteristics (Doppler, coherence bandwidth)
+```
+
+**What activations DO NOT contain:**
+- Message content (already decoded/consumed before telemetry)
+- Raw IQ samples (processed through multiple non-linear layers)
+- Exact locations (only 4-char grid squares in metadata)
+- Callsigns (not present in received signals, anonymized in metadata)
+
+### Threat Model Analysis
+
+**Can neural activations leak private information?**
+
+**1. Message Content Reconstruction**
+- **Risk**: Low
+- **Analysis**: Activations are computed AFTER message decoding completes
+- **Telemetry timing**: Captured when message already processed and cleared
+- **Impossibility**: Multiple transmissions overwrite same activation space
+
+**2. Location Inference**
+- **Risk**: Low-Medium
+- **Analysis**: Propagation features might correlate with specific paths
+- **Mitigation**: Grid squares limited to 4-char (70×35 km area)
+- **Additional protection**: Differential privacy noise on activations (optional)
+
+**3. Station Re-identification**
+- **Risk**: Low
+- **Analysis**: Equipment signatures in Station Fingerprint encoder (16-D)
+- **Mitigation**:
+  - K-anonymity (minimum 10 samples per grid/band combination)
+  - No temporal correlation (batched randomly)
+  - Station fingerprints aggregated across multiple operators
+
+**4. Behavioral Tracking**
+- **Risk**: Low
+- **Analysis**: Metadata includes usage patterns (queue depth, relay depth)
+- **Mitigation**:
+  - Timestamps rounded to hour
+  - No session identifiers
+  - No callsign linkage
+
+### Privacy Protections
+
+CASCADE implements multiple layers of protection for neural state telemetry:
+
+**1. Differential Privacy on Activations (Optional)**
+```python
+def add_dp_noise_to_activations(activations, epsilon=1.0):
+    """Add Laplace noise to neural activations"""
+    sensitivity = 1.0  # L2 norm of activations typically ~1.0
+    scale = sensitivity / epsilon
+    noise = np.random.laplace(0, scale, size=activations.shape)
+    return activations + noise
+```
+
+**2. K-Anonymity Enforcement**
+- Minimum 10 samples per (grid_square, band, time_bin) before transmission
+- Rare combinations discarded locally
+- Never transmitted to server
+
+**3. Temporal Decorrelation**
+- Random delays (0-1 hour) before transmission
+- Batch mixing across users
+- No sequence numbers or session IDs
+
+**4. No Raw Data Transmission**
+- Activations only (not IQ samples)
+- Already compressed representations
+- Cannot reconstruct original signals
+
+### Neural State vs Traditional Telemetry
+
+Compared to traditional amateur radio telemetry (PSKReporter, WSPR):
+
+| Feature | PSKReporter | CASCADE Neural Telemetry |
+|---------|-------------|--------------------------|
+| Callsigns | Cleartext | Not included (anonymized in metadata only) |
+| Locations | Exact grid (6-char) | Truncated (4-char) |
+| Message content | Mode/SNR only | Not included (activations post-decode) |
+| Equipment info | Not captured | 16-D abstract fingerprint |
+| Raw signals | Not captured | Not captured (only learned features) |
+| **Privacy level** | **Moderate** | **High** |
+
+### Conclusion
+
+Neural state telemetry provides **stronger privacy** than traditional amateur radio reporting systems:
+- No callsigns in neural activations
+- No message content (already consumed)
+- Abstract learned features (not raw signals)
+- Multiple layers of anonymization
+
+**Risk level**: Low-Medium (primarily location inference from propagation patterns)
+**Mitigation**: K-anonymity, differential privacy, and temporal decorrelation
 
 ## Compliance
 

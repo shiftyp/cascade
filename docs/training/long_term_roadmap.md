@@ -23,7 +23,7 @@ CASCADE implements a **continuous collection strategy** spanning multiple solar 
 **Status**: Current/Active
 
 **Objectives**:
-- Collect baseline 200k-250k hours from 800-1100 SDRs (see [Data Pipeline](data_pipeline.md))
+- Collect baseline 200,000-300,000 hours from 800-1100 SDRs (see [Data Pipeline](data_pipeline.md))
 - [Aggressive rare event capture](data_pipeline.md#aggressive-boost-implementation) (K≥3 storms, C+ flares at 100%)
 - Establish initial CASCADE [training dataset](embedding_models.md)
 - Accept intentional bias toward rare events
@@ -33,7 +33,7 @@ CASCADE implements a **continuous collection strategy** spanning multiple solar 
 - 200+ SDRs during any activity (K≥3)
 - 300-400 hours/day collection rate
 - 6 HF bands, 12 kHz bandwidth per band
-- FLAC compression, 40-50TB total storage
+- FLAC compression, 35-75TB total storage
 
 **Deliverable**: Initial CASCADE v1.0 model trained on solar minimum + rare event diversity
 

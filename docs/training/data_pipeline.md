@@ -1123,11 +1123,15 @@ For practical training, a hybrid approach works best:
 │   │   ├── 250hz/
 │   │   └── ...
 │   └── ft8/            # Organized by path
+├── telemetry/          # 3.6TB/year for 1000 radios (INT8 quantized)
+│   ├── rx_samples/     # ~3MB/hour/radio compressed
+│   └── tx_samples/     # ~10KB/hour/radio compressed
 └── models/             # 100 GB for checkpoints
 
 # Long-term storage (S3/Wasabi)
 /archive/
 ├── raw_flac/           # 3-5 TB curated subset
+├── telemetry_archive/  # 3.6TB/year/1000 radios
 └── embeddings_compressed/  # 150 GB optimized version
 ```
 
@@ -1139,16 +1143,23 @@ For practical training, a hybrid approach works best:
 
 **Cost-Optimized Training Workflow**:
 1. Store embeddings in S3/Wasabi: ~$25/month for 4TB
-2. Spin up H100 instance with 4TB+ local NVMe: $2.49/hr
-3. Transfer embeddings to local storage (one-time, ~1 hour)
-4. Train for 2-3 weeks on local NVMe
-5. Save checkpoints to persistent storage
-6. Total cost for 3-week training: ~$1,250
+2. Store telemetry on Tigris: ~$72/month for 3.6TB/year (1000 radios)
+3. Spin up H100 instance with 4TB+ local NVMe: $2.49/hr
+4. Transfer embeddings to local storage (one-time, ~1 hour)
+5. Train for 2-3 weeks on local NVMe
+6. Save checkpoints to persistent storage
+7. Total cost for 3-week training: ~$1,250
+
+**Telemetry Storage Scaling**:
+- 1,000 radios: ~3.6TB/year (~$72/month on Tigris)
+- 10,000 radios: ~36TB/year (~$720/month on Tigris)
+- 50,000 radios: ~180TB/year (~$3,600/month on Tigris)
 
 **Local Infrastructure Alternative**:
 - 8TB NVMe SSD: ~$600 one-time cost
 - Sufficient for all embeddings plus working space
-- No recurring storage costs
+- Telemetry requires expandable storage (add drives as fleet grows)
+- No recurring storage costs for embeddings, Tigris for telemetry archive
 
 ## Quality Validation
 
@@ -1225,40 +1236,84 @@ CASCADE implements a comprehensive geographic diversity strategy (documented in 
 4. **Continuous Refinement (Month 18+)**: Ongoing telemetry maintains and improves edge cases
 
 **Telemetry Collection Architecture:**
+
+CASCADE telemetry captures the complete internal model state during operation, providing rich training data with zero computational overhead. See [continuous_improvement.md](continuous_improvement.md#telemetry-data-structure) for complete telemetry specification.
+
+**Internal State Capture:**
 ```python
-class GeographicTelemetry:
+def generate_telemetry_sample(cascade_model, operation):
     """
-    Privacy-preserving telemetry from CASCADE deployments worldwide
+    Capture CASCADE's complete internal state with zero overhead
     """
-    def __init__(self):
-        self.telemetry_schema = {
-            'grid_square': 'FK29',           # 70x35 mile area only
-            'timestamp': 1234567890,          # UTC, rounded to hour
-            'propagation_mode': 'F2',        # Detected mode
-            'noise_characteristics': {
-                'qrn_level': -95,             # dBm noise floor
-                'qrn_type': 'tropical',       # Classification
-                'stability': 0.85             # Temporal stability
+    with torch.no_grad():
+        # CASCADE's neural activations (already computed during normal operation)
+        telemetry = {
+            # Neural network state (3581-D total)
+            'neural_state': {
+                'shared_encoder': cascade_model.shared_encoder.last_output,      # 1024-D
+                'noise_expert': cascade_model.noise_expert.last_output,          # 512-D
+                'signal_expert': cascade_model.signal_expert.last_output,        # 512-D
+                'propagation_expert': cascade_model.propagation_expert.last_output, # 512-D
+                'pattern_expert': cascade_model.pattern_expert.last_output,      # 512-D
+                'spectrum_expert': cascade_model.spectrum_expert.last_output,    # 512-D
+                'conductor_weights': cascade_model.conductor.last_attention      # 5-D
             },
-            'channel_conditions': {
-                'multipath_spread': 2.3,     # ms
-                'doppler_spread': 1.2,       # Hz
-                'coherence_bandwidth': 850   # Hz
-            },
-            'performance_metrics': {
-                'adaptation_time': 450,      # ms to converge
-                'achieved_efficiency': 0.87, # Shannon efficiency
-                'decode_success': True        # Binary success
+
+            # Application metadata (anonymized)
+            'metadata': {
+                'type': 'rx' or 'tx',
+                'timestamp': round_to_hour(),
+                'grid_square': grid[:4],        # 70×35 km area only
+                'band': frequency_band,
+                'measured_snr_db': operation.snr,
+                'decode_success': operation.success,
+                'users_on_frequency': operation.num_users,
+                'message_priority': operation.priority,  # Emergency/High/Normal/Low
+                'relay_depth': operation.hop_count       # Not full path
             }
         }
 
-    def aggregate_by_region(self, telemetry_batch):
-        """
-        Aggregate telemetry to preserve privacy (K-anonymity = 10)
-        """
-        # Never report individual stations
-        # Require minimum 10 reports per grid square per day
-        return aggregated_regional_statistics
+        # Quantize to INT8 for storage (4× compression)
+        quantized = quantize_to_int8(telemetry['neural_state'])
+
+        return {
+            'neural_state_int8': quantized,  # 3.6KB (vs 14.3KB FP32)
+            'metadata': telemetry['metadata'],
+            'quantization_scale': scale,
+            'quantization_zero_point': zero_point
+        }
+```
+
+**Storage and Bandwidth:**
+- RX telemetry: ~3.6KB per sample (INT8 quantized)
+- TX telemetry: ~1.0KB per sample (INT8 quantized)
+- Typical usage: ~1800 RX + 20 TX per hour = ~3MB/hour compressed
+- **Annual per 1000 radios**: ~3.6TB (comparable to QA sample storage)
+
+#### Telemetry Scaling Strategy
+
+Fleet size determines optimal telemetry approach:
+
+| Fleet Size | Strategy | Storage/Year | Monthly Cost | Notes |
+|------------|----------|--------------|--------------|-------|
+| **1-100 radios** | Full capture | 360GB | ~$7 | No sampling needed, capture everything |
+| **100-1,000** | Full capture | 3.6TB | ~$72 | Manageable, provides rich dataset |
+| **1,000-10,000** | 50% sampling | 18TB | ~$360 | Sample every other fragment |
+| **10,000-50,000** | 10% sampling | 18TB | ~$360 | Intelligent sampling on events |
+| **50,000+** | Event-based only | 10-15TB | ~$200-300 | Capture anomalies + 1% baseline |
+
+**Retention Policies:**
+```markdown
+- **Hot storage** (7 days): Full telemetry for recent troubleshooting
+- **Warm storage** (90 days): Compressed to 256-D PCA for trend analysis
+- **Cold storage** (1+ year): Interesting events only + 0.1% baseline samples
+- **Permanent archive**: Scientific dataset with geographic/temporal coverage
+```
+
+**Geographic Prioritization Impact:**
+- Underrepresented regions: 100% capture (Africa, South America, Pacific)
+- Well-covered regions: 10% sampling (North America, Europe)
+- Reduces storage by 60-70% while maintaining diversity
 
 def prioritize_telemetry_regions():
     """

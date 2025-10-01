@@ -70,6 +70,63 @@ CASCADE's model layer implements a **mixture-of-experts architecture** where fiv
 - Processing allocation
 - Pattern complexity selection
 
+## Continuous Constellation Adaptation
+
+A key CASCADE innovation is **continuous modulation within fixed patterns**. While the protocol defines 64 orthogonal patterns (fixed time-frequency sequences), the model continuously adapts constellation geometry within these patterns.
+
+### Fixed vs Adaptive Components
+
+**Fixed (Protocol Layer)**:
+- 64 orthogonal patterns (tone sequences in time)
+- Pattern structure: 32 symbols × 8 tones
+- Orthogonality: <-30 dB cross-correlation
+- Ensures interoperability across all CASCADE implementations
+
+**Adaptive (Model Layer)**:
+- Constellation point positions in IQ space
+- Symbol timing (50ms ±20%)
+- FEC rate (0.3-0.95)
+- Power allocation per symbol
+
+### Constellation Collapse Continuum
+
+The model adapts constellation geometry continuously based on channel conditions:
+
+```python
+# High SNR station (Pattern 5):
+constellation = spread_points_8qam()  # Full 3 bits/symbol
+iq_points = [complex(1.0, 1.0), complex(1.0, -1.0), ...]  # Widely spaced
+
+# Low SNR station (Pattern 12) - same frequency, same time:
+constellation = collapse_to_bpsk()  # ~1 bit/symbol effective
+iq_points = [complex(0.95, 0.05), complex(-0.95, -0.05), ...]  # Narrow spacing
+
+# Both use their fixed assigned patterns (orthogonal separation)
+# But different constellation geometries (model optimization)
+# Model separates them via pattern correlation + constellation analysis
+```
+
+**Continuous adaptation** (not discrete modes):
+- 8-QAM gradually morphs into QPSK, then BPSK
+- Point positions optimize for current interference
+- Model learns optimal geometry for each condition
+
+### Multi-User Coexistence
+
+All users transmit simultaneously in the same 2.5 kHz bandwidth:
+
+**User separation mechanism:**
+1. **Pattern orthogonality** (primary): <-30 dB isolation from fixed sequences
+2. **Constellation diversity** (secondary): Model adapts to avoid interference
+3. **Temporal adaptation** (tertiary): Symbol timing micro-adjustments
+
+**Model coordination** (implicit, no explicit signaling):
+- Each station's model observes the channel
+- Adapts constellation to minimize interference with detected signals
+- Emergent cooperation through shared training objective
+
+See [signal_specification.md](../protocol/signal_specification.md) for detailed protocol parameters.
+
 ## Expert Networks
 
 CASCADE employs five specialized expert networks - see [experts.md](experts.md) for detailed specifications:

@@ -457,13 +457,179 @@ The conductor assigns high weight to the Signal Expert when:
 
 **Typical weight range**: 0.1-0.4
 
+### Multi-User Decode with Hardware Constraints
+
+The Signal Expert must handle variable user counts based on deployment hardware:
+
+**Hardware-adaptive decode**:
+```python
+def signal_expert_decode(mixed_signal, hardware_capacity):
+    """
+    Decode users in priority order up to hardware limit
+
+    Args:
+        mixed_signal: Combined signal from all users
+        hardware_capacity: Max users this hardware can process
+
+    Returns:
+        Variable-length list of decoded users (hardware-dependent)
+    """
+    # Detect all potential users via pattern correlation
+    detected_users = correlate_all_patterns(mixed_signal)  # Up to 64 patterns
+
+    # Sort by signal strength (Shannon-optimal)
+    detected_users.sort(key=lambda u: u.snr, reverse=True)
+
+    # Decode up to hardware capacity
+    decoded = []
+    for user in detected_users[:hardware_capacity]:
+        user_signal = separate_user(mixed_signal, user.pattern)
+        decoded_data = decode_constellation(user_signal)
+        decoded.append(decoded_data)
+
+        if len(decoded) >= hardware_capacity:
+            break  # Hardware limit reached
+
+    return decoded  # Length: 10 on RPi4, 50 on Coral, 100+ on GPU
+```
+
+**Training across capacities**:
+- Trained with random capacity limits (10-100 users)
+- Learns to prioritize strong signals
+- Graceful degradation when capacity exceeded
+- Single model works across all hardware tiers
+
+**Output variability**: Signal Expert returns variable-length results:
+- Raspberry Pi 4: Decodes 10-20 users (strongest)
+- RPi + Coral: Decodes 50-80 users (nearly everyone)
+- GPU: Decodes 100+ users (everyone, plus weak signals)
+
+This is Shannon-optimal: limited hardware naturally prioritizes strong signals.
+
 ### Performance Metrics
 
-- **Detection Accuracy**: >99% for SNR > -10 dB
-- **Counting Accuracy**: ±1 user for <20 users
-- **Separation Quality**: >20 dB isolation between users
-- **Computation**: ~3ms on Raspberry Pi 4
-- **Parameters**: ~1.2M
+| Metric | RPi 4 Only | RPi + Coral | Desktop | GPU |
+|--------|------------|-------------|---------|-----|
+| **Max users decoded** | 10-20 | 50-80 | 25-40 | 100+ |
+| **Detection accuracy** | >99% (strong sigs) | >99% (all sigs) | >99% | >99% |
+| **Separation quality** | >20 dB | >25 dB | >22 dB | >30 dB |
+| **Computation time** | ~25-30ms | ~3-5ms | ~12-15ms | ~2-3ms |
+| **Parameters** | ~1.2M (INT8) | ~1.2M (INT8) | ~1.2M (INT8/FP16) | ~1.2M (FP32) |
+
+### Beacon Detection and Separation
+
+The Signal Expert also handles **beacon decoding** alongside message separation. Beacons are transmitted on interstitial frequencies (between message tones) with different symbol timing, allowing the model to distinguish and extract them.
+
+**Beacon characteristics learned by model:**
+```python
+# Training includes beacons as additional signal type
+training_scenario = {
+    'messages': [
+        {'pattern': 5, 'tones': [0, 312, 625, ...], 'symbols': 50ms, 'mod': '8-QAM'},
+        {'pattern': 12, 'tones': [0, 312, 625, ...], 'symbols': 50ms, 'mod': 'QPSK'},
+    ],
+    'beacons': [
+        {'tones': [156, 468, 781, 1093], 'symbols': 160ms, 'mod': '4-FSK'},  # Interstitial!
+        {'tones': [156, 468, 781, 1093], 'symbols': 160ms, 'mod': '4-FSK'},
+    ],
+    'interference': qrm_sample
+}
+
+# Model learns to separate by time-frequency signature:
+# - Messages: 50ms symbols, primary tones (0, 312, 625, ...)
+# - Beacons: 160ms symbols, interstitial tones (156, 468, 781, ...)
+# - Different symbol rates → different correlation properties
+```
+
+**Signal Expert output includes beacons:**
+```python
+decoded = signal_expert.separate(mixed_signal)
+
+# Returns labeled items (variable length):
+[
+    {'type': 'message', 'pattern': 5, 'data': bytes},
+    {'type': 'beacon', 'callsign_hash': 0xA3F2, 'snr': -12},  # ← Beacon decoded!
+    {'type': 'message', 'pattern': 12, 'data': bytes},
+    {'type': 'beacon', 'callsign_hash': 0x7F3D, 'snr': -18},  # Another beacon
+]
+
+# Protocol routes beacons to cache, messages to handlers
+```
+
+**No protocol-layer decoding** - Signal Expert does all demodulation, protocol just routes based on type field.
+
+**Training loss includes beacon accuracy with emergency weighting:**
+```python
+def signal_expert_loss(predicted, ground_truth):
+    message_loss = separation_loss(predicted.messages, ground_truth.messages)
+
+    # Separate beacon loss by emergency status
+    beacon_loss_normal = 0
+    beacon_loss_emergency = 0
+
+    for pred_beacon, true_beacon in zip(predicted.beacons, ground_truth.beacons):
+        loss = detection_loss(pred_beacon, true_beacon)
+
+        if true_beacon.emergency_flag:
+            beacon_loss_emergency += loss
+        else:
+            beacon_loss_normal += loss
+
+    # Weight emergency beacons 5× higher than normal beacons
+    total_beacon_loss = beacon_loss_normal + 5.0 * beacon_loss_emergency
+
+    # Balance messages (80%) and beacons (20%, but emergency beacons effectively 100%)
+    return 0.8 * message_loss + 0.2 * total_beacon_loss
+```
+
+**Emergency beacon prioritization:**
+- Normal beacons: 20% weight in loss (less critical than messages)
+- Emergency beacons: 100% weight (5× multiplier = critical as messages)
+- Model learns to reliably detect emergency beacons even in high-interference scenarios
+- Emergency beacons transmitted 6× per minute (every 10s, redundancy ensures detection)
+
+### Spectrum Allocation Expert - Emergency Frequency Protection
+
+The Spectrum Allocation Expert learns to **avoid emergency frequencies during encoding:**
+
+```python
+def spectrum_expert_with_emergency_protection(features):
+    """
+    Allocate frequency resources while protecting emergency spectrum
+    """
+    EMERGENCY_FREQS = [468, 1093]  # Hz - RESERVED, never use for messages
+    AVAILABLE_SPECTRUM = [
+        (0, 460),      # Below first emergency freq
+        (480, 1085),   # Between emergency freqs
+        (1100, 2500)   # Above second emergency freq
+    ]
+
+    # Allocate frequency only within available ranges
+    frequency_allocation = self.allocate_within_ranges(features, AVAILABLE_SPECTRUM)
+
+    return frequency_allocation  # Guaranteed no overlap with [468, 1093]
+
+# Training loss for encoder:
+def encoder_loss_with_emergency_avoidance(encoded_signal, ground_truth):
+    # Standard encode-decode loss
+    decoded = model.decode(encoded_signal)
+    base_loss = reconstruction_loss(decoded, ground_truth)
+
+    # Check if encoder used emergency frequencies
+    spectrum = fft(encoded_signal)
+    emergency_interference = 0
+
+    for freq in [468, 1093]:
+        energy_at_emergency = measure_energy_at_freq(spectrum, freq, bandwidth=10)
+        if energy_at_emergency > -40:  # Any significant energy = violation
+            # Massive penalty (100× base loss)
+            emergency_interference += 100.0 * energy_at_emergency
+
+    # Total loss
+    return base_loss + emergency_interference
+```
+
+**Model learns hard constraint**: Emergency frequencies [468 ± 10 Hz, 1093 ± 10 Hz] are completely forbidden for message transmission.
 
 ---
 

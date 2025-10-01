@@ -18,8 +18,8 @@ CASCADE's training approach emphasizes learning from real-world conditions while
 
 CASCADE's training strategy solves a fundamental challenge: how to train an adaptive HF radio system without existing CASCADE deployments. The solution uses **three-stage knowledge transfer**:
 
-1. **Data Collection (Months 1-18)**: Collect 200k-250k hours of real HF propagation from [800-1100 SDRs](data_pipeline.md#sdr-usage-management) worldwide, capturing FT8/WSPR signals and atmospheric noise (see [Data Pipeline](data_pipeline.md))
-2. **Knowledge Compression (Month 19)**: Train [embedding VAEs](embedding_models.md) that compress 40-50TB of IQ data into 15-25GB of embeddings, preserving propagation diversity
+1. **Data Collection (Months 1-18)**: Collect 200,000-300,000 hours of real HF propagation from [800-1100 SDRs](data_pipeline.md#sdr-usage-management) worldwide, capturing FT8/WSPR signals and atmospheric noise (see [Data Pipeline](data_pipeline.md))
+2. **Knowledge Compression (Month 19)**: Train [embedding VAEs](embedding_models.md) that compress 35-75TB of IQ data into 15-25GB of embeddings, preserving propagation diversity
 3. **CASCADE Training (Months 20-21)**: Train CASCADE on synthetic signals augmented with real embeddings, learning to handle authentic propagation conditions
 
 **Key Innovation**: Embeddings are used **only during training** to create realistic conditions. At inference, CASCADE processes raw IQ samples end-to-end, requiring no separate embedding computation.
@@ -31,16 +31,16 @@ CASCADE's training strategy solves a fundamental challenge: how to train an adap
 - **[Privacy-first](../privacy.md)**: Callsigns hashed, grid squares preserved, no message content stored
 
 **Training Scale**:
-- Data: 200k-250k hours raw → 3-5TB curated → 15-25GB [embeddings](embedding_models.md)
+- Data: 200,000-300,000 hours raw → 3-5TB curated → 15-25GB [embeddings](embedding_models.md)
 - Duration: 18 months collection + 3 months processing/training
 - Compute: 4× RTX 4090 GPUs for 1-2 weeks (CASCADE training)
-- Storage: [40-50TB cold storage](data_pipeline.md#storage-requirements), 3-5TB hot NVMe, 15-25GB embeddings
+- Storage: [35-75TB cold storage](data_pipeline.md#storage-requirements), 3-5TB hot NVMe, 15-25GB embeddings
 
 ## Training Pipeline Overview
 
 The CASCADE training process follows a carefully orchestrated sequence:
 
-1. **Months 1-18**: Collect 40-50TB of raw IQ recordings from global KiwiSDR/WebSDR network
+1. **Months 1-18**: Collect 35-75TB of raw IQ recordings from global KiwiSDR/WebSDR network
 2. **Month 19**: Create diversity-biased training dataset (3-5TB) and train embedding models
 3. **Months 19-20**: Generate channel embeddings from curated dataset
 4. **Months 20-21**: Train CASCADE model using correlated embedding pairs
@@ -177,6 +177,271 @@ for batch in training_data:
     loss = compute_loss(final_output, target)
     optimizer.step(loss)
 ```
+
+## Training for Heterogeneous Hardware Deployment
+
+CASCADE must learn to perform well across diverse hardware capabilities (Raspberry Pi to GPU servers) while maintaining interoperability. This is achieved through **capacity-aware training** and **receiver-driven adaptation**.
+
+### Variable Capacity Training
+
+Train the model with random computational budgets to simulate different hardware tiers:
+
+```python
+def train_with_variable_capacity():
+    """Train model to decode optimally given hardware constraints"""
+
+    for batch in training_data:
+        # Generate multi-user scenario (1 to 100+ users)
+        num_users = random.randint(1, 100)
+        signal_strengths = sample_snr_distribution(num_users)
+        mixed_signal = generate_multi_user_signal(num_users, signal_strengths)
+
+        # Simulate different hardware tiers
+        hardware_tier = random.choice([
+            {'name': 'rpi4', 'capacity': 15, 'latency_ms': 30},
+            {'name': 'rpi_coral', 'capacity': 60, 'latency_ms': 5},
+            {'name': 'desktop', 'capacity': 35, 'latency_ms': 15},
+            {'name': 'gpu', 'capacity': 100, 'latency_ms': 3}
+        ])
+
+        # Decode with capacity constraints
+        decoded_users = model.decode(
+            mixed_signal,
+            max_users=hardware_tier['capacity'],
+            time_budget_ms=hardware_tier['latency_ms']
+        )
+
+        # Priority-weighted loss (stronger signals = higher weight)
+        decode_loss = 0
+        for user_idx, (decoded, ground_truth, snr) in enumerate(
+            zip(decoded_users, ground_truth_data, signal_strengths)
+        ):
+            # Weight by signal strength (Shannon-optimal allocation)
+            priority = sigmoid(snr)
+            decode_loss += priority * loss_fn(decoded, ground_truth)
+
+        optimizer.step(decode_loss)
+```
+
+**Model learns**:
+1. **Decode in SNR order**: Strongest signals first (Shannon-optimal)
+2. **Graceful degradation**: Stop when capacity exhausted (no hard failure)
+3. **Variable output length**: Return 10 users on weak hardware, 100 on strong
+4. **Hardware-aware strategies**: Different patterns for constrained vs unconstrained scenarios
+
+### Emergency Frequency Avoidance Training
+
+The **encoder** must learn to never interfere with emergency beacon frequencies [468, 1093 Hz]:
+
+```python
+def train_encoder_emergency_avoidance():
+    """Train encoder to avoid reserved emergency frequencies"""
+
+    EMERGENCY_FREQUENCIES = [468, 1093]  # Hz - RESERVED
+
+    for batch in training_data:
+        # Encode message
+        encoded_signal = model.encode(message_data, kernel_context)
+
+        # Check if encoder used emergency frequencies
+        spectrum = fft(encoded_signal)
+        energy_at_emergency_freqs = measure_energy(spectrum, EMERGENCY_FREQUENCIES)
+
+        # PENALTY if encoder uses emergency or normal beacon frequencies
+        frequency_interference_loss = 0
+
+        # Emergency frequencies: STRICT protection (100× penalty)
+        for freq in EMERGENCY_FREQUENCIES:
+            energy = energy_at_freq(spectrum, freq, bandwidth=10)
+            if energy > -50:  # Any energy = violation (strict threshold)
+                # Massive penalty (100× normal loss)
+                frequency_interference_loss += 100.0 * energy
+
+        # Normal beacon frequencies: SOFT protection (10× penalty)
+        NORMAL_BEACON_FREQS = [78, 234, 1718, 1953]  # Hz
+        for freq in NORMAL_BEACON_FREQS:
+            energy = energy_at_freq(spectrum, freq, bandwidth=10)
+            if energy > -30:  # Allow some spillover (relaxed threshold)
+                # Moderate penalty (10× normal loss, allows efficiency trade-off)
+                frequency_interference_loss += 10.0 * energy
+
+        # Add emergency beacon if present in scenario
+        scenario_signal = encoded_signal
+        if scenario.has_emergency_beacon:
+            emergency_beacon = generate_emergency_beacon(
+                frequencies=EMERGENCY_FREQUENCIES,
+                callsign=random_emergency_station
+            )
+            scenario_signal = scenario_signal + emergency_beacon
+
+        # Decode at receiver
+        decoded = model.decode(scenario_signal)
+
+        # Standard decode loss
+        decode_loss = standard_loss(decoded, ground_truth)
+
+        # If emergency beacon present, it MUST be decoded
+        if scenario.has_emergency_beacon:
+            if not emergency_in_decoded(decoded):
+                # Catastrophic: encoder interfered with emergency beacon!
+                decode_loss += 10000.0
+
+        # Combined loss
+        total_loss = decode_loss + frequency_interference_loss
+
+        optimizer.step(total_loss)
+```
+
+**Encoder learns**:
+1. **Strictly avoid [468, 1093 Hz]** - emergency frequencies have 100× penalty (hard constraint)
+2. **Prefer to avoid [78, 234, 1718, 1953 Hz]** - normal beacons have 10× penalty (soft constraint)
+3. **Trade-off allowed**: Can impinge on normal beacon frequencies if significant efficiency gain
+4. **Never trade-off emergency**: Emergency interference always catastrophic (10,000× loss if beacon lost)
+
+**Spectrum allocation learned priorities:**
+```python
+# Spectrum Expert learns frequency priorities during encoding:
+SPECTRUM_PRIORITIES = {
+    # Preferred (no penalty)
+    'primary_message_tones': [0, 312, 625, 937, 1250, 1562, 1875, 2187],  # No penalty
+
+    # Discouraged (10× penalty, but allowed if efficiency gain)
+    'normal_beacon_zones': [78±10, 234±10, 1718±10, 1953±10],  # Soft constraint
+
+    # Forbidden (100× penalty, hard constraint)
+    'emergency_reserved': [468±10, 1093±10],  # NEVER use
+}
+
+# Model learns trade-offs:
+# - Using primary message tones: Free
+# - Using normal beacon zone: 10× loss, but might be worth it for 15% efficiency gain
+# - Using emergency zone: 100× loss, never worth it (always avoid)
+```
+
+**Result**: Messages may occasionally overlap with normal beacons (10% of time, when efficiency benefit is high), but NEVER overlap with emergency beacons.
+
+### Receiver-Driven Kernel Adaptation
+
+CASCADE's key innovation: **Receivers determine optimal transmitter modulation** via kernel hints.
+
+```python
+def train_bidirectional_adaptation():
+    """Train TX adaptation based on RX feedback"""
+
+    # Simulate TX → RX → kernel hint → adapted TX cycle
+    for scenario in training_data:
+        # Initial transmission
+        tx_params = model.encode(message, default_modulation)
+        signal_v1 = transmit(tx_params)
+
+        # Receiver decodes (may be weak hardware)
+        rx_result = receiver_model.decode(signal_v1)
+
+        # Receiver generates kernel hint based on:
+        # - Its hardware capabilities
+        # - What it could decode
+        # - What would work better for IT
+        kernel_hint = receiver_model.generate_kernel_hint(
+            decoded=rx_result,
+            my_hardware_tier='rpi4',  # Receiver knows its limitations
+            my_snr_measurement=measured_snr
+        )
+
+        # Transmitter receives kernel, adapts
+        adapted_params = model.adapt_from_kernel(
+            kernel_hint,
+            message  # Same message
+        )
+        signal_v2 = transmit(adapted_params)
+
+        # Loss: Did adaptation improve decode at receiver?
+        rx_result_v2 = receiver_model.decode(signal_v2)
+
+        improvement_loss = compare(rx_result_v2, rx_result)  # v2 should be better
+        optimizer.step(improvement_loss)
+```
+
+**Kernel hints encode receiver state**:
+```python
+kernel_hint = {
+    'receiver_capacity': 15,              # "I can decode 15 users max"
+    'my_snr_for_you': 5,                  # "I hear you at +5 dB"
+    'constellation_preference': 'qpsk',   # "Use QPSK for me" (hardware limited)
+    'interference_map': sparse_vector,    # "These frequencies are crowded for me"
+}
+
+# Compressed to 64 bits for transmission in ACK
+compressed_kernel = compress_kernel_hint(kernel_hint)  # 8 bytes
+```
+
+**Training simulates both sides**:
+- Strong hardware receiver (Coral TPU): Generates hints requesting 8-QAM (can handle it)
+- Weak hardware receiver (RPi only): Generates hints requesting BPSK (needs simplicity)
+- Transmitter learns to adapt to receiver capabilities
+
+**Result**: Weak receivers automatically get simpler modulation, strong receivers get complex (Shannon-optimal resource allocation)!
+
+### Multi-Hardware Training Curriculum
+
+Progressive training from single-hardware to mixed-hardware scenarios:
+
+```markdown
+**Phase 1 (Weeks 1-2)**: Single hardware tier
+- Train on uniform scenarios (all stations Tier 2)
+- Establish baseline performance
+- 50 users, all decode all users
+
+**Phase 2 (Weeks 3-4)**: Two-tier networks
+- Mix Tier 1 (10-user capacity) and Tier 2 (50-user)
+- Learn kernel hint adaptation
+- Train prioritization (strong signals to weak receivers)
+
+**Phase 3 (Weeks 5-6)**: Full heterogeneous
+- All 4 tiers mixed
+- 10 to 100+ user scenarios
+- Complex multi-hop kernel propagation
+- Emergency priority validation
+
+**Phase 4 (Weeks 7-8)**: Edge cases
+- Extreme capacity limits (RPi decoding 80-user scenario)
+- Graceful degradation testing
+- Pathological interference patterns
+```
+
+### Validation Across Hardware
+
+**Test suite must verify**:
+```python
+# Each hardware tier gets test scenarios
+test_matrix = {
+    'rpi4_only': {
+        'max_users_validated': 20,
+        'latency_target': 30,
+        'efficiency_min': 25
+    },
+    'rpi_coral': {
+        'max_users_validated': 80,
+        'latency_target': 5,
+        'efficiency_min': 85
+    },
+    'desktop': {
+        'max_users_validated': 50,
+        'latency_target': 15,
+        'efficiency_min': 55
+    },
+    'gpu': {
+        'max_users_validated': 150,
+        'latency_target': 3,
+        'efficiency_min': 92
+    }
+}
+
+# Model must pass all tiers
+for tier, requirements in test_matrix.items():
+    validate_on_hardware(model, tier, requirements)
+```
+
+
 
 ### Stage 3: Joint Fine-Tuning
 Unfreeze all networks and fine-tune together:
@@ -814,9 +1079,10 @@ The complete pipeline requires different computational resources at each stage:
 
 Different storage tiers optimize cost and performance:
 
-- **Archive Storage** (40-50TB): Tigris S3 cold storage for complete IQ collection
+- **Archive Storage** (35-75TB): Tigris S3 cold storage for complete IQ collection
 - **Training Storage** (3-5TB): Fast NVMe array for curated dataset
 - **Embedding Database** (15-25GB): RAM/SSD for rapid random access
+- **Telemetry Storage** (3.6TB/year/1000 radios): Tigris S3 for INT8-quantized internal state
 - **Model Storage** (1GB): Version-controlled model checkpoints
 
 ### Software Stack

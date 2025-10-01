@@ -55,7 +55,7 @@ CASCADE Training (learns from embeddings)
 ```
 
 During training preparation:
-1. Collect 200k-250k hours of IQ recordings from KiwiSDRs
+1. Collect 200,000-300,000 hours of IQ recordings from KiwiSDRs
 2. Train embedding VAEs on curated 3-5TB subset
 3. Generate embeddings for all curated recordings
 4. Store embeddings (~15-25GB compressed)
@@ -71,6 +71,8 @@ CASCADE Shared Encoder (processes raw IQ)
    Expert Networks
         ↓
     Decoded Data
+        ↓
+  [Telemetry: Copy internal state] → Upload for fine-tuning
 ```
 
 During inference:
@@ -78,6 +80,29 @@ During inference:
 2. Shared encoder processes IQ directly (NOT embeddings)
 3. Expert networks operate on encoded features
 4. No embedding VAEs involved at inference time
+5. **Telemetry captures CASCADE's internal activations** (zero overhead - just copying existing state)
+
+### Telemetry Usage (Post-Deployment)
+
+After CASCADE is deployed, telemetry provides continuous training data:
+
+```
+Live CASCADE Operation
+        ↓
+Internal State (shared encoder + all experts) → Quantize to INT8
+        ↓
+Upload batched telemetry (3MB/hour)
+        ↓
+Dequantize to FP32 + Fine-tune CASCADE model
+        ↓
+Deploy improved model
+```
+
+**Key insight**: CASCADE's internal activations (3581-D) serve double duty:
+1. During operation: Feed to conductor for decoding decisions
+2. For telemetry: Capture complete model state for fine-tuning
+
+This eliminates the need for separate embedding models during deployment - CASCADE's own representations are the telemetry.
 
 ### Why This Architecture?
 
@@ -86,6 +111,8 @@ During inference:
 **Inference Simplicity**: CASCADE's shared encoder learns to extract similar features to the embedding VAEs, but does so end-to-end from raw IQ. No separate embedding computation needed.
 
 **Domain Transfer**: The embedding VAEs teach CASCADE what propagation features matter, but CASCADE learns to extract them directly during inference.
+
+**Telemetry Efficiency**: Capturing CASCADE's internal state provides perfect training signal with zero computational overhead - the features are already computed for normal operation.
 
 ```python
 # TRAINING: Using pre-computed embeddings
@@ -1215,22 +1242,30 @@ def extract_station_fingerprint(signal_history, tx_hash):
 
 The system implements sophisticated signal processing techniques to separate equipment characteristics from propagation effects. This separation is crucial because equipment signatures remain consistent across multiple observations while propagation varies with atmospheric conditions. By isolating these signatures, CASCADE can better model the true diversity of real-world transmissions.
 
-##### Phase Noise Analysis from FT8 Symbols
+##### Phase Noise Analysis from Known Symbols
 
-Every transmitter's local oscillator exhibits unique phase noise characteristics determined by its crystal quality (TCXO vs OCXO), temperature stability, and circuit design. FT8's known symbol positions allow precise measurement of these characteristics:
+Every transmitter's local oscillator exhibits unique phase noise characteristics determined by its crystal quality (TCXO vs OCXO), temperature stability, and circuit design. Known symbol positions (from FT8 or CASCADE's own transmitted symbols) allow precise measurement:
 
 ```python
-def analyze_phase_noise_from_ft8(iq_signal, decoded_symbols):
+def analyze_phase_noise_from_symbols(iq_signal, decoded_symbols, symbol_type='ft8'):
     """
-    Extract phase noise characteristics from FT8 symbol centers
+    Extract phase noise characteristics from symbol centers
+    Works for both FT8 (training) and CASCADE (telemetry)
     Task T076a implementation
     """
-    # FT8 uses 8-FSK with known symbol positions
-    symbol_centers = extract_symbol_centers(iq_signal, decoded_symbols)
+    # Extract symbol positions based on type
+    if symbol_type == 'ft8':
+        # FT8 uses 8-FSK with known symbol positions
+        symbol_centers = extract_symbol_centers(iq_signal, decoded_symbols)
+        ideal_points = ft8_ideal_constellation()
+    elif symbol_type == 'cascade':
+        # CASCADE uses its own learned patterns
+        symbol_centers = extract_cascade_symbols(iq_signal, decoded_symbols)
+        ideal_points = cascade_pattern_points(decoded_symbols)
 
     # Measure phase deviation from ideal constellation points
     phase_deviations = []
-    for actual, ideal in zip(symbol_centers, ideal_constellation_points):
+    for actual, ideal in zip(symbol_centers, ideal_points):
         phase_error = np.angle(actual) - np.angle(ideal)
         phase_deviations.append(phase_error)
 
@@ -1245,6 +1280,35 @@ def analyze_phase_noise_from_ft8(iq_signal, decoded_symbols):
 
     return phase_noise_profile
 ```
+
+**For CASCADE Telemetry:**
+
+During live operation, CASCADE characterizes its own transmitted signal:
+
+```python
+def generate_tx_station_fingerprint(cascade_tx):
+    """
+    Extract station fingerprint from CASCADE's own transmission
+    Used in TX telemetry (16-D component)
+    """
+    # CASCADE knows what it transmitted
+    transmitted_symbols = cascade_tx.symbols
+    transmitted_iq = cascade_tx.iq_samples
+
+    # Measure own equipment characteristics
+    fingerprint = analyze_phase_noise_from_symbols(
+        transmitted_iq,
+        transmitted_symbols,
+        symbol_type='cascade'
+    )
+
+    # Encode to 16-D embedding
+    station_embedding = station_encoder.encode(fingerprint)
+
+    return station_embedding  # Used in TX telemetry
+```
+
+This approach works identically for FT8 (training data) and CASCADE (telemetry), providing consistent equipment characterization across both contexts.
 
 ##### Multi-Diversity Equipment-Propagation Separation
 
