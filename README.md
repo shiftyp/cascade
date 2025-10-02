@@ -102,17 +102,27 @@ Performance varies by deployment hardware - see [deployment/hardware_requirement
 | Cost | ~$50-85 | **~$120-180** | $0 (existing) | $200-500+ |
 
 **Common across all tiers:**
-- SNR Operating Range: -25 to +15 dB (40 dB dynamic range)
-- Pattern Orthogonality: <-30 dB cross-correlation
+- SNR Operating Range: -4 to +15 dB (19 dB multi-user), -22 dB (single-user fallback)
+- Pattern Orthogonality: <-30 dB cross-correlation (64 base patterns)
+- Pattern Separation Cost: ~18 dB (64 patterns) to 0 dB (1 pattern)
 - Model Size (INT8): ~10MB (9.2M parameters including kernel processing)
 - Deployment Package: ~15-20MB (model + 64 patterns + kernel caches + runtime buffers)
 - Interoperability: Perfect (all tiers use identical 64 orthogonal patterns from protocol)
 
-### Adaptive Modes
-- **High SNR (>10 dB)**: All 64 patterns, 50+ users, maximum throughput
-- **Medium SNR (0-10 dB)**: 16-32 patterns, 10-30 users, balanced operation
-- **Low SNR (-10-0 dB)**: 4-8 patterns, 3-10 users, enhanced redundancy
-- **Very Low SNR (<-10 dB)**: Binary patterns, 1-3 users, maximum robustness
+### Adaptive Pattern Count (SNR-Based)
+
+**Network automatically reduces patterns as SNR degrades:**
+
+| Network SNR | Patterns Active | Users Supported | Min Detectable SNR | Pattern Cost |
+|-------------|-----------------|-----------------|-------------------|--------------|
+| **>+10 dB** | 64 | 50-80 | **-4 dB** | 18 dB separation cost |
+| **+5 to +10** | 32 | 25-40 | **-10 dB** | 15 dB cost |
+| **0 to +5** | 16 | 15-25 | **-13 dB** | 12 dB cost |
+| **-5 to 0** | 8 | 8-15 | **-16 dB** | 9 dB cost |
+| **-10 to -5** | 4 | 4-8 | **-19 dB** | 6 dB cost |
+| **<-10 dB** | 1 | 1-2 | **-22 dB** | 0 dB cost (FT8-mode) |
+
+**Emergency beacons bypass patterns** (reserved frequencies [468, 1093 Hz], -28 dB capable)
 
 ### Smoothness Objectives
 - Mode transitions maintain receiver synchronization

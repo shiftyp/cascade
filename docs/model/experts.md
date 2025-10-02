@@ -631,6 +631,144 @@ def encoder_loss_with_emergency_avoidance(encoded_signal, ground_truth):
 
 **Model learns hard constraint**: Emergency frequencies [468 ± 10 Hz, 1093 ± 10 Hz] are completely forbidden for message transmission.
 
+### Multi-Scale Signal Separation
+
+The Signal Expert handles multiple signal types with different symbol rates and frequencies **using a single model**:
+
+**Signal types processed simultaneously:**
+```python
+# Model receives full-spectrum IQ (48 kHz sampling)
+full_spectrum = receive_from_soundcard()  # 0-24 kHz
+
+# Signal Expert separates all types in single forward pass:
+decoded_items = signal_expert.separate_all(full_spectrum)
+
+# Returns mixed list:
+[
+    {'type': 'message', 'pattern': 5, 'tones': [0,312,...], 'symbols': 50ms},
+    {'type': 'beacon', 'pattern': 12, 'tones': [78,234,...], 'symbols': 160ms},
+    {'type': 'message', 'pattern': 18, 'tones': [0,312,...], 'symbols': 50ms},
+    {'type': 'emergency', 'tones': [468,1093], 'symbols': 500ms},
+]
+
+# Different frequencies, different symbol rates, all decoded together
+```
+
+**Shared Encoder multi-scale architecture enables this:**
+```python
+# Shared encoder has multiple temporal scales (from shared_encoder.md)
+self.conv_short = Conv1d(kernel_size=64)    # 1.3ms (for 50ms symbols)
+self.conv_medium = Conv1d(kernel_size=256)  # 5.3ms (for 160ms symbols)
+self.conv_long = Conv1d(kernel_size=1024)   # 21ms (for 500ms symbols)
+
+# Features from all scales concatenated
+# Signal Expert uses multi-scale features to handle any symbol rate
+```
+
+### Envelope-Based Separation for Microsecond Offsets
+
+**Model separates overlapping transmissions with microsecond start-time differences:**
+
+```python
+class MicrosecondEnvelopeSeparator:
+    """Separate signals with <1ms timing offsets"""
+
+    def __init__(self):
+        # High-resolution onset detector
+        self.onset_conv = nn.Conv1d(2, 128, kernel_size=96)  # 2ms window @ 48kHz
+
+        # Envelope analyzer
+        self.envelope_net = nn.Sequential(
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 64)  # Envelope features
+        )
+
+    def separate_by_envelope(self, iq_48khz):
+        """
+        Separate overlapping signals using envelope analysis
+
+        Input: IQ samples at 48 kHz
+        Features used:
+        1. Onset timing (amplitude steps when new signal starts)
+        2. Beating patterns (amplitude modulation from phase offsets)
+        3. Clock drift signatures (unique frequency error per radio)
+        4. Phase trajectories (how phase evolves differently per radio)
+        """
+
+        # Extract amplitude envelope
+        envelope = torch.abs(iq_48khz)  # Complex → magnitude
+
+        # Detect onset times (when new transmissions start)
+        onset_features = self.onset_conv(iq_48khz)
+        onset_times = detect_amplitude_steps(onset_features)  # Microsecond resolution
+
+        # Analyze envelope beating (from overlapping tones)
+        envelope_features = self.envelope_net(envelope)
+
+        # Cluster by:
+        # - Onset time (when signal started)
+        # - Drift signature (frequency error pattern)
+        # - Beating frequency (phase offset from others)
+
+        clusters = cluster_by_timing_and_envelope(
+            onset_times,
+            envelope_features,
+            num_expected_users=estimate_user_count()
+        )
+
+        # Separate signals based on clusters
+        separated_signals = []
+        for cluster in clusters:
+            signal = extract_signal_by_cluster(iq_48khz, cluster)
+            separated_signals.append(signal)
+
+        return separated_signals  # 10-15 signals from overlapped input
+```
+
+**Training on asynchronous overlaps:**
+```python
+def train_envelope_separation():
+    """Train on overlapping signals with random microsecond offsets"""
+
+    for batch in training:
+        # Generate 5-15 overlapping transmissions
+        num_overlapping = random.randint(5, 15)
+
+        signals = []
+        for i in range(num_overlapping):
+            signal = generate_cascade_signal(
+                pattern=random_pattern(),
+                start_offset_us=random.randint(0, 2000000),  # 0-2s in μs
+                clock_drift_ppm=random.uniform(-50, 50),     # Unique drift
+                symbol_rate='50ms' or '160ms' or '500ms'     # Mixed rates!
+            )
+            signals.append(signal)
+
+        # Mix with sample-accurate alignment (48 kHz)
+        mixed = mix_with_microsecond_precision(signals)
+
+        # Add noise
+        mixed_noisy = mixed + noise(snr=random.uniform(-5, 10))
+
+        # Train to separate
+        separated = model.separate_all(mixed_noisy)
+
+        # Loss: Correctly identify all signals
+        # Accept 50-70% accuracy for 15 overlapping (challenging!)
+        # Expect 90%+ for 5 overlapping
+        loss = separation_loss(separated, ground_truth)
+        optimizer.step(loss)
+```
+
+**Model learns to use:**
+- Amplitude envelope steps (onset timing)
+- Phase beating patterns (from microsecond offsets)
+- Clock drift signatures (±50 ppm creates unique trajectories)
+- Multi-scale correlation (different symbol rates)
+
+**Result**: Single model handles 50ms/160ms/500ms symbols with 10-15 simultaneous overlaps at microsecond timing resolution.
+
 ---
 
 ## Pattern Complexity Expert Network

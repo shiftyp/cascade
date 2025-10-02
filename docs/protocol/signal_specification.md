@@ -136,10 +136,12 @@ NORMAL_BEACON_SPEC = {
     'tone_spacing': 156,           # Hz between beacon tones
     'bandwidth': 25,               # Hz per tone
 
-    # Beacon content
+    # Beacon content and FEC
     'payload': 16,                 # bits (callsign hash only)
-    'throughput': 12.5,            # bps
-    'duration': 1.28,              # seconds (8 symbols)
+    'fec': 'LDPC rate 1/2',        # Forward error correction
+    'coded_bits': 32,              # bits (16 data + 16 parity)
+    'throughput': 6.25,            # bps effective (with FEC)
+    'duration': 2.56,              # seconds (16 symbols for 32 coded bits)
 
     # Transmission strategy
     'repetitions': 3,              # 3× per minute
@@ -164,10 +166,12 @@ EMERGENCY_BEACON_SPEC = {
     'tone_spacing': 625,           # Hz between emergency tones
     'bandwidth': 10,               # Hz per tone (very narrow)
 
-    # Beacon content
+    # Beacon content and FEC
     'payload': 16,                 # bits (callsign hash only, emergency implicit from frequency)
-    'throughput': 4,               # bps (2 symbols/sec × 1 bit × 2 tones)
-    'duration': 4,                 # seconds
+    'fec': 'LDPC rate 1/3',        # Heavy FEC for maximum robustness
+    'coded_bits': 48,              # bits (16 data + 32 parity)
+    'throughput': 1.33,            # bps effective (with FEC)
+    'duration': 12,                # seconds (24 symbols for 48 coded bits)
 
     # Transmission strategy
     'repetitions': 6,              # 6× per minute (2× normal beacon rate)
