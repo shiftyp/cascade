@@ -20,12 +20,12 @@ While CASCADE regulations allow anyone to transmit emergency beacons, the networ
 def validate_emergency_transmission(emergency_beacon):
     """Immediate checks on received emergency beacon"""
 
-    # Check 1: Proper frequency (must be on [468, 1093] Hz)
-    if emergency_beacon.frequencies != [468, 1093]:
+    # Check 1: Proper frequency (must be on [456, 768, 1081, 1393] Hz)
+    if emergency_beacon.frequencies != [456, 768, 1081, 1393]:
         return {'valid': False, 'reason': 'Wrong frequency'}
 
-    # Check 2: Proper modulation (must be BPSK, 500ms symbols)
-    if emergency_beacon.modulation != 'BPSK' or emergency_beacon.symbol_duration != 500:
+    # Check 2: Proper modulation (must be 4-FSK, 800ms symbols)
+    if emergency_beacon.modulation != '4-FSK' or emergency_beacon.symbol_duration != 800:
         return {'valid': False, 'reason': 'Invalid modulation'}
 
     # Check 3: Reasonable callsign hash (basic format check)
@@ -192,45 +192,77 @@ Note: You may relay any emergency per FCC Part 97
 **Confirmation ACKs include grid squares**, enabling triangulation:
 
 ```python
-def triangulate_emergency_location(confirmations):
-    """Estimate emergency location from confirmations"""
+def triangulate_emergency_location(emergency_beacon, confirmations):
+    """Estimate emergency location from beacon and confirmations"""
 
-    # Extract reporter locations and SNR
+    # Emergency beacon now includes grid square!
+    beacon_grid = emergency_beacon.grid  # Direct from beacon (12 bits)
+
+    # Extract reporter locations and SNR for validation
     reports = [
         {'grid': c['from_grid'], 'snr': c['snr_reported']}
         for c in confirmations
     ]
 
-    # Simple triangulation (more reports = better accuracy)
+    # Use beacon's own location as primary
+    primary_location = {
+        'grid': beacon_grid,
+        'source': 'beacon',
+        'confidence': 'HIGH'
+    }
+
+    # Confirmations validate/refine if available
     if len(reports) >= 3:
-        # Calculate center of mass weighted by SNR
+        # Calculate center of mass weighted by SNR (for validation)
         estimated_location = weighted_centroid(
             [grid_to_coords(r['grid']) for r in reports],
             weights=[snr_to_weight(r['snr']) for r in reports]
         )
 
-        # Uncertainty estimate
-        spread = max_distance(reports)
+        # Check if beacon location matches confirmation triangulation
+        beacon_coords = grid_to_coords(beacon_grid)
+        estimated_coords = coords_to_grid(estimated_location)
+        distance_km = haversine(beacon_coords, estimated_coords)
 
-        return {
-            'estimated_grid': coords_to_grid(estimated_location),
-            'uncertainty_km': spread,
-            'confidence': 'MEDIUM' if len(reports) < 5 else 'HIGH'
-        }
+        if distance_km < 100:  # Within 100 km
+            return {
+                'grid': beacon_grid,  # Use beacon's grid
+                'validated': True,
+                'uncertainty_km': distance_km,
+                'confidence': 'VERY_HIGH',
+                'confirmations': len(reports)
+            }
+        else:
+            return {
+                'grid': beacon_grid,
+                'validated': False,
+                'discrepancy_km': distance_km,
+                'confidence': 'MEDIUM',
+                'warning': 'Location mismatch - possible spoofing'
+            }
     else:
-        return {'estimated_grid': None, 'confidence': 'LOW'}
+        return {
+            'grid': beacon_grid,  # Use beacon's grid
+            'validated': False,
+            'confidence': 'MEDIUM',
+            'note': 'Insufficient confirmations for validation'
+        }
 ```
 
 **Display to operators:**
 
 ```
-Emergency Location Estimate (from 7 confirmations):
-├─ Grid: FN42 (±50 km uncertainty)
+Emergency Location (from beacon + 7 confirmations):
+├─ Grid: FN42 (from emergency beacon)
+├─ Validated: YES (±15 km uncertainty from confirmations)
 ├─ Confirmations from: FN41, FN42, FN43, FN32
-└─ Geographic spread: 150 km (consistent)
+└─ Geographic consistency: CONFIRMED (all within 100 km)
 
 Relay coordination: 3 stations in FN42 can provide direct assistance
                    4 stations relaying to wider network
+
+Note: Location comes directly from emergency beacon (grid square included)
+      Confirmations validate rather than estimate position
 ```
 
 ## Anti-Jamming Through Limits

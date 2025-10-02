@@ -200,6 +200,124 @@ Station B → Station A: +8 dB (different from A→B!)
 
 ## Training Strategy
 
+### Data Generation Approach
+
+**Synthetic CASCADE signals + Real HF propagation:**
+
+CASCADE training uses **synthetic signal generation** combined with **real-world HF propagation characteristics** collected from the KiwiSDR network (150,000-300,000 hours of recordings).
+
+```python
+def generate_training_batch():
+    """Generate training scenario with synthetic CASCADE + real propagation"""
+
+    # 1. Generate synthetic CASCADE traffic
+    num_users = random.randint(5, 50)
+    cascade_signals = []
+
+    for user_id in range(num_users):
+        signal = generate_cascade_transmission(
+            pattern=random.choice(64),
+            modulation=random.choice(['8-QAM', 'QPSK', 'BPSK']),
+            snr_db=random.uniform(-25, 15),
+            clock_drift_hz=random.uniform(-50, 50),  # Per-user drift
+            start_time_us=random.randint(0, 5000000)  # Asynchronous
+        )
+        cascade_signals.append(signal)
+
+    # 2. Mix all users (overlap in frequency and time)
+    mixed_cascade = sum_signals_with_alignment(cascade_signals)
+
+    # 3. Apply REAL HF channel effects from KiwiSDR recordings
+    hf_channel = load_random_hf_channel_model(
+        # Extracted from real recordings:
+        multipath_impulse_response,  # 1-10ms delay spread
+        doppler_spread,               # ±2 Hz typical
+        fading_coefficients,          # Rayleigh/Rician
+        ionospheric_flutter           # Real measured
+    )
+
+    propagated = apply_hf_channel(mixed_cascade, hf_channel)
+
+    # 4. Add REAL noise samples from KiwiSDR
+    noise_sample = load_random_noise_segment(
+        duration=len(propagated),
+        source='kiwisdr_recordings'  # Real atmospheric/man-made noise
+    )
+
+    final_signal = propagated + noise_sample
+
+    return final_signal, ground_truth_users
+
+# Training uses 100% synthetic CASCADE, 100% real propagation/noise
+```
+
+**Why this approach:**
+- ✅ CASCADE protocol doesn't exist yet (can't record real CASCADE traffic)
+- ✅ HF propagation physics is universal (applies to any signal)
+- ✅ Real noise characteristics crucial (QRN, QRM, atmospheric)
+- ✅ Drift/timing/multipath effects are identical for real vs synthetic
+
+### Clock Drift as Separation Feature
+
+**Per-user drift tracking:**
+
+The model learns to use **clock drift as a station fingerprint** for multi-user separation, inspired by FT8's drift correction but extended to 50+ simultaneous users.
+
+```python
+def train_with_drift_augmentation():
+    """Train model to track and exploit per-user drift"""
+
+    # Each user gets independent clock error
+    user_drifts = [random.uniform(-50, 50) for _ in range(num_users)]
+
+    for user_id, drift_hz in enumerate(user_drifts):
+        # Drift remains constant per user across entire transmission
+        user_signal = generate_user_with_drift(
+            base_freq=300 + pattern_offset,
+            drift_hz=drift_hz,           # -50 to +50 Hz
+            duration=5.0                  # Seconds
+        )
+
+        # Over 5 seconds at 14 MHz:
+        # ±50 Hz drift accumulates significant phase rotation
+        # Model learns this as unique per-user signature
+
+    # Ground truth includes drift per user
+    ground_truth = {
+        'user_0': {'pattern': 5, 'data': bytes, 'drift_hz': +30},
+        'user_1': {'pattern': 12, 'data': bytes, 'drift_hz': -15},
+        # ...
+    }
+```
+
+**Model output includes drift estimates:**
+```python
+class SignalExpert:
+    def forward(self, iq_samples):
+        # Returns drift alongside decoded data
+        return {
+            'users': [
+                {
+                    'pattern': 5,
+                    'data': bytes,
+                    'drift_hz': +29.7,  # Estimated drift (vs +30 ground truth)
+                    'snr_db': -12
+                },
+                # ...
+            ]
+        }
+```
+
+**Training targets:**
+- Pattern separation: <-30 dB cross-correlation (primary)
+- Drift as secondary feature: ±50 Hz range, 0.5 Hz accuracy
+- Combined: Enables 50+ user separation even with partial pattern overlap
+
+**Drift tolerance:**
+- <20 users: ±50 Hz per user (GPS not required)
+- ≥20 users: ±25 Hz recommended (GPS-locked preferred)
+- Model trained on full ±50 Hz to handle worst case
+
 ### Two-Pass Kernel Training
 1. **Pass 1**: Random kernels for robustness
 2. **Pass 2**: Use Pass 1 model to generate realistic hints
@@ -211,6 +329,21 @@ Station B → Station A: +8 dB (different from A→B!)
 
 Adjust based on results - if conductor struggles, allocate more Stage 2.
 
+### Training Data Pipeline
+
+**Data sources:**
+- **Synthetic CASCADE signals**: 100% generated (protocol-compliant patterns)
+- **Real HF propagation**: Extracted from 150k-300k hours KiwiSDR recordings
+- **Real noise**: QRN (atmospheric), QRM (interference), solar conditions
+- **Channel models**: Watterson, ITU-R P.533 with measured parameters
+
+**Augmentation:**
+- Multi-user count: 5-50 simultaneous (uniform distribution)
+- SNR per user: -25 to +15 dB (weighted toward weak signals)
+- Clock drift per user: ±50 Hz independent (enables fingerprinting)
+- Start time offsets: 0-5s microsecond-resolution (asynchronous)
+- Propagation conditions: All solar cycle phases, all bands, all paths
+
 ## Performance Targets
 
 - **Inference**: <10ms on Raspberry Pi 4
@@ -220,3 +353,59 @@ Adjust based on results - if conductor struggles, allocate more Stage 2.
 - **Pattern Orthogonality**: <-30 dB cross-correlation
 - **Multipath Tolerance**: 10ms delay spread
 - **Doppler Tolerance**: ±10 Hz
+
+## Kernel Generation as Learned Behavior
+
+### RX-Optimized Kernels
+
+Kernels are **learned outputs** of the pattern expert network, not separate from the model. Each station generates a 64-bit kernel for their own receiver, which others use when transmitting to that station.
+
+**Kernel generation process**:
+- Pattern expert (512-D output) encodes receiver's preferences and capabilities
+- 64-bit kernel is lossy compression of this 512-D state
+- Kernel includes: hardware tier, FEC preference, constellation limits, capacity
+- Model learns optimal kernel generation from telemetry feedback
+
+**Training on kernel effectiveness**:
+
+Telemetry from deployed radios reveals which kernels actually improve decode success. TX telemetry includes the RX kernel generated (512-D neural state), while RX telemetry shows whether that kernel helped encoding. This TX/RX correlation provides ground truth for optimizing kernel generation.
+
+The model learns:
+- Which 64-bit kernel configurations work for given hardware/conditions
+- How to predict kernel lifetime (estimated_valid_seconds field)
+- When receivers need kernel updates (via ACK feedback)
+- How to adapt kernels based on antikernel feedback
+
+**Kernel as compressed representation**:
+- 64-bit kernel: Discrete hint for decoder configuration
+- 512-D pattern expert: Continuous representation of optimal pattern selection
+- 3581-D full state: Complete context for kernel generation decisions
+- Training uses 512-D (continuous, gradient-friendly) not 64-bit (discrete)
+
+See [telemetry_research.md](../../telemetry_research.md#telemetry-integration-with-kernels-and-antikernels) for kernel/antikernel telemetry integration and training strategies.
+
+## Continuous Improvement via Telemetry
+
+CASCADE improves continuously through three complementary mechanisms:
+
+**Monthly fine-tuning**:
+- Updates model with recent telemetry (10K-50K hours)
+- Preserves existing knowledge
+- 1-5% improvement per update
+- Cost: $150-200 per month
+
+**Annual retraining**:
+- Full retrain from scratch with combined dataset (100K+ hours)
+- Eliminates inherited geographic bias
+- 5-15% improvement
+- Cost: $2,500-3,500 per year
+
+**Real-time adaptation**:
+- Meta-learning (MAML) during active QSOs
+- 5-15% improvement during specific conversations
+- Reverts after QSO ends
+- Hardware-dependent (RPi4: kernel only, Coral: +MAML, x86: full online)
+
+These three mechanisms work together: base model improves monthly/annually (global performance), real-time adaptation provides QSO-specific boost (immediate benefit).
+
+See [Continuous Improvement](../training/continuous_improvement.md) for complete federated learning and model update strategies.

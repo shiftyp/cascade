@@ -21,7 +21,24 @@ The protocol layer handles all discrete decisions in CASCADE. These are choices 
 
 ## Key Components
 
-### Message Format and Size Limits
+### Message Format
+
+CASCADE uses **fixed binary wire format** for minimal overhead and fast parsing:
+- 19-byte header + variable UTF-8 payload + 8-byte validation
+- Little-endian throughout
+- Total overhead: 27 bytes (17-21% typical)
+
+See [Message Format](message_format.md) for complete binary specification.
+
+### Message Validation
+
+CASCADE uses **dual-layer validation** to prevent neural network hallucinations:
+- **CRC32**: Error detection (NN learns this - improves training)
+- **xxHash32**: Validity checking (NN cannot forge - prevents false positives)
+
+See [Message Validation](message_validation.md) for complete specification.
+
+### Message Size Limits
 
 **Simple 5-field structure:**
 ```python
@@ -180,7 +197,7 @@ CASCADE operates in three progressive stages, adapting based on link quality:
 ```markdown
 **Beacon** (1.28 seconds, asynchronous):
 - Content: 16-bit callsign hash only
-- Modulation: 4-FSK on interstitial frequencies [156, 468, 781, 1093 Hz]
+- Modulation: 4-FSK on interstitial frequencies [456, 768, 1081, 1393 Hz]
 - Symbol duration: 160ms (FT8-style)
 - Repetitions: 3× per minute (random timing/patterns)
 - Min SNR: -22 dB
@@ -316,11 +333,24 @@ def select_protocol_stage(station, link_quality):
         }
 ```
 
-### Kernel Hint Routing
-- Pairwise hint exchange (Stage 2+)
-- Receiver generates, transmitter uses
-- 10-minute expiration
-- Improves weak link performance
+### Kernel Exchange Protocol
+
+**Kernels are receiver-optimized hints**:
+- Each station generates a kernel for THEIR OWN receiver
+- Broadcasts RX kernel to network via unified KERNEL_EXCHANGE message
+- Others use this kernel when transmitting TO that station
+- Pairwise optimization (A→B uses B's RX kernel, B→A uses A's RX kernel)
+
+**Unified KERNEL_EXCHANGE message**:
+- Single message type handles: initial contact, antikernel feedback, adaptation, retry
+- Always includes `for_message_id` field (ties kernel to message context)
+- Transmitted on 4-FSK (robust, ~5-7 seconds)
+- See [Kernel Lifecycle](kernel_lifecycle.md) for complete specification
+
+**Asymmetric links are natural**:
+- RPi receiver requests QPSK + heavy FEC
+- x86 receiver accepts 8-QAM + light FEC
+- Higher throughput to powerful receivers, robust encoding to limited receivers
 
 ### Trust State Machine
 ```

@@ -1,4 +1,4 @@
-# CASCADE - Communication Adaptive System for Continuous Adjustment with Distributed Efficiency
+# CASCADE - Cognitive Adaptive Spectrum Coordination And Distributed Efficiency
 
 ## Overview
 

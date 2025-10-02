@@ -55,13 +55,21 @@ When creating this spec from a user prompt:
 
 ## Clarifications
 
-### Session 2025-09-29
+### Session 2025-09-29 (Original comprehensive plan)
 - Q: What is the target collection timeline for the 100-500 hours of QRN data? → A: seasonal cycle geographic diversity
 - Q: What is the primary collection strategy for the 18-month period? → A: all (continuous baseline + event-triggered + FT8/WSPR focused)
-- Q: What are the storage requirements and retention policies? → A: 35-75TB total for 200,000-300,000 hours of compressed data (range reflects seasonal/event weighting variance)
+- Q: What are the storage requirements and retention policies? → A: 35-75TB total for 200,000-300,000 hours of compressed data
 - Q: What is the recording bandwidth and format specification? → A: 12 kHz IQ, 16-bit, 12kHz sample rate, FLAC compressed
 - Q: How many simultaneous KiwiSDR stations for baseline collection? → A: Variable (50-100 baseline, 100-200 during events)
 - Q: What is the data quality validation threshold? → A: Keep all data (complete archive)
+
+### Session 2025-10-02 (V1 MVP Strategy)
+- **Decision**: Reduce to 6-month collection for faster V1 launch
+- **Target**: 24,000-36,000 hours (4,000-6,000 hrs/band)
+- **Storage**: 4-7TB compressed (down from 35-75TB)
+- **Sources**: 133 cooperating KiwiSDR owners @ 60 min/day
+- **Geographic**: Accept V1 bias (65% N, 15% S, 20% Eq)
+- **Strategy**: Launch with good coverage in NA/EU/Japan (90-95%), use telemetry to improve underserved regions post-V1
 
 ## Module Context *(mandatory for CASCADE)*
 
@@ -97,7 +105,7 @@ As a CASCADE developer, I need to collect real-world atmospheric noise (QRN) and
 ### Functional Requirements
 - **FR-001**: System MUST connect to public KiwiSDR and WebSDR receivers programmatically using appropriate APIs and protocols
 - **FR-002**: System MUST record atmospheric noise (QRN) from HF bands (10 kHz - 30 MHz)
-- **FR-003**: System MUST collect MINIMUM 4,000 hours per HF band (24,000 hours baseline) with expanded event-driven collection targeting 200,000-300,000 total hours over 18 months from geographically and temporally diverse locations, using hybrid KiwiSDR/WebSDR collection strategy with weighted collection rates (200-500 hrs/day) accounting for seasonal variance and event scaling
+- **FR-003**: System MUST collect MINIMUM 4,000 hours per HF band (24,000 hours baseline V1) with target of 4,000-6,000 hrs/band (24,000-36,000 total) over 6 months from geographically diverse locations, using KiwiSDR collection strategy with 133 cooperating owners @ 60 min/day (133-200 hrs/day collection rate). Geographic distribution: 65% Northern, 15% Southern, 20% Equatorial for V1 MVP
 - **FR-004**: System MUST extract propagation data from FT8 and WSPR transmissions
 - **FR-005**: System MUST anonymize all callsigns and location information
 - **FR-006**: System MUST preserve GPS timestamps for all recordings

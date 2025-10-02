@@ -962,9 +962,65 @@ CASCADE's continuous improvement system achieves multiple goals simultaneously:
 
 This architecture enables CASCADE to improve indefinitely while respecting user privacy and maintaining system security.
 
+## Model Retraining Strategy
+
+### Fine-Tuning vs Training from Scratch
+
+As telemetry accumulates, CASCADE must decide whether to **fine-tune** the existing model or **retrain from scratch** with the combined dataset.
+
+**Fine-tuning approach** (default):
+- Fast (2-3 days on H100)
+- Cost-effective ($150-200 per update)
+- Preserves existing knowledge
+- Monthly cadence for rapid iteration
+- Use when: Telemetry <50% of original, still improving >1%, variance <10%
+
+**Retrain from scratch** (periodic):
+- Slow (3-4 weeks on H100)
+- Expensive ($2,500-3,500 per retrain)
+- Eliminates inherited bias
+- Annual cadence for major improvements
+- Use when: Telemetry >2x original, fine-tuning plateaued, variance >15%, 12+ months since retrain
+
+**Recommended pattern**: Monthly fine-tuning for 12 months, then annual full retrain. This balances rapid iteration (monthly) with periodic bias correction (annual).
+
+**Knowledge distillation**: When retraining from scratch, use V1 model as "teacher" to preserve well-learned features while eliminating bias. Combines 70% ground truth + 30% V1 knowledge for best of both worlds.
+
+See [telemetry_research.md](../../telemetry_research.md#model-retraining-strategy-fine-tuning-vs-training-from-scratch) for detailed decision framework and performance targets.
+
+## Real-Time Adaptation During QSOs
+
+### Meta-Learning for Fast Adaptation
+
+Beyond offline training, CASCADE can adapt **during active QSOs** using meta-learning (MAML). The model adjusts weights temporarily based on what's working in the current conversation, then reverts when the QSO ends.
+
+**Key insight**: A 5-minute QSO provides 20-50 message exchanges—enough data for fast adaptation to current conditions.
+
+**Adaptation strategies by hardware**:
+- **RPi4**: Kernel refinement only (3-5% improvement, <1ms latency)
+- **Coral TPU**: Kernel refinement + per-station cache + light MAML (10-15% improvement, 5-10ms latency)
+- **x86 Desktop**: Full online learning (15-20% improvement, 50-100ms latency)
+
+**Performance impact**:
+- First QSO with station: 85% → 93% success rate (+8% during QSO)
+- Repeat QSO with cached weights: 85% → 95% success rate (+10% from first message)
+- Difficult propagation: 72% → 85% success rate (+13%)
+
+**Safety mechanisms**:
+- Minimum 5 samples before adapting
+- Maximum 10% weight change
+- Validation on held-out samples
+- Revert if performance drops >50%
+- Consecutive failure tracking (disable after 3 failures)
+
+**Telemetry from adaptation**: Tracks adaptation method, performance improvement, safety metrics, and resource usage. Used to train meta-learner for better fast adaptation over time.
+
+See [telemetry_research.md](../../telemetry_research.md#real-time-adaptation-during-qsos) for complete meta-learning implementation and hardware-specific strategies.
+
 ## See Also
 
 - **[Privacy Protection](../privacy.md)** - Core privacy principles and anonymization methods
 - **[Data Pipeline](data_pipeline.md#phase-2-telemetry-based-gap-closure-post-deployment)** - How telemetry addresses geographic gaps
 - **[Long-Term Roadmap](long_term_roadmap.md#transition-to-telemetry-primary-2027)** - Transition from SDR to telemetry-primary data collection
 - **[Training README](README.md)** - Overall training and continuous learning strategy
+- **[telemetry_research.md](../../telemetry_research.md)** - Comprehensive telemetry research and analysis

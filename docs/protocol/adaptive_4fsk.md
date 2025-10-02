@@ -5,8 +5,8 @@ The 4-FSK interstitial channel serves as CASCADE's universal control plane, prov
 ## Overview
 
 **4-FSK channel characteristics:**
-- Frequencies: [78, 234, 1718, 1953] Hz (normal beacons) + [468, 1093] Hz (emergency, BPSK)
-- Symbol duration: 160ms (FT8-proven robustness)
+- Frequencies: [378, 534, 2018, 2253] Hz (normal beacons) + [456, 768, 1081, 1393] Hz (emergency, 4-FSK)
+- Symbol duration: 160ms normal, 800ms emergency (FT8-proven robustness)
 - Modulation: 4-FSK (2 bits/symbol)
 - Base throughput: 12.5 bps per transmission
 - Patterns: Uses same 64 orthogonal patterns as message channel
@@ -25,9 +25,9 @@ The 4-FSK interstitial channel serves as CASCADE's universal control plane, prov
 
 ```python
 # Multiple stations beacon simultaneously
-Station A: Pattern 5, 4-FSK on [78, 234, 1718, 1953], 160ms symbols
-Station B: Pattern 12, 4-FSK on [78, 234, 1718, 1953], 160ms symbols  # Same frequencies!
-Station C: Pattern 23, 4-FSK on [78, 234, 1718, 1953], 160ms symbols
+Station A: Pattern 5, 4-FSK on [378, 534, 2018, 2253], 160ms symbols
+Station B: Pattern 12, 4-FSK on [378, 534, 2018, 2253], 160ms symbols  # Same frequencies!
+Station C: Pattern 23, 4-FSK on [378, 534, 2018, 2253], 160ms symbols
 
 # All overlap in frequency and time
 # Separated by: Pattern orthogonality (<-30 dB cross-correlation)
@@ -36,11 +36,21 @@ Station C: Pattern 23, 4-FSK on [78, 234, 1718, 1953], 160ms symbols
 
 **4-FSK channel capacity:**
 ```
-64 patterns × 12.5 bps each = 800 bps aggregate
-vs Message patterns: 64 × 350 bps = 22,400 bps aggregate
+Symbol rate: 6.25 symbols/sec (160ms symbols)
+Modulation: 4-FSK (2 bits/symbol)
+Raw rate: 6.25 × 2 = 12.5 bps per transmission
+Multiple transmissions: 10-15 simultaneous via pattern orthogonality
 
-4-FSK is ~3.6% of message channel capacity
-(Intentionally inefficient for robustness)
+Aggregate at typical SNR (0 dB):
+- Shannon limit (2 kHz 4-FSK bandwidth): ~4,300 bps
+- 4-FSK actual: ~800 bps (conservative, 18% Shannon)
+- Intentionally inefficient for maximum robustness
+
+vs Message channel:
+- Shannon limit @ +15 dB (2.5 kHz): ~12,500 bps
+- Message actual: ~11,300 bps (90% Shannon)
+
+4-FSK trades efficiency for robustness (-22 dB capability)
 ```
 
 ## Ideal 4-FSK Kernel
@@ -299,9 +309,9 @@ Efficiency: 10× improvement via overlap tolerance
 **4-FSK channel bandwidth and capacity:**
 
 ```
-Bandwidth: ~2000 Hz (span from 78 to 1953 Hz)
-SNR: 0 dB (typical)
-Shannon capacity: 2000 Hz × log₂(2) = 2000 bps
+Bandwidth: ~2000 Hz (span from 378 to 2253 Hz, beacon frequencies)
+SNR: 0 dB (typical for control channel)
+Shannon capacity: 2000 Hz × log₂(1 + 1) = 2000 Hz × 1 = 2000 bps
 
 Current usage:
 ├─ 50 beacons/min: 50 × 1.3s × 12.5 bps / 60s = 13.5 bps avg
@@ -504,7 +514,7 @@ Effective 4-FSK capacity: ~150 concurrent transmissions per minute
 | Beacons | Best-effort | Yes (64 patterns) | 90%+ | No ACK, retry next minute |
 | Target kernels | Dedicated slot | Yes (10-15) | 50-70% | No ACK, retry next beacon |
 | Anti-kernels | Best-effort | Yes (unlimited) | 50-70% | No ACK, statistical delivery |
-| Emergency | Guaranteed | Minimal (BPSK, reserved) | 95%+ | Simple tone detect, retry |
+| Emergency | Guaranteed | Minimal (4-FSK, reserved) | 95%+ | 4-tone detect, includes grid |
 
 **4-FSK intentionally accepts loss** on non-critical traffic (anti-kernels, some target kernels) to maximize throughput and minimize coordination.
 

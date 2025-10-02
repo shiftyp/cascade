@@ -23,13 +23,14 @@ The CASCADE data pipeline addresses a fundamental bootstrapping problem: trainin
 
 **Core Strategy**: Collect massive quantities of real-world HF data, bias heavily toward rare events, compress via embeddings, train CASCADE on authentic propagation conditions.
 
-**Collection Scale**:
-- **Duration**: 18 months continuous (2025-2026, solar minimum)
-- **Sources**: 600-800 KiwiSDRs + 200-300 WebSDRs globally distributed (800-1100 total for rotation)
-- **Concurrent SDRs**: 50-100 baseline, scaling to 200+ during events
-- **Target Volume**: 200,000-300,000 hours total (200-500 hours/day weighted average)
-- **Raw Storage**: 35-75TB FLAC-compressed IQ data (varies with seasonal/event weighting)
+**Collection Scale (V1 MVP Strategy)**:
+- **Duration**: 6 months initial collection for V1 launch (2025-2026, solar minimum)
+- **Sources**: 133 cooperating KiwiSDR owners @ 60 min/day (or 10-15 dedicated + 50-100 public)
+- **Concurrent SDRs**: ~15-30 baseline
+- **Target Volume**: 24,000-36,000 hours total (133-200 hours/day average)
+- **Raw Storage**: 4-7TB FLAC-compressed IQ data
 - **Bands**: 6 HF amateur bands (80m, 40m, 20m, 15m, 10m, 6m)
+- **Post-V1**: Telemetry from deployed systems closes geographic gaps over 12-18 months
 
 **Aggressive Solar Minimum Strategy**:
 - **Philosophy**: Hoard all rare events during limited 18-month window
@@ -38,13 +39,14 @@ The CASCADE data pipeline addresses a fundamental bootstrapping problem: trainin
 - **Boost multipliers**: 5x-10x for any activity during minimum
 - **Rationale**: Solar maximum won't arrive until 2028-2030; maximize opportunity-limited window
 
-**Data Curation**:
-- Full 35-75TB archive preserved for reprocessing (range reflects weighted collection variance)
-- 3-5TB curated subset for training (diversity-biased)
+**Data Curation (V1 MVP)**:
+- Full 4-7TB archive preserved for reprocessing
+- 1-2TB curated subset for V1 training (diversity-biased)
 - Ultra-rare events (K≥8, X-class): 100% inclusion
-- Common conditions (K≤1, quiet sun): 1% sampling
-- Quiet channels: 10% intelligent selection via micro-embeddings (vs 1% random)
-- Result: 15-25GB embeddings (200x compression)
+- Common conditions (K≤1, quiet sun): 10% sampling (higher for V1)
+- Quiet channels: 10% intelligent selection via micro-embeddings
+- Result: 5-10GB embeddings for V1 (200x compression)
+- Geographic: Accept 65/15/20 bias (N/S/Eq) for faster V1 launch
 
 **Key Innovation**: Natural correlation preservation ensures CASCADE never trains on impossible combinations (e.g., Arctic noise + tropical propagation). All noise and propagation embeddings extracted from same recordings maintain authentic physics.
 
@@ -62,25 +64,22 @@ The pipeline follows a carefully designed sequence that preserves the natural co
 
 ## Timeline and Phases
 
-### Phase 1: Data Collection (Months 1-18)
+### Phase 1: Data Collection (Months 1-6 for V1)
 
-During this phase, the system continuously records IQ data from both KiwiSDR and WebSDR receivers worldwide, accumulating 35-75TB of raw recordings (range reflects seasonal/event variance) while respecting usage constraints. The hybrid collection strategy leverages KiwiSDR's 30-90 minute daily limits per IP and WebSDR's institutional policies to maximize coverage. No processing occurs during collection - the focus is purely on gathering diverse propagation conditions.
+**V1 MVP Strategy**: The system collects 24,000-36,000 hours from KiwiSDR receivers over 6 months, accumulating 4-7TB of raw recordings while respecting usage constraints. This provides sufficient data for V1 launch in well-covered regions (NA/EU/Japan at 90-95% performance). Geographic bias is accepted (65% Northern, 15% Southern, 20% Equatorial) with the plan to close gaps via post-deployment telemetry. No processing occurs during collection - the focus is purely on gathering diverse propagation conditions.
 
 The collection targets six HF amateur bands with 12 kHz bandwidth IQ recordings at 12 kHz sample rate, 16-bit depth, centered on strategic frequencies that capture both FT8/WSPR signals and adjacent quiet spectrum. Each recording is FLAC compressed for 45-55% size reduction while maintaining lossless quality.
 
-Critical aspects of the collection phase:
-- Continuous baseline collection using 50-100 concurrent SDRs rotating through 30-90 minute sessions
-- Dynamic scaling to 100-200 SDRs during solar events (K≥3 storms, C-class flares and above)
-- Target 200-500 hours/day weighted collection rate to achieve 200,000-300,000 total hours over 18 months
-  - Summer quiet periods: 250-350 hrs/day
-  - Winter/equinox active periods: 450-700 hrs/day
-  - Event bursts: 1,500-2,000 hrs/day during major storms (short duration)
-- Geographic and temporal diversity through intelligent rotation across 800-1100 public receivers (600-800 KiwiSDRs + 200-300 WebSDRs)
+Critical aspects of the V1 collection phase:
+- Baseline collection using 133 cooperating KiwiSDR owners @ 60 min/day (or 10-15 dedicated + 50-100 public)
+- Target 133-200 hours/day collection rate to achieve 24,000-36,000 total hours over 6 months
+- Geographic focus on well-covered regions (NA/EU/Japan) for reliable V1 performance
 - Complete archival of all data regardless of quality with correlation IDs linking noise and propagation
+- Cost: ~$870-3,000 for 6 months (public-only or hybrid with dedicated SDRs)
 
-### Phase 2: Dataset Curation (Month 19, Week 1)
+### Phase 2: Dataset Curation (Month 7, Week 1 for V1)
 
-After collection completes, the system analyzes the full dataset to create a carefully curated subset for training. This subset, approximately 3-5TB in size (from 35-75TB raw collection depending on seasonal/event variance), oversamples rare events while maintaining baseline coverage of common conditions.
+After V1 collection completes, the system analyzes the full dataset to create a carefully curated subset for training. This subset, approximately 1-2TB in size (from 4-7TB raw collection), oversamples rare events while maintaining baseline coverage of common conditions.
 
 The curation process computes a rarity score for each recording based on multiple factors:
 
@@ -128,15 +127,15 @@ def calculate_rarity_score(recording):
 
 The curation strategy ensures that every K=9 storm, every X-class flare, and every auroral opening is included in the training set, while common F2 propagation is sampled at just 1-10% to prevent the model from overfitting to the most frequent conditions.
 
-### Phase 3: Embedding Model Training (Month 19, Weeks 2-3)
+### Phase 3: Embedding Model Training (Month 7, Weeks 2-3 for V1)
 
-The system trains two specialized [Variational Autoencoder (VAE) models](embedding_models.md#architecture-overview) on the curated dataset - one for noise characterization and one for propagation effects. Training on the diverse 3-5TB subset takes approximately 2-3 days on a single GPU.
+The system trains two specialized [Variational Autoencoder (VAE) models](embedding_models.md#architecture-overview) on the curated dataset - one for noise characterization and one for propagation effects. Training on the diverse 1-2TB V1 subset takes approximately 1-2 days on a single GPU.
 
-The key insight is that the embedding models need diversity, not volume. By training on a carefully selected subset that includes all rare events, the models learn to represent the full space of possible radio conditions without processing all 40-50TB of mostly redundant data.
+The key insight is that the embedding models need diversity, not volume. By training on a carefully selected subset that includes all rare events captured during 6 months, the models learn to represent the full space of radio conditions sufficient for V1 launch.
 
-### Phase 4: Embedding Generation (Months 19-20)
+### Phase 4: Embedding Generation (Month 7-8 for V1)
 
-Once trained, the [VAE models](embedding_models.md#quiet-channel-vae-architecture) process the curated 3-5TB dataset to generate embeddings. This is when multi-scale processing occurs:
+Once trained, the [VAE models](embedding_models.md#quiet-channel-vae-architecture) process the curated 1-2TB dataset to generate embeddings. This is when multi-scale processing occurs:
 
 - **Frequency Channelization**: The 12 kHz recordings are divided into overlapping 250-500 Hz channels
 - **Temporal Windowing**: Sliding windows of 0.5-5 seconds are extracted to match CASCADE's adaptive fragments
@@ -146,9 +145,9 @@ This transforms the raw IQ data into compact vector representations:
 - Noise embeddings: 64-dimensional vectors per frequency-time tile
 - Propagation embeddings: 128-dimensional vectors encoding channel distortion
 
-Processing 3-5TB of IQ data yields approximately 15-25GB of embeddings - a 200x compression ratio while preserving the essential information needed for training.
+Processing 1-2TB of IQ data yields approximately 5-10GB of embeddings for V1 - a 200x compression ratio while preserving the essential information needed for training.
 
-### Phase 5: CASCADE Model Training (Months 20-21)
+### Phase 5: CASCADE Model Training (Months 8-9 for V1)
 
 Finally, CASCADE trains using the generated embeddings. The model learns by:
 1. Generating fresh CASCADE signals from training data
@@ -1584,6 +1583,31 @@ Comprehensive QA system for data validation:
 
 The entire pipeline transforms 40-50TB of raw recordings (200,000-250,000 hours) into an elegant training system that captures the full complexity of HF radio propagation in just 15-25GB of [embeddings](embedding_models.md), while ensuring CASCADE learns to handle both common daily operations and the rare but critical edge cases it will encounter in deployment.
 
+## Cross-Station Telemetry Correlation
+
+### Post-Deployment Enhancement
+
+Once CASCADE deploys, telemetry from actual transmissions provides **ground truth labels** that dramatically improve training quality. When station A transmits to station B, telemetry from both sides reveals predictions vs reality.
+
+**Bidirectional telemetry**:
+- TX side: Station A's estimated SNR, generated kernel, expected coverage
+- RX side: Station B's measured SNR, decode success, kernel effectiveness
+- Correlation: Link via message_id (cryptographic hash)
+
+**Training value**:
+- **SNR estimation**: Compare A's prediction (-8dB) vs B's measurement (-12dB) → train better propagation models
+- **Kernel effectiveness**: Did A's RX kernel actually help B encode for A? → optimize kernel generation
+- **Asymmetric propagation**: A→B might be -12dB while B→A is -8dB → learn non-reciprocal paths
+- **Coverage prediction**: How many stations actually received vs expected? → improve network topology inference
+
+**Privacy-preserving correlation**:
+- Message IDs link TX/RX telemetry (cryptographic hashes, no content revealed)
+- K≥10 anonymity for station pairs (rare combinations not stored)
+- Grid squares only (70×35 km precision, not exact locations)
+- 10-50x training value improvement for +1.2% storage overhead
+
+See [telemetry_research.md](../../telemetry_research.md#cross-station-telemetry-correlation) for complete correlation strategy and implementation details.
+
 ## See Also
 
 - **[Embedding Models](embedding_models.md)** - VAE architectures that compress IQ data into embeddings
@@ -1591,3 +1615,4 @@ The entire pipeline transforms 40-50TB of raw recordings (200,000-250,000 hours)
 - **[Continuous Improvement](continuous_improvement.md)** - Post-deployment telemetry and model updates
 - **[Long-Term Roadmap](long_term_roadmap.md)** - Multi-phase collection strategy through 2040
 - **[Training README](README.md)** - Overall training strategy and expert training stages
+- **[telemetry_research.md](../../telemetry_research.md)** - Comprehensive telemetry strategies and analysis

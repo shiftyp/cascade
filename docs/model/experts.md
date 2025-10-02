@@ -529,15 +529,16 @@ training_scenario = {
         {'pattern': 12, 'tones': [0, 312, 625, ...], 'symbols': 50ms, 'mod': 'QPSK'},
     ],
     'beacons': [
-        {'tones': [156, 468, 781, 1093], 'symbols': 160ms, 'mod': '4-FSK'},  # Interstitial!
-        {'tones': [156, 468, 781, 1093], 'symbols': 160ms, 'mod': '4-FSK'},
+        {'tones': [78, 234, 1718, 1953], 'symbols': 160ms, 'mod': '4-FSK'},  # Normal beacons
+        {'tones': [78, 234, 1718, 1953], 'symbols': 160ms, 'mod': '4-FSK'},
     ],
     'interference': qrm_sample
 }
 
 # Model learns to separate by time-frequency signature:
 # - Messages: 50ms symbols, primary tones (0, 312, 625, ...)
-# - Beacons: 160ms symbols, interstitial tones (156, 468, 781, ...)
+# - Normal beacons: 160ms symbols, interstitial tones (78, 234, 1718, 1953)
+# - Emergency beacons: 800ms symbols, RESERVED tones (156, 468, 781, 1093)
 # - Different symbol rates → different correlation properties
 ```
 
@@ -597,17 +598,19 @@ def spectrum_expert_with_emergency_protection(features):
     """
     Allocate frequency resources while protecting emergency spectrum
     """
-    EMERGENCY_FREQS = [468, 1093]  # Hz - RESERVED, never use for messages
+    EMERGENCY_FREQS = [156, 468, 781, 1093]  # Hz - RESERVED, never use for messages
     AVAILABLE_SPECTRUM = [
-        (0, 460),      # Below first emergency freq
-        (480, 1085),   # Between emergency freqs
-        (1100, 2500)   # Above second emergency freq
+        (0, 146),      # Below first emergency freq
+        (166, 458),    # Between emergency freqs 1-2
+        (478, 771),    # Between emergency freqs 2-3
+        (791, 1083),   # Between emergency freqs 3-4
+        (1103, 2500)   # Above last emergency freq
     ]
 
     # Allocate frequency only within available ranges
     frequency_allocation = self.allocate_within_ranges(features, AVAILABLE_SPECTRUM)
 
-    return frequency_allocation  # Guaranteed no overlap with [468, 1093]
+    return frequency_allocation  # Guaranteed no overlap with [156, 468, 781, 1093]
 
 # Training loss for encoder:
 def encoder_loss_with_emergency_avoidance(encoded_signal, ground_truth):
@@ -619,7 +622,7 @@ def encoder_loss_with_emergency_avoidance(encoded_signal, ground_truth):
     spectrum = fft(encoded_signal)
     emergency_interference = 0
 
-    for freq in [468, 1093]:
+    for freq in [156, 468, 781, 1093]:
         energy_at_emergency = measure_energy_at_freq(spectrum, freq, bandwidth=10)
         if energy_at_emergency > -40:  # Any significant energy = violation
             # Massive penalty (100× base loss)
@@ -629,7 +632,7 @@ def encoder_loss_with_emergency_avoidance(encoded_signal, ground_truth):
     return base_loss + emergency_interference
 ```
 
-**Model learns hard constraint**: Emergency frequencies [468 ± 10 Hz, 1093 ± 10 Hz] are completely forbidden for message transmission.
+**Model learns hard constraint**: Emergency frequencies [156 ± 10 Hz, 468 ± 10 Hz, 781 ± 10 Hz, 1093 ± 10 Hz] are completely forbidden for message transmission.
 
 ### Multi-Scale Signal Separation
 
@@ -646,9 +649,9 @@ decoded_items = signal_expert.separate_all(full_spectrum)
 # Returns mixed list:
 [
     {'type': 'message', 'pattern': 5, 'tones': [0,312,...], 'symbols': 50ms},
-    {'type': 'beacon', 'pattern': 12, 'tones': [78,234,...], 'symbols': 160ms},
+    {'type': 'beacon', 'pattern': 12, 'tones': [78,234,1718,1953], 'symbols': 160ms},
     {'type': 'message', 'pattern': 18, 'tones': [0,312,...], 'symbols': 50ms},
-    {'type': 'emergency', 'tones': [468,1093], 'symbols': 500ms},
+    {'type': 'emergency', 'tones': [156,468,781,1093], 'symbols': 800ms, 'mod': '4-FSK'},
 ]
 
 # Different frequencies, different symbol rates, all decoded together
