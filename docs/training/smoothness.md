@@ -28,7 +28,7 @@ The smoothness objective consists of multiple complementary loss terms, each add
 
 Temporal smoothness ensures that constellation complexity doesn't change too quickly over time. Real channels change gradually - fading happens over seconds or minutes, not microseconds. The model must learn to match this natural tempo.
 
-This loss component penalizes rapid changes between consecutive frames. If the model switches from 64 patterns to 4 patterns instantly, the temporal smoothness loss becomes large. This teaches the model to make gradual transitions, perhaps going through 64→32→16→8→4 over several seconds.
+This loss component penalizes rapid changes between consecutive frames. If the model switches from complex NVIS patterns (IDs 240-255) to emergency patterns (IDs 64-79) instantly, the temporal smoothness loss becomes large. This teaches the model to make gradual transitions between pattern pools (NVIS → Good Prop → Typical DX → Emergency) over several seconds as propagation degrades.
 
 Penalize rapid changes in collapse level:
 

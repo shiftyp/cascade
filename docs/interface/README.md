@@ -17,11 +17,13 @@ The protocol provides constraints that bound the model's optimization:
 
 ```python
 class ModelConstraints:
-    assigned_patterns: List[int]    # Which patterns this user can use
+    assigned_pattern_pool: str      # Which pool: 'typical_dx', 'good_prop', etc.
+    assigned_patterns: List[int]    # Specific patterns from pool (8 patterns)
     priority: float                  # 0.0 (LOW) to 1.0 (EMERGENCY)
     max_time_seconds: float         # Maximum transmission duration
     target_callsign: str            # Destination for link adaptation
-    kernel_hint: Optional[int]      # Previously received hint
+    target_kernel: bytes            # 64-bit kernel (includes available_tones)
+    multipath_estimate: float       # Estimated delay spread (ms)
 ```
 
 ### Example Usage
@@ -29,11 +31,13 @@ class ModelConstraints:
 ```python
 # Protocol determines constraints
 constraints = ModelConstraints(
-    assigned_patterns=[4, 7, 12, 15, 23, 31],
+    assigned_pattern_pool='typical_dx',  # Most HF operation
+    assigned_patterns=[88, 92, 96, 100, 104, 108, 112, 116],  # 8 from typical DX pool
     priority=0.5,  # NORMAL
     max_time_seconds=5.0,
     target_callsign='W2DEF',
-    kernel_hint=0xABCDEF123456
+    target_kernel=0xABCDEF123456,  # Includes available_tones encoding
+    multipath_estimate=5.0  # ms (typical multi-hop)
 )
 
 # Pass to model for optimization
@@ -48,11 +52,13 @@ The model returns optimized parameters within protocol constraints:
 
 ```python
 class EncodingParams:
-    selected_patterns: List[int]    # Subset of assigned patterns
+    selected_patterns: List[int]    # Subset of assigned patterns (from pool)
+    pattern_pool: str              # Pool used: 'emergency', 'typical_dx', 'good_prop', 'nvis'
     fragment_duration: float        # Seconds per fragment
     redundancy_factor: float        # FEC strength (1.0-3.0)
-    collapse_level: int            # Constellation: 0=64, 1=16, 2=4, 3=2
+    iq_complexity_level: int       # Baked-in complexity of selected patterns (0-7)
     kernel_id: int                 # Natural frame identifier
+    available_tones: List[int]     # Which of 70 tones receiver can decode
 ```
 
 ### Streaming Fragments

@@ -5,12 +5,12 @@ The 4-FSK interstitial channel serves as CASCADE's universal control plane, prov
 ## Overview
 
 **4-FSK channel characteristics:**
-- Frequencies: [378, 534, 2018, 2253] Hz (normal beacons) + [456, 768, 1081, 1393] Hz (emergency, 4-FSK)
-- Symbol duration: 160ms normal, 800ms emergency (FT8-proven robustness)
+- Frequencies: [1490, 1520, 1580, 1610] Hz (centered at 1550 Hz, symmetric)
+- Symbol duration: 100ms normal, 200ms emergency (robust)
 - Modulation: 4-FSK (2 bits/symbol)
-- Base throughput: 12.5 bps per transmission
-- Patterns: Uses same 64 orthogonal patterns as message channel
-- Multi-user: 10-15 simultaneous transmissions (model-separated)
+- Base throughput: 20 bps per transmission (100ms symbols)
+- Patterns: Uses 64 dedicated beacon patterns (IDs 0-63) optimized for 4-FSK
+- Multi-user: 48 simultaneous transmissions via pattern orthogonality (anti-kernel resilient)
 
 **Primary uses:**
 1. Network discovery (beacons)
@@ -21,16 +21,17 @@ The 4-FSK interstitial channel serves as CASCADE's universal control plane, prov
 
 ## Pattern Orthogonality in 4-FSK
 
-**4-FSK uses CASCADE's 64 patterns** (same as message channel):
+**4-FSK uses CASCADE's 64 beacon patterns** (IDs 0-63, optimized specifically for 4-FSK):
 
 ```python
 # Multiple stations beacon simultaneously
-Station A: Pattern 5, 4-FSK on [378, 534, 2018, 2253], 160ms symbols
-Station B: Pattern 12, 4-FSK on [378, 534, 2018, 2253], 160ms symbols  # Same frequencies!
-Station C: Pattern 23, 4-FSK on [378, 534, 2018, 2253], 160ms symbols
+Station A: Pattern 20 (beacon), 4-FSK on [1490, 1520, 1580, 1610], 100ms symbols
+Station B: Pattern 35 (beacon), 4-FSK on [1490, 1520, 1580, 1610], 100ms symbols  # Same frequencies!
+Station C: Pattern 48 (beacon), 4-FSK on [1490, 1520, 1580, 1610], 100ms symbols
 
 # All overlap in frequency and time
-# Separated by: Pattern orthogonality (<-30 dB cross-correlation)
+# Separated by: Beacon pattern orthogonality (<-30 dB in 4D space)
+# Beacon patterns optimized for 4-tone alphabet (better than repurposed 70-tone patterns)
 # Model decodes all three independently
 ```
 
@@ -60,7 +61,7 @@ vs Message channel:
 ```python
 # Included in beacon (32 bits)
 ideal_4fsk_kernel = {
-    'base_pattern': 6 bits,              # One of 64 patterns (my base for 4-FSK)
+    'base_pattern': 6 bits,              # One of 64 beacon patterns (my base for 4-FSK)
     'mutation_seed': 8 bits,             # Seed for pattern variation
     'preferred_time_offset_ms': 8 bits,  # When I listen best (0-255 × 10ms = 0-2.55s)
     'constellation_tolerance': 4 bits,   # IQ variance I can decode
@@ -511,7 +512,7 @@ Effective 4-FSK capacity: ~150 concurrent transmissions per minute
 
 | Use Case | Delivery | Overlaps | Success Rate | Protocol |
 |----------|----------|----------|--------------|----------|
-| Beacons | Best-effort | Yes (64 patterns) | 90%+ | No ACK, retry next minute |
+| Beacons | Best-effort | Yes (64 beacon patterns) | 90%+ | No ACK, retry next minute |
 | Target kernels | Dedicated slot | Yes (10-15) | 50-70% | No ACK, retry next beacon |
 | Anti-kernels | Best-effort | Yes (unlimited) | 50-70% | No ACK, statistical delivery |
 | Emergency | Guaranteed | Minimal (4-FSK, reserved) | 95%+ | 4-tone detect, includes grid |

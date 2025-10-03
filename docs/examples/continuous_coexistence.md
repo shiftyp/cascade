@@ -279,7 +279,7 @@ class StormNetEvolution:
         """Good conditions, normal operations"""
 
         # Most stations at high SNR
-        self.assign_patterns_widely()  # Use all 64 patterns
+        self.assign_patterns_widely()  # Use all 192 message patterns
         self.set_normal_priorities()   # Regular traffic
 
         # Continuous frequency - spread across band

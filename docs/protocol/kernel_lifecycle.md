@@ -57,35 +57,46 @@ kernel_usage = {
 **Receiver knows their own limitations**:
 
 ```python
-# Station A: Raspberry Pi 4, noisy urban location
+# Station A: Raspberry Pi 4, noisy urban location, selective fading
 a_rx_kernel = {
     'hardware_tier': 'rpi4',
     'noise_floor_dbm': -95,        # Noisy
     'max_simultaneous_users': 15,  # Limited CPU
+    'max_patterns_simultaneous': 2,  # Can decode 2 patterns at once
     'preferred_fec_rate': 0.8,     # Heavy FEC needed
     'preferred_constellation': 'QPSK',  # Can't handle 8-QAM
-    'preferred_bandwidth_hz': 100  # Narrow (interference avoidance)
+    'available_tones': [0-34, 40-69],  # Tones 35-39 have local QRM (run-length encoded)
+    'available_tone_count': 65,    # 65 of 70 tones usable
 }
 
-# Station B: x86 desktop, quiet rural location
+# Station B: x86 desktop, quiet rural location, excellent propagation
 b_rx_kernel = {
     'hardware_tier': 'x86',
     'noise_floor_dbm': -110,       # Quiet
     'max_simultaneous_users': 50,  # Powerful CPU
+    'max_patterns_simultaneous': 4,  # Can decode 4 patterns at once
     'preferred_fec_rate': 0.5,     # Light FEC sufficient
-    'preferred_constellation': '8QAM',  # Can handle complex
-    'preferred_bandwidth_hz': 200  # Wide (low noise)
+    'preferred_constellation': '16QAM',  # Can handle complex
+    'available_tones': [0-69],     # All 70 tones usable
+    'available_tone_count': 70,    # Perfect propagation
 }
 
 # When B transmits to A:
 # - B uses a_rx_kernel as hints
-# - Encodes with QPSK, FEC 0.8, 100 Hz BW
+# - Encodes with QPSK, FEC 0.8
+# - Uses only 2 patterns (A can decode 2 max)
+# - Avoids tones 35-39 (A has QRM there)
+# - Selects from A's 65 available tones only
 # - A can decode despite limitations
+# - Throughput: 2 patterns × 40 bps = 80 bps
 
 # When A transmits to B:
 # - A uses b_rx_kernel as hints
-# - Encodes with 8-QAM, FEC 0.5, 200 Hz BW
+# - Encodes with 16-QAM, FEC 0.5
+# - Uses 4 patterns (B can decode 4)
+# - Can use all 70 tones (B has excellent propagation)
 # - B decodes easily with powerful hardware
+# - Throughput: 4 patterns × 80 bps = 320 bps
 # - Higher throughput A→B than B→A (asymmetric, natural)
 ```
 
@@ -93,6 +104,93 @@ b_rx_kernel = {
 - A→B might use 8-QAM (B has good hardware)
 - B→A might use QPSK (A has limited hardware)
 - Both directions work optimally for receiver capabilities
+
+---
+
+## Available Tone Subset Encoding
+
+### Kernel Encodes Which Tones Receiver Can Decode
+
+**Critical innovation**: Each receiver measures and announces which of 70 discrete reference tones are usable at their location:
+
+```python
+def measure_and_encode_available_tones():
+    """
+    Receiver measures SNR and interference at each discrete tone
+    Encodes availability into kernel (40 bits of 64-bit kernel)
+    """
+
+    available_tones = []
+
+    # Measure each of 70 discrete reference tones
+    for tone_idx in range(70):
+        freq_hz = REFERENCE_TONES[tone_idx]
+
+        # Measure SNR at this exact frequency
+        snr_db = measure_snr_at_frequency(freq_hz)
+
+        # Check for local interference
+        qrm = detect_local_qrm(freq_hz)
+
+        # Tone is available if decodable
+        if snr_db > -10 and not qrm:
+            available_tones.append(tone_idx)
+
+    # Examples of availability patterns:
+    # Excellent: [0-69] (all 70 tones) → 1 range
+    # Selective fading: [0-34, 40-69] (60 tones, gap at 35-39) → 2 ranges
+    # Heavy QRM: [5-12, 25-35, 50-69] (34 tones) → 3 ranges
+    # Extreme: [10, 25, 40, 55] (4 tones only) → 4 single-tone ranges
+
+    # Encode using run-length encoding
+    encoded_40bit = run_length_encode_tones(available_tones)
+
+    return encoded_40bit  # Fits in kernel
+
+
+def run_length_encode_tones(tone_indices):
+    """
+    Encode available tones as ranges (40 bits)
+
+    Format:
+    - 4 bits: Number of ranges (0-15)
+    - 36 bits: Up to 4 ranges (9 bits each)
+      - Each range: 7-bit start index + 2-bit length_code
+        - length_code 00: length=1 (single tone)
+        - length_code 01: length in next 7 bits
+        - length_code 10: length=remaining tones
+        - length_code 11: reserved
+    """
+
+    ranges = find_contiguous_ranges(tone_indices)
+    # e.g., [0-34, 40-69] → [(0, 35), (40, 30)]
+
+    num_ranges = min(len(ranges), 4)  # Max 4 ranges in 40 bits
+    encoded = num_ranges << 36  # First 4 bits
+
+    for i, (start, length) in enumerate(ranges[:4]):
+        if length == 1:
+            # Single tone
+            range_bits = (start << 2) | 0b00
+        elif length <= 127:
+            # Explicit length
+            range_bits = (start << 2) | 0b01
+            range_bits = (range_bits << 7) | length
+        else:
+            # Remaining tones
+            range_bits = (start << 2) | 0b10
+
+        encoded |= (range_bits << (i * 9))
+
+    return encoded  # 40 bits
+
+# Examples:
+# All tones [0-69]: num_ranges=1, (start=0, length=70)
+#   → 0x01 | (0<<2|0b01)<<7|(70) = 0x...
+#
+# Selective [0-34, 40-69]: num_ranges=2, (0,35), (40,30)
+#   → 0x02 | range1 | range2 = 0x...
+```
 
 ---
 
@@ -108,7 +206,7 @@ class KERNEL_EXCHANGE:
 
     # Core fields (always present)
     from_station: hash          # 32 bits - who is sending
-    my_rx_kernel: bytes         # 64 bits - MY receiver's kernel
+    my_rx_kernel: bytes         # 64 bits - MY receiver's kernel (includes available tones)
     for_message_id: hash        # 64 bits - which message this relates to
     timestamp: uint32           # 32 bits
 

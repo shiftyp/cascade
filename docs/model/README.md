@@ -33,7 +33,7 @@ CASCADE's model layer implements a **mixture-of-experts architecture** where fiv
 - **Noise Expert** (~1M params, ~2ms): Suppresses QRN/QRM while preserving signal (15-20 dB improvement)
 - **Propagation Expert** (~900K params, ~2.5ms): Compensates multipath, fading, Doppler (10-15 dB improvement)
 - **Signal Expert** (~1.2M params, ~3ms): Separates 1-50 simultaneous users (>20 dB isolation)
-- **Pattern Complexity Expert** (~500K params, ~1ms): Adapts 64→16→4→2 pattern collapse (83-93% Shannon efficiency)
+- **Pattern Complexity Expert** (~500K params, ~1ms): Selects pattern pool based on multipath (256 patterns in hierarchical pools)
 - **Spectrum Allocation Expert** (~800K params, ~2ms): Packs users efficiently in 2.5 kHz (85-95% utilization)
 
 **Training Strategy**:
@@ -72,12 +72,13 @@ CASCADE's model layer implements a **mixture-of-experts architecture** where fiv
 
 ## Continuous Constellation Adaptation
 
-A key CASCADE innovation is **continuous modulation within fixed patterns**. While the protocol defines 64 orthogonal patterns (fixed time-frequency sequences), the model continuously adapts constellation geometry within these patterns.
+A key CASCADE innovation is **hierarchical pattern organization**. The protocol defines 256 patterns (64 beacon + 192 message) organized by IQ complexity, with the model selecting from appropriate pools based on HF propagation.
 
 ### Fixed vs Adaptive Components
 
 **Fixed (Protocol Layer)**:
-- 64 orthogonal patterns (tone sequences in time)
+- 256 orthogonal patterns (64 beacon for 4-FSK, 192 message for 70 tones)
+- Hierarchical organization: Pattern ID indicates IQ complexity
 - Pattern structure: 32 symbols × 8 tones
 - Orthogonality: <-30 dB cross-correlation
 - Ensures interoperability across all CASCADE implementations
@@ -161,13 +162,16 @@ Advanced coordination strategies - see [conductor_details.md](conductor_details.
 - **Multipath**: Propagation expert dominates
 - **Multi-user**: Signal expert dominates
 
-## Fixed Pattern Constellation
+## 4D Pattern Architecture
 
-[64 orthogonal patterns](patterns.md) with [hierarchical clustering](patterns.md#hierarchical-clustering):
-- **Level 0**: [64 patterns](patterns.md#pattern-design-principles) (6 bits/symbol)
-- **Level 1**: 16 clusters (4 bits/symbol)
-- **Level 2**: 4 clusters (2 bits/symbol)
-- **Level 3**: 2 clusters (1 bit/symbol)
+CASCADE uses [256 orthogonal 4D patterns](pattern_architecture.md) (64 beacon + 192 message) combining discrete frequency-hopping with continuous IQ modulation:
+- **Dimensions**: Time × Discrete Frequency (70 tones) × Continuous I × Continuous Q
+- **IQ organization**: Hierarchical pools (pattern ID indicates baked-in complexity)
+- **Frequency**: Discrete hops (FHSS, not CSS - patent safe)
+- **IQ**: Continuous Lissajous curves (smooth adaptation)
+- **Orthogonality**: <-30 dB in 4D space
+
+See [Pattern Architecture](pattern_architecture.md) for comprehensive specification.
 
 ## Frame Processing
 
@@ -216,7 +220,7 @@ def generate_training_batch():
 
     for user_id in range(num_users):
         signal = generate_cascade_transmission(
-            pattern=random.choice(64),
+            pattern=random.choice(range(16, 64)),  # Normal beacon patterns
             modulation=random.choice(['8-QAM', 'QPSK', 'BPSK']),
             snr_db=random.uniform(-25, 15),
             clock_drift_hz=random.uniform(-50, 50),  # Per-user drift

@@ -181,7 +181,7 @@ These features are analogous to edges and textures in image processing - the fun
 
 ### Stage 2: Pattern Features (Symbol Recognition)
 The second stage combines low-level features into pattern-related information:
-- **Pattern signatures**: Unique characteristics of each of the 64 patterns
+- **Pattern signatures**: Unique characteristics of patterns (256 total: 64 beacon + 192 message)
 - **Frequency bin combinations**: How patterns spread across frequency
 - **Temporal patterns**: Repetitions and rhythms in the signal
 - **User separation cues**: Features that distinguish different transmitters

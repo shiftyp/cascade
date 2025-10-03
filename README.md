@@ -2,7 +2,15 @@
 
 ## Overview
 
-CASCADE is a revolutionary adaptive radio communication system that achieves near-Shannon efficiency through clean architectural separation between protocol logic and neural network optimization. The system demonstrates that treating protocol decisions and continuous optimization as separate but coordinated layers yields superior performance compared to traditional monolithic modem designs.
+Humans and computers communicate differently over noisy channels. When computers transmit over digital radio, they use fixed modulation schemes with fixed assumptions: baud rate, forward error correction, frequency binning, signal separation, bandwidth, and modulation patterns. These work well in certain conditions but leave efficiency on the table—measured as a percentage of the theoretical Shannon limit.
+
+Humans adapt organically. Imagine a radio channel as a room with varying conditions: quiet rooms, noisy rooms (natural interference or conversational overlap), reverberations, and changing occupancy. When humans speak, we continuously adjust to room conditions. In a noisy environment, we might increase volume (within limits—good citizens don't talk over others), speak slower, use fewer words, take more time to listen, repeat ourselves, or even speak more quietly to reduce echoes. In a quiet room, we relax these constraints and communicate with higher throughput. We adapt to how many people are listening, sometimes relaying information from distant speakers to nearby listeners, or going silent to catch critical information. We make both discrete decisions (whether to speak) and continuous adjustments (how loudly, how fast) to optimize intelligibility for everyone.
+
+**The half-duplex challenge**: Unlike human conversation where we simultaneously hear ourselves and others (full-duplex), radio transceivers typically operate half-duplex—transmitting OR receiving, not both. This fundamental constraint means radio systems can't organically sense channel conditions while transmitting. Coordination that humans get "for free" through real-time audio feedback must be explicitly engineered into radio protocols. Traditional systems solve this with rigid time slots or carrier sensing, sacrificing efficiency for predictability.
+
+**CASCADE's approach**: This protocol enables computers to achieve human-like adaptation over radio channels through coordinated neural network optimization. The system makes both discrete decisions (via heuristic protocol rules) and continuous optimizations (via neural networks trained on real propagation conditions) to adapt to changing channel and interference patterns. Beyond individual adaptation, CASCADE implements collaborative features: adaptive beacons allow stations to announce their presence and capabilities, relay mechanisms prioritize and forward emergency traffic through intermediate stations, and coordination happens through the model itself—with the entire network acting as distributed components of a single adaptive system. Each station's neural network learns not just to optimize its own transmissions, but to cooperate with other stations through shared feedback, creating emergent network-wide efficiency.
+
+**Key innovations**: CASCADE uses a two-tier pattern system with 256 total patterns (perfect 8-bit encoding) hierarchically organized by IQ complexity: 64 beacon patterns (simple IQ, optimized for 4-FSK coordination), and 192 message patterns (ranging from simple to complex IQ, organized into propagation-matched pools). Patterns are 4-dimensional trajectories through Time × Frequency × I × Q space, combining discrete frequency-hopping with continuous IQ modulation. Pattern ID directly indicates IQ complexity level—lower IDs use simpler robust IQ (BPSK/circles) for poor propagation, higher IDs use more complex IQ (ellipses/Lissajous) for exceptional NVIS conditions. The model selects from the appropriate pattern pool based on measured HF propagation characteristics. The system uses 70 discrete reference tones (35 below and 35 above a 150 Hz center-band reservation at 1475-1625 Hz, with emergency alert at exact center 1550 Hz) with 32 Hz spacing optimized for HF propagation characteristics including ionospheric multipath (5-20 Hz spread) and drift (0.8-4 Hz/second). Patterns hop between these exact discrete frequencies—never interpolating to intermediate values—making CASCADE a frequency-hopping spread spectrum (FHSS) system rather than chirp spread spectrum. The model can shift patterns by ±3 tones (±96 Hz) to avoid interference, but always selecting from the discrete reference grid. Each receiver measures which discrete tones it can decode through selective fading and interference, announcing this subset via kernel feedback. Transmitters then select from the receiver's available tone subset, enabling graceful operation with as few as 10 tones or as many as 87 under excellent conditions. Users can transmit on 1-4 patterns simultaneously based on the receiver's kernel feedback, with strong links achieving 4× throughput. The center-band reservation serves triple duty: kernel exchange for coordination, normal network beacons with full callsign identification (29-bit encoding for legal compliance), and a dedicated emergency system. Emergency mode uses a single-tone BPSK alert (1475 Hz) that triggers automatic network clearing, followed by 4-FSK negotiation with full callsigns that forms self-organizing ad-hoc relay networks for worldwide emergency traffic distribution. Combined with neural network optimization trained on real-world atmospheric noise and ionospheric propagation data, CASCADE approaches 50-60% of the Shannon limit across diverse HF operating conditions—all while running on consumer hardware like Raspberry Pi with neural coprocessors.
 
 ## Table of Contents
 
@@ -40,11 +48,20 @@ This separation ensures:s
 
 ## System Architecture
 
-### Hierarchical Pattern Constellation
-- 64 mathematically orthogonal frequency patterns
-- Hierarchical clustering for graceful degradation: 64→16→4→2
-- Maintains <-30 dB cross-correlation between patterns
-- Neural network discovered through optimization
+### 4D Pattern Architecture (Two-Tier Hierarchical System)
+- **256 total patterns** (perfect 8-bit encoding: 0x00-0xFF): 64 beacon + 192 message
+- **Beacon patterns (0-63):** Optimized for 4-FSK tones, simple IQ (BPSK to simple circles)
+- **Message patterns (64-255):** Organized by IQ complexity for HF propagation matching
+  - Emergency (64-79): Minimal IQ (16 patterns)
+  - Typical DX (80-207): Simple-moderate IQ (128 patterns - **LARGEST POOL** for most HF operation)
+  - Good propagation (208-239): Moderate-complex IQ (32 patterns)
+  - NVIS exceptional (240-255): Complex Lissajous (16 patterns - rarely used)
+- Discrete frequency-hopping (FHSS, patent-safe)
+- Each pattern has single baked-in IQ complexity level (not dynamic interpolation)
+- Pattern selection based on propagation: Model picks from appropriate complexity pool
+- Maintains <-30 dB cross-correlation in 4D space within each tier
+- Generated via Zadoff-Chu sequences extended to 4D with optimization
+- **74 KB total storage** (47% savings vs dynamic collapse), 36-48 hours generation (one-time cost)
 
 ### Expert Network Ensemble
 Five specialized neural networks coordinated by an attention-based conductor:
@@ -57,10 +74,12 @@ Five specialized neural networks coordinated by an attention-based conductor:
 | Pattern Complexity | ~500K | SNR adaptation | Always active |
 | Spectrum Allocation | ~800K | Frequency optimization | Interference present |
 
-### Three-Dimensional User Separation
-- **Pattern Dimension**: 64 orthogonal patterns provide natural slots
-- **Frequency Dimension**: Continuous 40-400 Hz allocation per user
-- **Time Dimension**: Adaptive 0.5-5 second fragments
+### Four-Dimensional User Separation
+- **Time Dimension**: 32 symbols per pattern, asynchronous transmission
+- **Frequency Dimension**: 70 discrete reference tones (FHSS hopping)
+- **I Dimension**: Continuous in-phase trajectory (Lissajous curves)
+- **Q Dimension**: Continuous quadrature trajectory (orthogonal to other patterns)
+- **Combined capacity**: 280+ simultaneous users in 2.5 kHz bandwidth
 
 ## Key Innovations
 
@@ -103,11 +122,11 @@ Performance varies by deployment hardware - see [deployment/hardware_requirement
 
 **Common across all tiers:**
 - SNR Operating Range: -4 to +15 dB (19 dB multi-user), -22 dB (single-user fallback)
-- Pattern Orthogonality: <-30 dB cross-correlation (64 base patterns)
-- Pattern Separation Cost: ~18 dB (64 patterns) to 0 dB (1 pattern)
+- Pattern Orthogonality: <-30 dB cross-correlation (256 patterns: 64 beacon + 192 message)
+- Pattern Separation Cost: ~24 dB (192 patterns active) to 0 dB (1 pattern)
 - Model Size (INT8): ~10MB (9.2M parameters including kernel processing)
-- Deployment Package: ~15-20MB (model + 64 patterns + kernel caches + runtime buffers)
-- Interoperability: Perfect (all tiers use identical 64 orthogonal patterns from protocol)
+- Deployment Package: ~15-20MB (model + 256 patterns (74 KB) + kernel caches + runtime buffers)
+- Interoperability: Perfect (all tiers use identical beacon and message pattern sets from protocol)
 
 ### Adaptive Pattern Count (SNR-Based)
 

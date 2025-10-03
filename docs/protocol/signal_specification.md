@@ -27,7 +27,7 @@ CASCADE uses fixed orthogonal patterns with adaptive modulation to achieve near-
 **Pattern duration**: 32 × 50ms = 1.6 seconds
 
 **Pattern definition**:
-Each of the 64 patterns is defined as a sequence of tone indices over time:
+Each of CASCADE's 256 patterns (64 beacon + 192 message) is defined as a sequence of tone indices over time:
 
 ```python
 pattern_structure = {
@@ -48,7 +48,7 @@ pattern_1 = [7, 6, 5, 4, 3, 2, 1, 0, 7, 6, ...]  # Different sequence
 **Generation algorithm**:
 1. Generate Zadoff-Chu base patterns (LTE-proven sequences from 1970s mathematics)
 2. Computer-optimize via simulated annealing to exactly -30 dB
-3. Store resulting 64 patterns (deterministic, not learned)
+3. Store resulting patterns (256 total: 64 beacon + 192 message, deterministic)
 
 See [Pattern Generation](pattern_generation.md) for detailed implementation.
 
@@ -88,529 +88,86 @@ The collapse is **continuous** (gradual point movement in IQ space), not discret
 ### Frequency Allocation
 
 **Channel bandwidth**: 2.5 kHz per CASCADE channel (300-2800 Hz)
-**Tone structure**: 8 tones within the 2.5 kHz bandwidth
-**Tone spacing**: 312 Hz
+**Reference tone structure**: 70 discrete tones (frequency-hopping grid)
+**Tone spacing**: 32 Hz (optimized for HF multipath and drift)
+
+**Discrete tone grid:**
+- Lower band: 35 tones (300-1388 Hz, indices 0-34)
+- Beacon reservation: 150 Hz (1475-1625 Hz, centered at 1550 Hz)
+- Upper band: 35 tones (1700-2788 Hz, indices 35-69)
+
+**Frequency-hopping spread spectrum**: Patterns hop between discrete reference tones (FHSS), NOT continuous frequency modulation (not CSS). Each symbol transmits at exactly one reference tone frequency—no interpolation between tones. This is fundamentally different from LoRa's chirp spread spectrum (patent safe).
 
 **Frequency shift rationale**: All frequencies shifted +300 Hz from baseband to avoid DC blocking in amateur radio transceivers. Most SSB rigs have AC-coupled audio (high-pass at 100-300 Hz) which would severely attenuate or eliminate a 0 Hz tone. The 300-2800 Hz allocation sits optimally within the SSB passband (typically 300-3000 Hz).
 
-**Multi-user access**: All users transmit simultaneously within the same 2.5 kHz, separated by orthogonal patterns (CDMA-like).
+**Multi-user access**: All users transmit simultaneously within the same 2.5 kHz, separated by 4D orthogonal patterns (Time × Discrete Freq × I × Q).
 
 ```python
-# All 50 users share the same 2.5 kHz (300-2800 Hz):
-User 1: Pattern 5 across 300-2800 Hz
-User 2: Pattern 12 across 300-2800 Hz  # Overlapping!
+# 140+ users share the same 2.5 kHz (300-2800 Hz):
+User 1: Pattern 5 hops among discrete tones [12, 34, 5, 18, ...]
+User 2: Pattern 12 hops among discrete tones [45, 7, 29, 3, ...]
 ...
-User 50: Pattern 58 across 300-2800 Hz
+User 140: Pattern 58 hops among discrete tones [22, 68, 11, 50, ...]
 
-# Separated by pattern orthogonality, not frequency
+# Separated by:
+# - Different discrete tone sequences (frequency dimension)
+# - Different IQ trajectories (I and Q dimensions)
+# - Pattern orthogonality <-30 dB in 4D space
 ```
 
-## Beacon Protocol (Network Discovery)
 
-CASCADE uses **asynchronous beacons** transmitted on interstitial frequencies between message tones. The model (Signal Expert) decodes beacons along with messages - no protocol-layer decoding required.
+## Beacon Protocol (Center-Band Reservation)
 
-### Beacon Signal Parameters
+CASCADE reserves 150 Hz in the center of the passband (1475-1625 Hz) for beacons, kernel exchange, and emergency coordination.
 
-**Frequency allocation** (interstitial channels):
-```
-Message tones:     300,  612,  925, 1237, 1550, 1862, 2175, 2487 Hz (8 tones)
+### Beacon Band Summary
 
-Interstitial tones (8 total):
-├─ Normal beacons: 378, 534, 2018, 2253 Hz (4 outer tones, 4-FSK)
-└─ Emergency:      456, 768, 1081, 1393 Hz (4 inner tones, 4-FSK)
+**Frequency allocation:**
+- **Reservation:** 1475-1625 Hz (150 Hz, centered at 1550 Hz)
+- **Emergency alert:** 1550 Hz (single tone, BPSK, exact center of spectrum)
+- **4-FSK beacons:** [1490, 1520, 1580, 1610] Hz (symmetric around emergency)
+- **Patterns:** 64 beacon patterns (IDs 0-63) optimized for 4-FSK
+- **Separation from messages:** 87 Hz guard (lower), 75 Hz guard (upper)
 
-Visual layout:
-300  378  456  534  612       768      925     1081     1237    1393    1550
- M   NB   EM   NB    M        EM        M       EM        M      EM       M   ...
+**Key features:**
+- Emergency at exact center (1550 Hz = (300+2800)/2) for optimal HF propagation
+- 30 Hz padding around emergency tone (isolation from 4-FSK)
+- Beacon patterns use 4-tone alphabet (not 70-tone message patterns)
+- Simple IQ complexity (λ max 0.3) for maximum robustness
+- Supports 4 simultaneous emergencies via pattern separation
+- 48 normal beacon patterns (anti-kernel resilient)
 
-M = Message (8 tones, 8-QAM, 50ms symbols)
-NB = Normal Beacon (4 tones, 4-FSK, 160ms symbols)
-EM = Emergency Beacon (4 tones, 4-FSK, 800ms symbols)
+**See [Beacon Reservation](beacon_reservation.md) for complete specification.**
 
-Separation:
-- Message to normal beacon: 78 Hz minimum
-- Message to emergency: 156 Hz minimum
-- Normal to emergency: 78 Hz minimum
-Interference: <-25 dB (adequate separation via spectral AND temporal orthogonality)
+**See [Emergency Relay Network](emergency_relay_network.md) for emergency protocol details.**
 
-Separation mechanism uses BOTH:
-- Spectral: Different bandwidths (50ms = 20 Hz BW, 160ms = 6 Hz BW, 800ms = 1.25 Hz BW)
-- Temporal: Different symbol rates provide temporal signature for model separation
-```
-
-**Normal Beacon Specification:**
-```python
-NORMAL_BEACON_SPEC = {
-    # Symbol parameters
-    'symbol_duration': 160,        # ms (FT8-style)
-    'symbol_rate': 6.25,           # symbols/second
-    'modulation': '4-FSK',         # 2 bits/symbol
-    'tones': [378, 534, 2018, 2253], # 4 outer interstitial tones
-    'tone_spacing': 156,           # Hz average (varied placement)
-    'bandwidth': 6,                # Hz per tone (1/160ms)
-
-    # Beacon content and FEC
-    'payload': 16,                 # bits (callsign hash only)
-    'fec': 'LDPC rate 1/2',        # Forward error correction
-    'coded_bits': 32,              # bits (16 data + 16 parity)
-    'throughput': 6.25,            # bps effective (with FEC)
-    'duration': 2.56,              # seconds (16 symbols for 32 coded bits)
-
-    # Transmission strategy
-    'repetitions': 3,              # 3× per minute
-    'timing': 'random',            # Async (no slots)
-    'patterns': 'any',             # Use any of 64 patterns
-    'power': 'normal',             # User's typical power
-
-    # Performance
-    'min_snr': -22,                # dB (with 3× integration)
-    'range_100w': 24000,           # km (worldwide DX)
-}
-```
-
-**Emergency Beacon Specification:**
-```python
-EMERGENCY_BEACON_SPEC = {
-    # Symbol parameters (more robust than normal)
-    'symbol_duration': 800,        # ms (longer for better robustness)
-    'symbol_rate': 1.25,           # symbols/second
-    'modulation': '4-FSK',         # 2 bits/symbol (4 tones)
-    'tones': [456, 768, 1081, 1393], # All 4 interstitial emergency tones
-    'tone_spacing': 312,           # Hz average spacing
-    'bandwidth': 1.25,             # Hz per tone (very narrow, 1/800ms)
-
-    # Beacon content and FEC
-    'payload': 28,                 # bits (callsign 16 + grid 12)
-    'fec': 'LDPC rate 1/4',        # Heavy FEC for maximum robustness
-    'coded_bits': 112,             # bits (28 data + 84 parity)
-    'throughput': 0.625,           # bps effective (with FEC, within Shannon limit)
-    'duration': 44.8,              # seconds (56 symbols for 112 coded bits)
-
-    # Transmission strategy
-    'repetitions': 6,              # 6× per minute (every 10 seconds)
-    'timing': 'every_10_seconds',  # Regular (not random - predictable)
-    'patterns': 'any',             # Use any of 64 patterns
-    'power': 'MAXIMUM',            # Full legal power (1.5 kW if available)
-
-    # Performance
-    'min_snr': -28,                # dB (4-FSK + long symbols + repetition)
-    'range_100w': 40000,           # km (global coverage)
-    'priority': 'CRITICAL',        # Always decoded first
-
-    # Spectrum reservation
-    'reserved_frequencies': True,  # 456, 768, 1081, 1393 Hz reserved for emergency
-}
-```
-
-**Spectrum layout with emergency:**
-```
-Frequency (Hz):
-300  378  456*  534  612       768*      925     1081*    1237    1393*    1550
- M   NB   EM    NB    M        EM         M       EM        M      EM        M
-
-M = Message (8 tones, 8-QAM)
-NB = Normal beacon (4 tones, 4-FSK)
-EM = Emergency (4 tones, 4-FSK) ← RESERVED, always monitored
-
-* = Frequencies 456, 768, 1081, 1393 Hz are RESERVED for emergency only
-```
-
-### Detection Guarantee
-
-**All stations (including RPi) monitor emergency frequencies:**
+## Pattern Storage
 
 ```python
-def continuous_emergency_monitor():
-    """Simple emergency detector (runs in parallel, low overhead)"""
-
-    while True:
-        # Check ONLY emergency frequencies (cheap!)
-        signal_456 = bandpass_filter(received, center=456, bw=5)
-        signal_768 = bandpass_filter(received, center=768, bw=5)
-        signal_1081 = bandpass_filter(received, center=1081, bw=5)
-        signal_1393 = bandpass_filter(received, center=1393, bw=5)
-
-        # Simple 4-FSK tone detector (not full model inference)
-        emergency_signal = signal_456 + signal_768 + signal_1081 + signal_1393
-        emergency_detected = detect_4fsk_tones(emergency_signal)
-
-        if emergency_detected:
-            # Alert user immediately
-            # Full decode via model (priority override)
-            emergency_beacon = model.decode_emergency(emergency_signal)
-            SOUND_ALARM()
-            display_emergency(emergency_beacon.callsign, emergency_beacon.grid)
-```
-
-**Overhead**: ~1ms per check (4-tone detection, not full model)
-**Always runs** regardless of capacity limits
-
-### Training with Reserved Emergency Frequencies
-
-```python
-def train_emergency_beacon_detection():
-    """Train with guaranteed emergency channel"""
-
-    for scenario in training_data:
-        # Generate mixed scenario
-        messages = generate_messages(50)  # High traffic
-
-        # Add emergency beacon on RESERVED frequencies
-        if random.random() < 0.1:  # 10% of scenarios have emergency
-            emergency_beacon = generate_emergency_beacon(
-                frequencies=[456, 768, 1081, 1393],  # Reserved!
-                symbol_duration=800,
-                modulation='4-FSK'
-            )
-            messages.append(emergency_beacon)
-
-        mixed = sum(messages) + noise
-
-        # Train model
-        decoded = model.decode(mixed)
-
-        # Critical: Emergency beacon MUST be in output
-        if has_emergency_beacon(ground_truth) and not has_emergency_beacon(decoded):
-            # Catastrophic failure
-            loss = 10000.0  # Force model to fix this
-        else:
-            # Normal loss
-            loss = standard_loss(decoded, ground_truth)
-
-            # Still weight emergency higher
-            if has_emergency_beacon(decoded):
-                emergency_accuracy = check_emergency_correct(decoded, ground_truth)
-                loss += 10.0 * (1.0 - emergency_accuracy)  # 10× weight
-
-        optimizer.step(loss)
-```
-
-### Benefits Summary
-
-**With 4 reserved emergency tones ([456, 768, 1081, 1393 Hz]):**
-
-✅ **Guaranteed detection**: Even RPi at full capacity monitors these frequencies
-✅ **Simple detector**: 4-tone detection (1ms), not full model inference
-✅ **Maximum robustness**: 4-FSK, 800ms symbols, -28 dB capable
-✅ **Global range**: 40,000 km at 100W (reaches anywhere)
-✅ **Includes location**: Grid square (12 bits) + callsign (16 bits)
-✅ **6× repetition**: Every 10 seconds (vs 20 seconds for normal beacons)
-✅ **Training priority**: 10× loss weight + catastrophic miss penalty
-✅ **2× throughput**: 4-FSK vs BPSK enables location data
-
-**Beacon transmission schedule:**
-```python
-def beacon_strategy(my_callsign, emergency_mode=False):
-    """Dual beacon protocol: normal and emergency"""
-
-    while operating:
-        if emergency_mode:
-            # EMERGENCY BEACONS (6× per minute, every 10 seconds)
-            for i in range(6):
-                transmit_emergency_beacon(
-                    callsign_hash=hash(my_callsign, 16),  # 16 bits
-                    grid_square=compress_grid(my_grid, 12), # 12 bits
-                    frequencies=[456, 768, 1081, 1393],    # RESERVED emergency tones
-                    symbol_duration=800,                   # ms (robust)
-                    modulation='4-FSK',                    # 2 bits/symbol
-                    power='MAXIMUM',                       # Full legal power
-                    duration=44.8                          # seconds
-                )
-                sleep(10)  # Every 10 seconds
-
-        else:
-            # NORMAL BEACONS (3× per minute, random timing)
-            for i in range(3):
-                # Random timing (0-60 seconds)
-                delay = random.uniform(0, 60)
-                sleep(delay)
-
-                # Random pattern from assigned pool
-                pattern = random.choice(my_assigned_patterns)
-
-                # Transmit on normal beacon frequencies (outer 4 tones)
-                transmit_beacon(
-                    callsign_hash=hash(my_callsign, 16),  # 16 bits
-                    frequencies=[378, 534, 2018, 2253],   # Normal beacon tones
-                    pattern=pattern,
-                    symbol_duration=160,                  # ms
-                    modulation='4-FSK',
-                    duration=1.28                         # seconds
-                )
-
-        # Repeat every minute
-        sleep_until_next_minute()
-```
-
-### Model Decodes Beacons (Not Protocol)
-
-**Signal Expert handles both beacon types:**
-
-```python
-class SignalExpert:
-    def separate_all_signals(self, mixed_signal):
-        """
-        Separate messages, normal beacons, and emergency beacons
-
-        Model learns to recognize by frequency and symbol characteristics:
-        - Messages: 50ms symbols, 8-QAM, [300, 612, 925, 1237, 1550, 1862, 2175, 2487]
-        - Normal beacons: 160ms symbols, 4-FSK, [378, 534, 2018, 2253]
-        - Emergency beacons: 800ms symbols, 4-FSK, [456, 768, 1081, 1393] ← Reserved frequencies
-        """
-
-        # Single inference separates everything
-        separated = self.forward(mixed_signal)
-
-        return [
-            {'type': 'message', 'pattern': 5, 'data': bytes},
-            {'type': 'beacon', 'callsign_hash': 0xA3F2, 'emergency': False, 'snr': -12},
-            {'type': 'beacon', 'callsign_hash': 0x7F3D, 'grid': 'FN42', 'emergency': True, 'snr': -20},  # ← On 456/768/1081/1393 Hz
-            {'type': 'message', 'pattern': 12, 'data': bytes},
-        ]
-
-# Emergency status inferred from frequency:
-# - Detected on [456, 768, 1081, 1393] → emergency=True
-# - Detected on [378, 534, 2018, 2253] → emergency=False
-```
-
-**Protocol layer routing:**
-```python
-# Protocol receives decoded items from model
-decoded_items = model.decode(received_signal)
-
-for item in decoded_items:
-    if item['type'] == 'beacon':
-        # Emergency status inferred from frequency (model detected on [456, 768, 1081, 1393])
-        if item['emergency']:
-            # EMERGENCY BEACON DETECTED
-            SOUND_ALARM()
-            emergency_cache[item['callsign_hash']] = {
-                'grid': item['grid'],
-                'activated': now(),
-                'snr': item['snr'],
-                'priority': 'CRITICAL'
-            }
-        else:
-            # Normal beacon
-            beacon_cache[item['callsign_hash']] = {
-                'last_seen': now(),
-                'pattern': item['pattern'],
-                'snr': item['snr']
-            }
-
-    elif item['type'] == 'message':
-        # Route message
-        route_to_handler(item)
-```
-
-## ACK Protocol for Beacons
-
-Beacon ACKs are transmitted on **message patterns** (not beacon frequencies) to keep interstitial channels clear for continuous beacon transmission.
-
-### Normal Beacon ACK
-
-**After receiving normal beacon:**
-
-```python
-# Station B heard Station A's normal beacon at measured SNR
-beacon_received = {
-    'callsign_hash': hash_A,
-    'frequency': [378, 534, 2018, 2253],  # Normal beacon tones
-    'measured_snr': +8                    # dB
-}
-
-# Generate ACK (transmitted on message patterns, NOT beacon frequencies)
-normal_beacon_ack = {
-    'beacon_hash': hash_A,        # 16 bits (which beacon we're ACKing)
-    'my_call': hash_B,            # 24 bits (who I am)
-    'snr_report': +8              # 4 bits (how well I heard)
-}
-# Total: 44 bits
-
-# ACK transmission (SNR-adaptive, on MESSAGE patterns):
-if measured_snr > 0:
-    # Strong signal - fast ACK on message frequencies
-    transmit_ack(
-        payload=44 bits,
-        frequencies=[300, 612, 925, 1237, 1550, 1862, 2175, 2487],  # Message tones!
-        modulation='8-QAM',
-        symbol_duration=50,  # ms (message symbol rate)
-        duration=0.09        # seconds
-    )
-elif measured_snr > -10:
-    # Fair signal - medium ACK
-    transmit_ack(
-        payload=44 bits,
-        frequencies=[300, 612, 925, 1237, 1550, 1862, 2175, 2487],
-        modulation='4-FSK',
-        symbol_duration=160,  # ms
-        duration=3.5          # seconds
-    )
-else:
-    # Weak signal - slow ACK
-    transmit_ack(
-        payload=44 bits,
-        frequencies=[300, 612, 925, 1237, 1550, 1862, 2175, 2487],
-        modulation='BPSK',
-        symbol_duration=500,  # ms
-        duration=22           # seconds
-    )
-
-# QSO established: Beacon + ACK = valid contact
-```
-
-### Emergency Beacon ACK (Enhanced)
-
-**After receiving emergency beacon:**
-
-```python
-# Station B heard emergency beacon on [456, 768, 1081, 1393] Hz
-emergency_beacon_received = {
-    'callsign_hash': hash_A,
-    'grid': 'FN42',                  # Included in beacon now!
-    'frequency': [456, 768, 1081, 1393], # RESERVED emergency tones
-    'measured_snr': -20,             # dB (weak emergency)
-    'emergency': True                # Inferred from frequency
-}
-
-# Generate emergency ACK (includes my location for coordination)
-emergency_ack = {
-    'type': 'EMERGENCY_ACK',
-    'beacon_hash': hash_A,           # 16 bits (which emergency beacon)
-    'my_call': hash_B,               # 24 bits (who I am)
-    'my_grid': grid_4char,           # 12 bits (my location for coordination)
-    'can_relay': True,               # 1 bit (can I relay messages?)
-    'snr_report': -20                # 7 bits (fine-grained for emergency: -28 to +4 dB)
-}
-# Total: 60 bits
-# Note: Emergency beacon now includes sender's grid, so we have both locations
-
-# CRITICAL: ACK on MESSAGE patterns (NOT emergency frequencies!)
-# Keeps [456, 768, 1081, 1393] Hz clear for continuous emergency beacon transmission
-transmit_ack(
-    payload=60 bits,
-    frequencies=[300, 612, 925, 1237, 1550, 1862, 2175, 2487],  # Message tones
-    modulation='QPSK',               # Conservative but faster than BPSK
-    symbol_duration=160,             # ms (emergency ACKs use standard timing)
-    pattern=random_available,        # Any message pattern
-    duration=2.4                     # seconds (60 bits @ 25 bps for QPSK)
-)
-
-# Multiple stations can ACK emergency beacon:
-# - All use message patterns (lots of capacity)
-# - No congestion on emergency frequencies
-# - Emergency station monitors message patterns for ACKs
-```
-
-**Why ACKs use message patterns:**
-
-✅ **Keeps emergency channel clear**: [456, 768, 1081, 1393] Hz only for outbound emergency beacons
-✅ **Higher capacity**: Message patterns support 50+ concurrent ACKs
-✅ **Faster ACKs**: Can use faster modulation (QPSK/8-QAM vs emergency's 4-FSK)
-✅ **No interference**: Emergency beacons continue uninterrupted
-
-### ACK Reception by Beacon Sender
-
-**Station A (sent beacon) monitors for ACKs:**
-
-```python
-# After sending normal beacon on [378, 534, 2018, 2253]:
-# Monitor message patterns for ACKs (not beacon frequencies)
-
-ack_window = 5  # seconds after beacon transmission
-acks_received = []
-
-for t in range(ack_window):
-    # Decode message patterns (normal CASCADE message decode)
-    decoded = model.decode(received_on_message_patterns)
-
-    for item in decoded:
-        if item['type'] == 'beacon_ack' and item['beacon_hash'] == my_hash:
-            acks_received.append(item)
-
-# Process ACKs:
-# - Update beacon cache with responders
-# - Note SNR reports
-# - Establish kernel exchange if SNR > -10 dB
-```
-
-**Emergency beacon sender:**
-```python
-# After sending emergency beacon on [456, 768, 1081, 1393]:
-# Continue emergency beacons every 10 seconds
-# WHILE ALSO monitoring message patterns for ACKs
-
-emergency_acks = []
-
-# Background process:
-while emergency_mode:
-    # Decode message patterns for emergency ACKs
-    decoded = model.decode(message_patterns)
-
-    for item in decoded:
-        if item['type'] == 'emergency_ack':
-            emergency_acks.append(item)
-            # Log: Station B (grid FN42) heard me, can relay
-            # My beacon includes my grid (FN31), so they know both locations
-            # Use for coordination
-
-    # Continue emergency beacons (doesn't stop for ACKs)
-    if time_for_next_beacon():
-        transmit_emergency_beacon([456, 768, 1081, 1393])
-```
-
-### Training with Interstitial Beacons
-
-```python
-def train_with_beacons():
-    """Train Signal Expert to handle messages + beacons"""
-
-    for batch in training_data:
-        # Generate mixed scenario
-        num_messages = random.randint(5, 50)
-        num_beacons = random.randint(1, 10)  # Async beacons
-
-        # Create signals
-        message_signals = generate_messages(
-            count=num_messages,
-            tones=[300, 612, 925, 1237, 1550, 1862, 2175, 2487],
-            symbol_duration=50
-        )
-
-        beacon_signals = generate_beacons(
-            count=num_beacons,
-            tones=[378, 534, 2018, 2253],  # Normal beacon interstitial!
-            symbol_duration=160
-        )
-
-        # Mix together (overlap in time and frequency)
-        mixed = message_signals + beacon_signals + noise
-
-        # Train model to separate
-        decoded = signal_expert(mixed)
-
-        # Loss: correctly identify all messages AND beacons
-        loss = separation_loss(decoded, ground_truth_messages + ground_truth_beacons)
-```
-
-## Pattern Storage (Unchanged)
-
-```python
-# Minimal storage (tone sequence only)
-pattern = {
+# Two-tier pattern storage
+beacon_pattern = {
     'id': int,                    # 0-63
-    'sequence': np.uint8[32],     # 32 bytes (tone indices 0-7)
+    'freq_sequence': np.uint8[32],  # 32 bytes (tone indices 0-3 for 4-FSK)
+    'iq_trajectory': complex64[32], # 256 bytes (single complexity level)
 }
 
-# Per pattern: ~256 bytes
-# Total 64 patterns: ~16 KB
+message_pattern = {
+    'id': int,                    # 64-255
+    'freq_sequence': np.uint8[32],  # 32 bytes (tone indices 0-69 for messages)
+    'iq_trajectory': complex64[32], # 256 bytes (hierarchical complexity)
+}
+
+# Per pattern: 292 bytes (freq 32 + iq 256 + metadata 4)
+# Total 256 patterns: ~75 KB (64 beacon + 192 message)
+
+# See pattern_architecture.md for complete specification
 ```
 
 ## Interoperability Requirements
 
 **All CASCADE implementations must:**
 
-1. **Use identical patterns**: The 64 orthogonal sequences are fixed and identical across all deployments
+1. **Use identical patterns**: The 256 patterns (64 beacon + 192 message) are fixed and identical across all deployments
 2. **Support variable modulation**: Decode 8-QAM, QPSK, BPSK constellations (model adapts continuously)
 3. **Handle mixed modulations**: User A's 8-QAM must coexist with User B's BPSK (different SNR conditions)
 4. **Maintain timing**: 50ms ±10ms symbol timing tolerance
@@ -706,4 +263,4 @@ SNR    Shannon (coded)   90% Efficient   With Rate 0.5 FEC
 - **[Hardware Requirements](../deployment/hardware_requirements.md)** - Deployment tiers and capabilities
 - **[Protocol Overview](README.md)** - Protocol layer responsibilities
 - **[Model Adaptation](../model/README.md)** - How model optimizes within protocol constraints
-- **[Pattern Details](../model/patterns.md)** - 64 orthogonal pattern specifications
+- **[Pattern Architecture](../model/pattern_architecture.md)** - 256 patterns (64 beacon + 192 message) specification

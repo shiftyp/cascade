@@ -135,7 +135,7 @@ CASCADE is designed to run on a range of hardware from embedded devices to serve
 | Tier 3 (Desktop) | FP16 or INT8 | ~17MB or ~10MB | User choice |
 | Tier 4 (GPU) | FP32 or FP16 | ~34MB or ~17MB | Maximum precision |
 
-**Interoperability**: All use identical 64 orthogonal patterns (protocol-defined), so all tiers communicate perfectly regardless of quantization.
+**Interoperability**: All use identical 256 patterns (64 beacon + 192 message) (protocol-defined), so all tiers communicate perfectly regardless of quantization.
 
 ## Network Effects with Mixed Hardware
 

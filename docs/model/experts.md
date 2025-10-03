@@ -391,7 +391,7 @@ def pattern_separate(signal, active_patterns):
 ### Capacity Analysis
 
 **Theoretical Maximum**:
-- 64 patterns available → 64 users with perfect orthogonality
+- 256 patterns available (192 message patterns for user traffic)
 - With clustering: 16 users at medium SNR
 - Practical limit: 50 users with time slot assistance
 
@@ -475,7 +475,7 @@ def signal_expert_decode(mixed_signal, hardware_capacity):
         Variable-length list of decoded users (hardware-dependent)
     """
     # Detect all potential users via pattern correlation
-    detected_users = correlate_all_patterns(mixed_signal)  # Up to 64 patterns
+    detected_users = correlate_all_patterns(mixed_signal)  # Up to 192 message patterns
 
     # Sort by signal strength (Shannon-optimal)
     detected_users.sort(key=lambda u: u.snr, reverse=True)
@@ -776,98 +776,99 @@ def train_envelope_separation():
 
 ## Pattern Complexity Expert Network
 
-The Pattern Complexity Expert determines optimal constellation complexity (64/16/4/2 patterns) based on channel conditions. It implements CASCADE's adaptive modulation strategy, collapsing the constellation gracefully as SNR degrades.
+The Pattern Complexity Expert selects the optimal pattern pool based on measured HF propagation conditions (multipath delay spread). CASCADE uses 256 hierarchical patterns organized into complexity pools—this expert picks which pool to use based on channel characteristics.
 
 ### Architecture
 
 ```
 Input: [1024D shared features](shared_encoder.md#architecture)
 ↓
+Propagation Estimation Branch:
+  Dense: 1024 → 256 → 64 → 1
+  Output: Estimated multipath delay spread (ms)
+↓
 SNR Estimation Branch:
   Dense: 1024 → 256 → 64 → 1
   Output: Estimated SNR (dB)
 ↓
-Complexity Decision Branch:
-  Dense: 1024 → 512 → 256 → 4
+Pool Selection Branch:
+  Dense: 1024 → 512 → 256 → 6
   Softmax
-  Output: P(complexity = [64, 16, 4, 2])
+  Output: P(pool = [emergency, typical_dx, good_prop, nvis, beacon_simple, beacon_emergency])
 ↓
-Pattern Adaptation Module:
-  If complexity == 64: Full constellation
-  If complexity == 16: Merge 4 patterns → 1 cluster
-  If complexity == 4: Merge 16 patterns → 1 cluster
-  If complexity == 2: Binary mode
+Pattern Pool Mapping:
+  emergency → Patterns 64-79 (minimal IQ)
+  typical_dx → Patterns 80-207 (simple-moderate IQ, LARGEST POOL)
+  good_prop → Patterns 208-239 (moderate-complex IQ)
+  nvis → Patterns 240-255 (complex Lissajous)
+  beacon_simple → Patterns 16-63 (beacon normal)
+  beacon_emergency → Patterns 0-15 (beacon emergency)
 ↓
 Feature Adaptation:
-  Dense: 256 + complexity_params → 512
+  Dense: 256 + pool_params → 512
   ReLU + BatchNorm
 ↓
-Output: Complexity decision + 512D adapted features
+Output: Pool selection + 512D adapted features
 ```
 
 ### Learned Behaviors
 
-**SNR Assessment**: Accurate channel quality estimation combining multiple indicators:
-- Signal power estimation
-- Noise floor measurement
-- Interference type and level
-- Future SNR trend prediction
+**Propagation Assessment**: Measures HF multipath characteristics:
+- Multipath delay spread (0.5-20 ms)
+- Frequency-selective fading depth
+- Phase coherence time
+- Ionospheric mode (NVIS, single-hop, multi-hop)
 
-**Complexity Selection**: The network discovers optimal thresholds through training rather than using hard-coded values:
+**Pool Selection**: Model learns to select pattern pool based on propagation:
 
 ```python
-def select_complexity(snr_estimate):
-    """Learned thresholds (not hard-coded)"""
-    if snr_estimate > 12:    # Learned threshold
-        return 64  # Full constellation
-    elif snr_estimate > 2:    # Learned threshold
-        return 16  # Medium complexity
-    elif snr_estimate > -8:   # Learned threshold
-        return 4   # Low complexity
+def select_pattern_pool(multipath_delay_ms, snr_db):
+    """
+    Learned pool selection based on propagation and SNR
+    Returns pattern ID range to use
+    """
+    # Measure propagation
+    if multipath_delay_ms < 1:
+        # NVIS or excellent propagation
+        if snr_db > 10:
+            return range(240, 256)  # NVIS exceptional (complex Lissajous)
+        else:
+            return range(208, 240)  # Good prop (moderate-complex)
+
+    elif multipath_delay_ms < 8:
+        # Typical DX (MOST COMMON on HF)
+        return range(80, 208)  # 128 patterns, λ=0.3-0.5
+
     else:
-        return 2   # Binary mode
+        # Severe multipath or emergency
+        if snr_db < -10:
+            return range(64, 80)  # Emergency pool (minimal IQ)
+        else:
+            return range(80, 144)  # Lower typical DX pool
+
+    # For beacons:
+    if using_beacon_channel:
+        if emergency:
+            return range(0, 16)  # Beacon emergency
+        else:
+            return range(16, 64)  # Beacon normal
 ```
 
-**Graceful Degradation**: Smooth transitions between complexity levels:
-- Hysteresis prevents oscillation between modes
-- Soft boundaries rather than hard switches
-- Predictive adaptation based on SNR trends
+**Graceful Adaptation**: Model handles pool transitions:
+- Hysteresis prevents oscillation (2ms multipath window)
+- Smooth transitions between pools
+- Predictive adaptation based on propagation trends
 
-### Constellation Collapse Mechanism
+### Pattern Pool Characteristics
 
-The pattern clustering strategy at each complexity level:
+Each pool optimized for HF propagation conditions:
 
-```python
-def get_cluster_center(pattern_id, complexity):
-    """Determine which pattern represents a cluster"""
-    if complexity == 64:
-        return pattern_id  # No clustering
+- **Emergency pools (0-15, 64-79)**: BPSK line, maximum robustness, -28 dB capable
+- **Typical DX pool (80-207)**: 128 patterns, λ=0.3-0.5, **MOST HF OPERATION**
+- **Good propagation (208-239)**: 32 patterns, λ=0.5-0.7, single-hop F2
+- **NVIS exceptional (240-255)**: 16 patterns, λ=0.7-0.9, rarely used on HF
 
-    elif complexity == 16:
-        # 4 patterns per cluster
-        cluster_id = pattern_id // 4
-        return cluster_id * 4 + 2  # Center pattern
-
-    elif complexity == 4:
-        # 16 patterns per cluster
-        cluster_id = pattern_id // 16
-        return cluster_id * 16 + 8  # Center pattern
-
-    else:  # complexity == 2
-        # Binary: northern vs southern hemisphere
-        return 16 if pattern_id < 32 else 48
-```
-
-### Shannon Efficiency Targets
-
-The expert learns to achieve high efficiency at each complexity level:
-
-- **64-pattern mode**: 93% of Shannon limit (SNR > 12 dB)
-- **16-pattern mode**: 88% of Shannon limit (SNR 2-12 dB)
-- **4-pattern mode**: 85% of Shannon limit (SNR -8 to 2 dB)
-- **2-pattern mode**: 83% of Shannon limit (SNR < -8 dB)
-
-This enables communication across a 40 dB dynamic range from +15 dB to -25 dB.
+Enables communication across diverse HF propagation from clean NVIS to severe multipath DX.
 
 ### Adaptation Strategy
 

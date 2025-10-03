@@ -84,7 +84,7 @@ transmission_time = patterns_needed * 1.6  # seconds
 ```
 
 ### Pattern Pool Assignment
-- All 64 patterns: Dynamically assigned to users
+- All 256 patterns: Dynamically assigned to users (beacon patterns 0-63, message patterns 64-255)
 - Emergency messages: Highest power/priority (not reserved patterns)
 - Beacons: Use interstitial frequencies (not dedicated patterns)
 - 8-16 patterns per active user
@@ -195,13 +195,13 @@ CASCADE operates in three progressive stages, adapting based on link quality:
 **Initial contact without prior kernels:**
 
 ```markdown
-**Beacon** (1.28 seconds, asynchronous):
-- Content: 16-bit callsign hash only
-- Modulation: 4-FSK on interstitial frequencies [456, 768, 1081, 1393 Hz]
-- Symbol duration: 160ms (FT8-style)
-- Repetitions: 3× per minute (random timing/patterns)
+**Beacon** (4.3 seconds, adaptive):
+- Content: Full callsign (29 bits) + kernel (64 bits)
+- Modulation: 4-FSK on center-band [1490, 1520, 1580, 1610] Hz
+- Symbol duration: 100ms (robust)
+- Repetitions: On kernel change (sparse, ~2% overhead)
 - Min SNR: -22 dB
-- Purpose: Network discovery, regulatory identification
+- Purpose: Kernel exchange, network discovery, coordination
 
 **ACK** (adaptive duration):
 - Content: beacon_hash(16) + my_call(24) + snr(4) = 44 bits
