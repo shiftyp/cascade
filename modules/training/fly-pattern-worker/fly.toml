@@ -1,0 +1,16 @@
+app = "cascade-pattern-worker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  TRIAL_ID = "0"
+  PATTERN_COUNT = "128"
+  SEED_BASE = "42"
+  TIGRIS_BUCKET = "cascade-patterns"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 2048

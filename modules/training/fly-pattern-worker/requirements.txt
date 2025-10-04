@@ -1,0 +1,13 @@
+# CASCADE Pattern Worker Dependencies
+
+# Core numerical computing
+numpy>=1.24.0
+
+# Optimization
+scipy>=1.10.0
+
+# Cloud storage (Tigris S3)
+boto3>=1.28.0
+
+# Progress tracking
+tqdm>=4.65.0
