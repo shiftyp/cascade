@@ -1,7 +1,12 @@
 # CASCADE KiwiSDR Data Collector - Claude Development Guide
 
 ## Project Context
-CASCADE (Cognitive Adaptive Spectrum Coordination And Distributed Efficiency) is building a neural network-based adaptive radio system. You're working on the Data Module, which collects 24,000-36,000 hours of real-world HF radio data (4,000-6,000 hours per band) from the global KiwiSDR network over 6 months for V1 launch. Post-V1, telemetry from deployed systems will improve performance in underserved regions over 12-18 months.
+
+CASCADE (Cognitive Adaptive Spectrum Coordination And Distributed Efficiency) is building a neural network-based adaptive HF radio system using **128-pattern chaos architecture** with **kernel-driven emergent coordination**, achieving **78-85% Shannon efficiency** and supporting **1,024 total users** (45 active).
+
+You're working on the **Data Module**, which collects 24,000-36,000 hours of real-world HF radio data for training the neural network model. This data captures real atmospheric noise (QRN) and ionospheric propagation characteristics that synthetic models cannot replicate.
+
+**Architecture Status (Oct 2025):** ✅ Complete - 128 patterns, 78-tone grid, RS(32,20) structure, kernel lifecycle protocol finalized. See [docs/architecture.md](docs/architecture.md) for executive summary.
 
 ## Current Feature: KiwiSDR Data Collector
 - **Branch**: 001-kiwi-data-collector
@@ -240,13 +245,38 @@ See `/specs/001-kiwi-data-collector/tasks.md` for detailed implementation tasks.
 - **Storage overflow**: Auto-prune old processed files
 - **CPU bottleneck**: Distribute processing across cores
 
+## CASCADE Architecture (Current)
+
+**Pattern System:**
+- 128 patterns (48 beacon + 80 message, 7-bit encoding)
+- 78-tone reference grid (300-2764 Hz, 32 Hz spacing)
+- Each pattern selects 4 tones from 78 (adaptive)
+- RS(32,20) aligned structure (pattern IS the FEC)
+- Storage: 38 KB, Generation: 18-24 hours (one-time)
+
+**Performance Targets:**
+- Shannon efficiency: 78-85% (kernel-coordinated chaos)
+- Capacity: 1,024 total users, 45 active simultaneously
+- Throughput: 218 bps/user (1 pattern), 872 bps (4 patterns)
+- Hardware: Raspberry Pi 4 compatible (8.5ms inference)
+
+**Training Data Needs:**
+- 150K-300K hours of real HF recordings (QRN + propagation)
+- Synthetic CASCADE signals applied to real channel models
+- No synthetic propagation (real physics only)
+
 ## Recent Changes
-- **V1 MVP Strategy**: Reduced to 6-month, 24-36K hours for faster launch
+- **Oct 2025**: Architecture finalized - 128-pattern chaos with kernel coordination
+- **V1 MVP Strategy**: 24-36K hours KiwiSDR data for initial model training
 - Target: 133 cooperating KiwiSDR owners @ 60 min/day
-- Storage: 4-7TB (down from 35-75TB)
-- Geographic: Accept V1 bias (65% N, 15% S, 20% Eq), telemetry fills gaps
-- Added distributed Fly.io architecture with Redis/KeyDB coordination
-- Defined data model and API contracts
+- Storage: 4-7TB for V1 data collection
+- Geographic: V1 bias (65% N, 15% S, 20% Eq) corrected via post-V1 telemetry
+- Data feeds model training (see [docs/training/README.md](docs/training/README.md))
+
+## See Also
+- **[CASCADE Architecture](docs/architecture.md)** - Executive summary of 128-pattern chaos system
+- **[Training Strategy](docs/training/README.md)** - How collected data is used for model training
+- **[Telemetry Research](docs/telemetry_research.md)** - Post-deployment continuous improvement
 
 ---
-*Last updated: 2025-09-29 by /plan command*
+*Last updated: 2025-10-04*

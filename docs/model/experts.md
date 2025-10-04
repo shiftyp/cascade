@@ -391,7 +391,7 @@ def pattern_separate(signal, active_patterns):
 ### Capacity Analysis
 
 **Theoretical Maximum**:
-- 256 patterns available (192 message patterns for user traffic)
+- 128 patterns available (80 message patterns for user traffic)
 - With clustering: 16 users at medium SNR
 - Practical limit: 50 users with time slot assistance
 
@@ -475,7 +475,7 @@ def signal_expert_decode(mixed_signal, hardware_capacity):
         Variable-length list of decoded users (hardware-dependent)
     """
     # Detect all potential users via pattern correlation
-    detected_users = correlate_all_patterns(mixed_signal)  # Up to 192 message patterns
+    detected_users = correlate_all_patterns(mixed_signal)  # Up to 128 total patterns
 
     # Sort by signal strength (Shannon-optimal)
     detected_users.sort(key=lambda u: u.snr, reverse=True)
@@ -668,9 +668,9 @@ self.conv_long = Conv1d(kernel_size=1024)   # 21ms (for 500ms symbols)
 # Signal Expert uses multi-scale features to handle any symbol rate
 ```
 
-### Envelope-Based Separation for Microsecond Offsets
+### Envelope-Based Separation for Chaos Transmission
 
-**Model separates overlapping transmissions with microsecond start-time differences:**
+**Soft Chaos Mode:** Model separates arbitrary overlapping transmissions with no timing coordination. Uses RS erasure tolerance + envelope detection + successive cancellation to achieve 70% Shannon efficiency.
 
 ```python
 class MicrosecondEnvelopeSeparator:
@@ -770,13 +770,13 @@ def train_envelope_separation():
 - Clock drift signatures (±50 ppm creates unique trajectories)
 - Multi-scale correlation (different symbol rates)
 
-**Result**: Single model handles 50ms/160ms/500ms symbols with 10-15 simultaneous overlaps at microsecond timing resolution.
+**Result**: Single model handles 50ms/160ms/500ms symbols with 10-40 simultaneous overlaps at microsecond timing resolution. With RS(32,20) erasure tolerance and soft chaos training, achieves 70% Shannon efficiency in fully asynchronous operation.
 
 ---
 
 ## Pattern Complexity Expert Network
 
-The Pattern Complexity Expert selects the optimal pattern pool based on measured HF propagation conditions (multipath delay spread). CASCADE uses 256 hierarchical patterns organized into complexity pools—this expert picks which pool to use based on channel characteristics.
+The Pattern Complexity Expert selects the optimal pattern pool based on measured HF propagation conditions (multipath delay spread). CASCADE uses 128 hierarchical patterns organized into complexity pools—this expert picks which pool to use based on channel characteristics.
 
 ### Architecture
 
@@ -797,12 +797,12 @@ Pool Selection Branch:
   Output: P(pool = [emergency, typical_dx, good_prop, nvis, beacon_simple, beacon_emergency])
 ↓
 Pattern Pool Mapping:
-  emergency → Patterns 64-79 (minimal IQ)
-  typical_dx → Patterns 80-207 (simple-moderate IQ, LARGEST POOL)
-  good_prop → Patterns 208-239 (moderate-complex IQ)
-  nvis → Patterns 240-255 (complex Lissajous)
-  beacon_simple → Patterns 16-63 (beacon normal)
-  beacon_emergency → Patterns 0-15 (beacon emergency)
+  emergency → Patterns 48-63 (minimal IQ, 16 patterns)
+  typical_dx → Patterns 64-95 (simple-moderate IQ, 32 patterns - MOST COMMON)
+  good_prop → Patterns 96-111 (moderate IQ, 16 patterns)
+  nvis → Patterns 112-127 (complex Lissajous, 16 patterns)
+  beacon_simple → Patterns 16-47 (beacon normal, 32 patterns)
+  beacon_emergency → Patterns 0-15 (beacon emergency, 16 patterns)
 ↓
 Feature Adaptation:
   Dense: 256 + pool_params → 512
@@ -831,27 +831,27 @@ def select_pattern_pool(multipath_delay_ms, snr_db):
     if multipath_delay_ms < 1:
         # NVIS or excellent propagation
         if snr_db > 10:
-            return range(240, 256)  # NVIS exceptional (complex Lissajous)
+            return range(112, 128)  # NVIS exceptional (complex Lissajous)
         else:
-            return range(208, 240)  # Good prop (moderate-complex)
+            return range(96, 112)  # Good prop (moderate)
 
     elif multipath_delay_ms < 8:
         # Typical DX (MOST COMMON on HF)
-        return range(80, 208)  # 128 patterns, λ=0.3-0.5
+        return range(64, 96)  # 32 patterns, λ=0.3-0.5
 
     else:
         # Severe multipath or emergency
         if snr_db < -10:
-            return range(64, 80)  # Emergency pool (minimal IQ)
+            return range(48, 64)  # Emergency pool (minimal IQ)
         else:
-            return range(80, 144)  # Lower typical DX pool
+            return range(64, 80)  # Lower typical DX pool
 
     # For beacons:
     if using_beacon_channel:
         if emergency:
             return range(0, 16)  # Beacon emergency
         else:
-            return range(16, 64)  # Beacon normal
+            return range(16, 48)  # Beacon normal
 ```
 
 **Graceful Adaptation**: Model handles pool transitions:
@@ -863,10 +863,10 @@ def select_pattern_pool(multipath_delay_ms, snr_db):
 
 Each pool optimized for HF propagation conditions:
 
-- **Emergency pools (0-15, 64-79)**: BPSK line, maximum robustness, -28 dB capable
-- **Typical DX pool (80-207)**: 128 patterns, λ=0.3-0.5, **MOST HF OPERATION**
-- **Good propagation (208-239)**: 32 patterns, λ=0.5-0.7, single-hop F2
-- **NVIS exceptional (240-255)**: 16 patterns, λ=0.7-0.9, rarely used on HF
+- **Emergency pools (0-15, 48-63)**: BPSK line, maximum robustness, -28 dB capable
+- **Typical DX pool (64-95)**: 32 patterns, λ=0.3-0.5, **MOST HF OPERATION**
+- **Good propagation (96-111)**: 16 patterns, λ=0.5-0.7, single-hop F2
+- **NVIS exceptional (112-127)**: 16 patterns, λ=0.7-0.9, rarely used on HF
 
 Enables communication across diverse HF propagation from clean NVIS to severe multipath DX.
 

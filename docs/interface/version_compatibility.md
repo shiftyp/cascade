@@ -7,7 +7,7 @@ CASCADE ensures long-term interoperability through a version-based compatibility
 **Key principle**: Frozen protocol elements + evolvable model behavior
 
 **Frozen forever** (ensures interoperability):
-- 256 patterns (64 beacon + 192 message) (generated once, never changed)
+- 128 patterns (48 beacon + 80 message) (generated once, never changed)
 - Base symbol duration (50ms for messages, 160ms/500ms for beacons)
 - Emergency frequencies [468, 1093 Hz]
 - Normal beacon frequencies [78, 234, 1718, 1953 Hz]

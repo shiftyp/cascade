@@ -66,7 +66,7 @@ CASCADE is designed to run on a range of hardware from embedded devices to serve
 **Performance**:
 - **Inference latency**: 10-15ms per symbol
 - **User capacity**: 25-40 simultaneous users decoded
-- **Shannon efficiency**: 45-60%
+- **Shannon efficiency: 75%
 - **Throughput**: ~6,000-8,000 bps aggregate
 
 **Use cases**:
@@ -110,7 +110,7 @@ CASCADE is designed to run on a range of hardware from embedded devices to serve
 
 **For individual operators**: Tier 2 (RPi 4 + Coral) - **$120-180**
 - Best cost/performance balance
-- Achieves 90% Shannon efficiency
+- Achieves 75% Shannon efficiency (realistic for async multi-user)
 - Handles typical amateur radio scenarios
 - Portable for emergency/field use
 
@@ -135,7 +135,7 @@ CASCADE is designed to run on a range of hardware from embedded devices to serve
 | Tier 3 (Desktop) | FP16 or INT8 | ~17MB or ~10MB | User choice |
 | Tier 4 (GPU) | FP32 or FP16 | ~34MB or ~17MB | Maximum precision |
 
-**Interoperability**: All use identical 256 patterns (64 beacon + 192 message) (protocol-defined), so all tiers communicate perfectly regardless of quantization.
+**Interoperability**: All use identical 128 patterns (48 beacon + 80 message) (protocol-defined), so all tiers communicate perfectly regardless of quantization.
 
 ## Network Effects with Mixed Hardware
 

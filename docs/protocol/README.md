@@ -84,12 +84,15 @@ transmission_time = patterns_needed * 1.6  # seconds
 ```
 
 ### Pattern Pool Assignment
-- All 256 patterns: Dynamically assigned to users (beacon patterns 0-63, message patterns 64-255)
-- Emergency messages: Highest power/priority (not reserved patterns)
-- Beacons: Use interstitial frequencies (not dedicated patterns)
-- 8-16 patterns per active user
-- Rotation every 100 transmissions
-- Pattern reuse: 2-3× across spatially/temporally separated users (up to 150 virtual slots)
+- All 128 patterns: Dynamically assigned to users (beacon patterns 0-47, message patterns 48-127)
+- Emergency messages: Use patterns 0-15 (beacon) + 48-63 (message), detected via correlation
+- Beacons: Pattern-based (no frequency reservation), stations pick clearest patterns
+- 1-4 patterns per active user (chaos mode, adaptive allocation)
+- **Pattern reuse via frequency + time diversity**: 128 patterns support 1,024+ total users
+  - Frequency reuse: Same pattern on different tone selections (6× average)
+  - Time reuse: Asynchronous starts with partial overlap (1.3× average)
+  - **Kernel-coordinated**: Prokernels/antikernels guide disjoint allocation
+- **45 active users, 1,024 total capacity**
 
 ## Emergency Traffic Limits
 
@@ -597,9 +600,21 @@ Graceful degradation ensures entry-level hardware remains useful while creating 
 
 ## See Also
 
-- **[Model Layer](../model/README.md)** - Continuous optimization that works within protocol constraints
-- **[Interface Documentation](../interface/README.md)** - Detailed protocol/model boundary definitions
-- **[Priority Handling](priority_handling.md)** - Emergency and priority message processing
-- **[Beacons](beacons.md)** - Network discovery and capabilities exchange
-- **[Link Adaptation](link_adaptation.md)** - Pairwise communication optimization
-- **[Hardware Requirements](../deployment/hardware_requirements.md)** - Deployment tiers and performance
+### Core Protocol Specifications
+- **[Signal Specification](signal_specification.md)** - Physical layer parameters (78-tone grid, RS structure)
+- **[Adaptive Tone Grid](adaptive_tone_grid.md)** - 78 reference tones and spectrum allocation
+- **[Kernel Lifecycle](kernel_lifecycle.md)** - 3-round kernel exchange (prokernel → antikernel → adaptation)
+- **[Message Format](message_format.md)** - Binary message structure
+- **[Message Validation](message_validation.md)** - Dual-layer validation (CRC + xxHash)
+
+### Specialized Protocols
+- **[Emergency Relay Network](emergency_relay_network.md)** - Ad-hoc relay and 6-phase emergency protocol
+- **[Adaptive 4-FSK](adaptive_4fsk.md)** - Beacon channel modulation
+- **[Chaos Transmission](chaos_transmission.md)** - Uncoordinated operation mode
+- **[QSO Protocol](qso_protocol.md)** - Pairwise communication patterns
+
+### Cross-Layer Documentation
+- **[Model Layer](../model/README.md)** - Continuous optimization (HOW/WHEN/HOW MUCH)
+- **[Interface Documentation](../interface/README.md)** - Protocol/model boundary
+- **[Hardware Requirements](../deployment/hardware_requirements.md)** - Deployment tiers
+- **[Architecture Summary](../../architecture.md)** - Executive overview

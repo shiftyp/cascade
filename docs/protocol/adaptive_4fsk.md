@@ -21,7 +21,7 @@ The 4-FSK interstitial channel serves as CASCADE's universal control plane, prov
 
 ## Pattern Orthogonality in 4-FSK
 
-**4-FSK uses CASCADE's 64 beacon patterns** (IDs 0-63, optimized specifically for 4-FSK):
+**4-FSK uses CASCADE's 48 beacon patterns** (IDs 0-47, each selecting 4 tones from 78-tone grid):
 
 ```python
 # Multiple stations beacon simultaneously
@@ -31,7 +31,7 @@ Station C: Pattern 48 (beacon), 4-FSK on [1490, 1520, 1580, 1610], 100ms symbols
 
 # All overlap in frequency and time
 # Separated by: Beacon pattern orthogonality (<-30 dB in 4D space)
-# Beacon patterns optimized for 4-tone alphabet (better than repurposed 70-tone patterns)
+# Beacon patterns: Each uses 4 tones from 78-tone grid (adaptive selection)
 # Model decodes all three independently
 ```
 
@@ -49,7 +49,7 @@ Aggregate at typical SNR (0 dB):
 
 vs Message channel:
 - Shannon limit @ +15 dB (2.5 kHz): ~12,500 bps
-- Message actual: ~11,300 bps (90% Shannon)
+- Message actual: ~9,427 bps (75% Shannon - chaos-optimized)
 
 4-FSK trades efficiency for robustness (-22 dB capability)
 ```
@@ -61,7 +61,7 @@ vs Message channel:
 ```python
 # Included in beacon (32 bits)
 ideal_4fsk_kernel = {
-    'base_pattern': 6 bits,              # One of 64 beacon patterns (my base for 4-FSK)
+    'base_pattern': 6 bits,              # One of 48 beacon patterns (my base for 4-FSK, IDs 0-47)
     'mutation_seed': 8 bits,             # Seed for pattern variation
     'preferred_time_offset_ms': 8 bits,  # When I listen best (0-255 × 10ms = 0-2.55s)
     'constellation_tolerance': 4 bits,   # IQ variance I can decode
@@ -512,7 +512,7 @@ Effective 4-FSK capacity: ~150 concurrent transmissions per minute
 
 | Use Case | Delivery | Overlaps | Success Rate | Protocol |
 |----------|----------|----------|--------------|----------|
-| Beacons | Best-effort | Yes (64 beacon patterns) | 90%+ | No ACK, retry next minute |
+| Beacons | Best-effort | Yes (48 beacon patterns) | 90%+ | No ACK, retry next minute |
 | Target kernels | Dedicated slot | Yes (10-15) | 50-70% | No ACK, retry next beacon |
 | Anti-kernels | Best-effort | Yes (unlimited) | 50-70% | No ACK, statistical delivery |
 | Emergency | Guaranteed | Minimal (4-FSK, reserved) | 95%+ | 4-tone detect, includes grid |

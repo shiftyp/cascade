@@ -5,10 +5,11 @@ CASCADE's training emphasizes learning from real-world HF propagation conditions
 ## Table of Contents
 
 1. [Executive Summary](#executive-summary)
-2. [Training Pipeline Phases](#training-pipeline-phases)
-3. [Two-Pass Kernel Training](#two-pass-kernel-training)
-4. [Three-Stage Expert Training](#three-stage-expert-training)
-5. [Detailed Documentation](#detailed-documentation)
+2. [Phase 0: Ideal Conditions Vetting](#phase-0-ideal-conditions-vetting)
+3. [Training Pipeline Phases](#training-pipeline-phases)
+4. [Two-Pass Kernel Training](#two-pass-kernel-training)
+5. [Three-Stage Expert Training](#three-stage-expert-training)
+6. [Detailed Documentation](#detailed-documentation)
 
 ---
 
@@ -34,6 +35,33 @@ CASCADE's training emphasizes learning from real-world HF propagation conditions
 - Diversity-biased sampling (rare events get 100× weight)
 - Natural correlation preservation (QRN + propagation stay paired)
 - Privacy-first (callsigns hashed, no message content)
+
+---
+
+## Phase 0: Ideal Conditions Vetting
+
+**Before data collection:** Validate architecture in ideal conditions (AWGN only)
+
+**Purpose:** Confirm 128-pattern chaos can achieve 85%+ Shannon efficiency in clean AWGN before investing 18 months in real HF data collection.
+
+**Duration:** 2.5 days (60 hours on 1x RTX 4090)
+
+**Key tests:**
+- Single user baseline (99.9% accuracy target)
+- Pattern orthogonality (10 users, 98% target)
+- Frequency reuse (20 users, same patterns on different tones)
+- Time reuse (30 users, asynchronous starts)
+- **Full chaos (45 users, 85%+ Shannon)** ← Critical threshold
+- Kernel coordination (proves emergent coordination works)
+- SNR degradation (+15 to -22 dB sweep)
+
+**Success criteria:** ≥85% Shannon with 45 users in AWGN
+
+**See [Phase 0 Vetting](phase0_vetting.md) for complete specification.**
+
+**Decision point:**
+- If passes: Safe to proceed with real data collection OR synthetic training
+- If fails: Fix architecture before investing in data
 
 ---
 
@@ -121,6 +149,87 @@ def train_pass1_no_kernels(model, data):
         optimize(loss)
 
 # Result: Model learns robust baseline (doesn't rely on kernels)
+
+# IMPORTANT: Add symbol erasure augmentation for RS patterns
+def train_pass1_with_erasures(model, data):
+    """Train with random symbol erasures (RS pattern robustness)"""
+
+    for batch in data:
+        # Generate random kernel
+        random_kernel = np.random.randint(0, 2**64)
+
+        # Add symbol erasures (0-12 random symbols lost)
+        num_erasures = random.randint(0, 12)
+        erasure_indices = random.choice(32, size=num_erasures, replace=False)
+
+        batch_with_erasures = batch.signal.copy()
+        batch_with_erasures[erasure_indices] = noise  # Erase symbols
+
+        # Model must decode with partial symbols
+        decoded = model.decode(batch_with_erasures, kernel=random_kernel)
+
+        # Loss: Can still recover with ≥20 symbols
+        loss = cross_entropy(decoded, batch.ground_truth)
+        optimize(loss)
+
+# Model learns: RS pattern recognition robust to 37.5% symbol loss
+
+### Soft Chaos Training (Full Overlap Scenarios)
+
+CASCADE trains on completely asynchronous chaos to achieve 70% Shannon efficiency:
+
+```python
+def train_soft_chaos_scenarios(model, data):
+    """
+    Train with arbitrary overlaps (no timing coordination)
+    Critical for 70% Shannon efficiency
+    """
+
+    for batch in data:
+        # Generate 10-40 simultaneous users
+        num_users = random.randint(10, 40)
+
+        chaos_users = []
+        for i in range(num_users):
+            user = {
+                'pattern_id': random.randint(0, 255),
+                'data': random_bytes(18),
+                'start_time_us': random.randint(0, 10_000_000),  # 0-10s window
+                'clock_drift': random.uniform(-50, 50),  # Hz
+                'power_db': random.uniform(-20, 15),
+            }
+
+            # Generate RS pattern
+            signal = generate_rs_pattern(
+                user['pattern_id'],
+                user['data'],
+                user['start_time_us']
+            )
+
+            chaos_users.append((user, signal))
+
+        # Mix with NO coordination (pure chaos)
+        chaos_signal = mix_arbitrary_offsets([s for (u,s) in chaos_users])
+
+        # Apply channel
+        received = apply_channel(chaos_signal, embeddings)
+
+        # Model must separate chaos
+        decoded = model.decode_chaos(received)
+
+        # Loss: Percentage correctly decoded
+        # Accept 70-90% success (chaos is hard)
+        success_rate = compare_decoded(decoded, [u['data'] for (u,s) in chaos_users])
+
+        loss = -log(success_rate + 0.01)
+        optimize(loss)
+
+# Model learns:
+# - Continuous correlation (all time offsets)
+# - Envelope-based separation
+# - RS decoding with overlap-induced erasures
+# - Successive cancellation prioritization
+# - 70% Shannon efficiency in pure chaos
 ```
 
 ### Pass 2: Generated Kernel Optimization
@@ -286,7 +395,7 @@ for batch in data:
 - Decode accuracy across SNR range (-28 to +15 dB)
 - Multi-user separation quality (1-140 users)
 - Emergency beacon detection (100% at -28 dB)
-- Shannon efficiency (target: 50-60%)
+- Shannon efficiency (target: 78-85% via kernel coordination)
 
 ---
 
@@ -317,6 +426,7 @@ for batch in data:
 ## See Also
 
 ### Core Training Documentation
+- **[Phase 0 Vetting](phase0_vetting.md)** - Validate architecture in ideal conditions (AWGN)
 - **[Data Pipeline](data_pipeline.md)** - Comprehensive data collection and curation
 - **[Embedding Models](embedding_models.md)** - VAE architectures and compression
 - **[Smoothness Objectives](smoothness.md)** - Continuous adaptation training

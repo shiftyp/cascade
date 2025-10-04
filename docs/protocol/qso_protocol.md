@@ -5,7 +5,7 @@ Pairwise QSO operations use temporary pattern reservation and time-division to r
 ## QSO Mode Overview
 
 **When two stations establish active QSO:**
-- Temporarily reserve pattern pair (2 of 256 patterns available)
+- Temporarily reserve pattern pair (2 of 128 patterns available)
 - Use time-division (turn-taking on half-duplex radios)
 - Priority decode for QSO partner
 - Pattern release after QSO complete

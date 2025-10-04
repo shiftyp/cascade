@@ -31,7 +31,7 @@ EMERGENCY_PATTERN_ALLOCATION = {
     'allocation': {
         'emergency_1': {
             'beacon_patterns': [0, 1, 2, 3],  # 4 beacon patterns (4-FSK)
-            'message_patterns': [64, 65, 66, 67],  # 4 message patterns (70 tones)
+            'message_patterns': [64, 65, 66, 67],  # 4 message patterns (4 tones)
             'alert_tone': 1550,  # Hz (shared with all)
             'alert_offset': 0,  # seconds (first to alert)
             'freq_preference': range(0, 25),  # Lower frequency bias (message tones)
@@ -62,15 +62,15 @@ EMERGENCY_PATTERN_ALLOCATION = {
             'message_patterns': [76, 77, 78, 79],
             'alert_tone': 1550,  # Hz
             'alert_offset': 45,  # seconds
-            'freq_preference': range(0, 70),  # Can use any (fills gaps)
+            'freq_preference': range(0, 78),  # Can use any tone from grid (fills gaps)
             'example': 'McMurdo Infrastructure'
         },
     },
 
     'normal_operation': {
-        'beacon_patterns_available': 48,  # IDs 16-63 (anti-kernel resilient)
-        'message_patterns_available': 176,  # IDs 80-255
-        'typical_dx_pool': 128,  # IDs 80-207 (most HF operation)
+        'beacon_patterns_available': 32,  # IDs 16-47 (anti-kernel resilient)
+        'message_patterns_available': 64,  # IDs 64-127 (normal message traffic)
+        'typical_dx_pool': 32,  # IDs 64-95 (most HF operation)
     }
 }
 ```
@@ -149,7 +149,7 @@ negotiate_2 = {
 # Emergency 1 (Hurricane):
 traffic_1 = {
     'patterns': [0, 1],
-    'tones': ALL_MESSAGE_TONES,  # All 70 tones
+    'tones': ALL_MESSAGE_TONES,  # All 4 tones
     'freq_bias': 'lower',  # Prefer 0-25 (reduces collision)
     'throughput': '2 patterns × 80 bps = 160 bps'
 }
@@ -157,7 +157,7 @@ traffic_1 = {
 # Emergency 2 (Earthquake):
 traffic_2 = {
     'patterns': [2, 3],
-    'tones': ALL_MESSAGE_TONES,  # All 70 tones
+    'tones': ALL_MESSAGE_TONES,  # All 4 tones
     'freq_bias': 'mid',  # Prefer 20-50 (different from E1)
     'throughput': '2 patterns × 80 bps = 160 bps'
 }
@@ -687,7 +687,7 @@ FINAL_KERNEL_WITH_NETWORK_MAP = {
 ```python
 EMERGENCY_MESSAGE = {
     # Use message tones (NOT beacon channel)
-    'tones': LOWER_TONES + UPPER_TONES,  # All 70 reference tones
+    'tones': LOWER_TONES + UPPER_TONES,  # All 78 reference tones
     'patterns': [64, 65, 66, 67],  # Emergency 1 message patterns (4 total)
 
     # Can use all 4 message patterns simultaneously
@@ -789,7 +789,7 @@ HF is ONLY communication       │ Phone/internet DOWN
 
 
 Relay flow (realistic disaster response):
-1. KP4XXX transmits emergency on patterns [64-67] (4 message patterns, all 70 tones)
+1. KP4XXX transmits emergency on patterns [64-67] (4 message patterns, each using 4 selected tones from 78-tone grid)
    - Multi-pattern transmission for maximum redundancy
    - Weak signal (-15 to -5 dB at mainland due to distance)
    - CASCADE's -25 dB capability critical for reaching mainland
@@ -1245,8 +1245,8 @@ KC4USV McMurdo Emergency Coordinator
 
 **CASCADE advantages for these emergencies:**
 - **-25 dB sensitivity**: Puerto Rico → Mainland despite weak signals
-- **280+ users**: Coordinate large emergency nets (50+ stations)
-- **Multi-pattern**: 4× throughput on strong links (mainland stations)
+- **45 active users**: Coordinate large emergency nets (50+ stations total)
+- **Multi-pattern**: 4× throughput on strong links (872 bps vs 218 bps)
 - **Automatic relay**: Self-organizing tier structure
 - **Priority system**: Life-safety messages preempt normal traffic
 - **Efficiency**: More information in limited bandwidth vs FT8/voice

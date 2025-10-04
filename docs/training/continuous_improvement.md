@@ -33,7 +33,7 @@ CASCADE generates different telemetry for transmission vs reception due to the e
   - Full internal state needed to understand decoding decisions
 
 - **TX Telemetry** (1040-D): Captures encoding-relevant experts only
-  - Pattern Expert (512-D): Selects which pattern pool to use (6 pools from 256 patterns)
+  - Pattern Expert (512-D): Selects which pattern pool to use (6 pools from 128 patterns)
   - Spectrum Expert (512-D): Allocates frequency bandwidth
   - Station Fingerprint (16-D): Characterizes own equipment
   - Noise/Signal/Propagation experts not used during encoding (they're for RX)

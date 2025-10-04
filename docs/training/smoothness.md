@@ -28,7 +28,7 @@ The smoothness objective consists of multiple complementary loss terms, each add
 
 Temporal smoothness ensures that constellation complexity doesn't change too quickly over time. Real channels change gradually - fading happens over seconds or minutes, not microseconds. The model must learn to match this natural tempo.
 
-This loss component penalizes rapid changes between consecutive frames. If the model switches from complex NVIS patterns (IDs 240-255) to emergency patterns (IDs 64-79) instantly, the temporal smoothness loss becomes large. This teaches the model to make gradual transitions between pattern pools (NVIS → Good Prop → Typical DX → Emergency) over several seconds as propagation degrades.
+This loss component penalizes rapid changes between consecutive frames. If the model switches from complex NVIS patterns (IDs 112-127) to emergency patterns (IDs 48-63) instantly, the temporal smoothness loss becomes large. This teaches the model to make gradual transitions between pattern pools (NVIS → Good Prop → Typical DX → Emergency) over several seconds as propagation degrades.
 
 Penalize rapid changes in collapse level:
 
@@ -373,7 +373,7 @@ During this phase, the model learns the fundamentals:
 
 No smoothness constraints are applied yet. The model is free to make abrupt transitions if they improve performance. This ensures we don't handicap the model before it learns to communicate effectively.
 
-**Success Criteria**: Achieve >90% of Shannon capacity at various SNR levels
+**Success Criteria**: Achieve 75% Shannon efficiency (realistic for async multi-user CDMA/FHSS)
 
 #### Phase 2 (Epochs 31-70): Smoothness Introduction
 **Objective**: Learn graceful adaptation while maintaining performance

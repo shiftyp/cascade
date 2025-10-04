@@ -33,7 +33,7 @@ CASCADE's model layer implements a **mixture-of-experts architecture** where fiv
 - **Noise Expert** (~1M params, ~2ms): Suppresses QRN/QRM while preserving signal (15-20 dB improvement)
 - **Propagation Expert** (~900K params, ~2.5ms): Compensates multipath, fading, Doppler (10-15 dB improvement)
 - **Signal Expert** (~1.2M params, ~3ms): Separates 1-50 simultaneous users (>20 dB isolation)
-- **Pattern Complexity Expert** (~500K params, ~1ms): Selects pattern pool based on multipath (256 patterns in hierarchical pools)
+- **Pattern Complexity Expert** (~500K params, ~1ms): Selects pattern pool based on multipath (128 patterns in hierarchical pools)
 - **Spectrum Allocation Expert** (~800K params, ~2ms): Packs users efficiently in 2.5 kHz (85-95% utilization)
 
 **Training Strategy**:
@@ -42,10 +42,10 @@ CASCADE's model layer implements a **mixture-of-experts architecture** where fiv
 3. **Three-stage expert training**: Independent → conductor → joint fine-tuning
 
 **Operational Performance**:
-- Total inference: <10ms on [Raspberry Pi 4](#performance-targets)
+- Total inference: <8.5ms on [Raspberry Pi 4](#performance-targets)
 - SNR range: -25 to +15 dB (40 dB dynamic range)
 - [Multi-user capacity](experts.md#signal-expert-network): 1-50 simultaneous users
-- [Shannon efficiency](experts.md#shannon-efficiency-targets): 83-93% across all conditions
+- Shannon efficiency: 78-85% (kernel-coordinated chaos: 78% initial, 85% steady state)
 
 ## Responsibilities
 
@@ -72,22 +72,29 @@ CASCADE's model layer implements a **mixture-of-experts architecture** where fiv
 
 ## Continuous Constellation Adaptation
 
-A key CASCADE innovation is **hierarchical pattern organization**. The protocol defines 256 patterns (64 beacon + 192 message) organized by IQ complexity, with the model selecting from appropriate pools based on HF propagation.
+A key CASCADE innovation is **hierarchical pattern organization**. The protocol defines 128 patterns (48 beacon + 80 message) organized by IQ complexity, with the model selecting from appropriate pools based on HF propagation.
 
 ### Fixed vs Adaptive Components
 
 **Fixed (Protocol Layer)**:
-- 256 orthogonal patterns (64 beacon for 4-FSK, 192 message for 70 tones)
+- 128 orthogonal patterns (48 beacon + 80 message, each uses 4 from 78-tone grid)
 - Hierarchical organization: Pattern ID indicates IQ complexity
-- Pattern structure: 32 symbols × 8 tones
-- Orthogonality: <-30 dB cross-correlation
+- Pattern structure: 32 symbols, RS(32,20) aligned
+- Orthogonality: <-37.5 dB cross-correlation achieved
 - Ensures interoperability across all CASCADE implementations
 
 **Adaptive (Model Layer)**:
-- Constellation point positions in IQ space
+- Constellation point positions in IQ space (64-QAM → BPSK collapse)
 - Symbol timing (50ms ±20%)
-- FEC rate (0.3-0.95)
+- 4-tone selection from 78-tone grid (adaptive ±3)
+- IQ complexity parameter λ (0.0-0.9)
 - Power allocation per symbol
+
+**Built-in FEC (Protocol Layer)**:
+- RS(32,20) pattern structure provides error correction
+- No separate FEC layer needed
+- 37.5% erasure tolerance (12 of 32 symbols)
+- Aligned protection for pattern ID and data
 
 ### Constellation Collapse Continuum
 
@@ -164,12 +171,12 @@ Advanced coordination strategies - see [conductor_details.md](conductor_details.
 
 ## 4D Pattern Architecture
 
-CASCADE uses [256 orthogonal 4D patterns](pattern_architecture.md) (64 beacon + 192 message) combining discrete frequency-hopping with continuous IQ modulation:
-- **Dimensions**: Time × Discrete Frequency (70 tones) × Continuous I × Continuous Q
+CASCADE uses [128 orthogonal 4D patterns](pattern_architecture.md) (48 beacon + 80 message) combining discrete frequency-hopping with continuous IQ modulation:
+- **Dimensions**: Time × Tone Selection (4 from 78) × Continuous I × Continuous Q
 - **IQ organization**: Hierarchical pools (pattern ID indicates baked-in complexity)
 - **Frequency**: Discrete hops (FHSS, not CSS - patent safe)
-- **IQ**: Continuous Lissajous curves (smooth adaptation)
-- **Orthogonality**: <-30 dB in 4D space
+- **IQ**: Continuous trajectories (HF-realistic λ=0.3-0.6 typical, smooth adaptation)
+- **Orthogonality**: <-37.5 dB in 4D space achieved (128-pattern chaos)
 
 See [Pattern Architecture](pattern_architecture.md) for comprehensive specification.
 
@@ -350,8 +357,8 @@ Adjust based on results - if conductor struggles, allocate more Stage 2.
 
 ## Performance Targets
 
-- **Inference**: <10ms on Raspberry Pi 4
-- **Shannon Efficiency**: 83-93% across SNR range
+- **Inference**: <8.5ms on Raspberry Pi 4
+- **Shannon Efficiency**: 78-85% (kernel-driven emergent coordination)
 - **Multi-User**: 1-50 simultaneous users
 - **SNR Range**: -25 to +15 dB (40 dB dynamic range)
 - **Pattern Orthogonality**: <-30 dB cross-correlation
@@ -413,3 +420,24 @@ CASCADE improves continuously through three complementary mechanisms:
 These three mechanisms work together: base model improves monthly/annually (global performance), real-time adaptation provides QSO-specific boost (immediate benefit).
 
 See [Continuous Improvement](../training/continuous_improvement.md) for complete federated learning and model update strategies.
+
+---
+
+## See Also
+
+### Core Model Documentation
+- **[Pattern Architecture](pattern_architecture.md)** - 128 patterns with chaos mode and frequency reuse
+- **[Expert Networks](experts.md)** - 5 specialized networks with detailed architectures
+- **[TFIQ Dimensions](tfiq_dimensions.md)** - 4D user separation in Time × Frequency × I × Q
+- **[Shared Encoder](shared_encoder.md)** - Universal feature extraction (1024D)
+- **[Conductor Details](conductor_details.md)** - Attention-based expert coordination
+
+### Protocol & Training
+- **[Protocol Layer](../protocol/README.md)** - Discrete decisions (WHO/WHETHER/WHAT)
+- **[Training Strategy](../training/README.md)** - Real-world data pipeline and training phases
+- **[Telemetry Research](../../telemetry_research.md)** - Kernel effectiveness and continuous improvement
+
+### Implementation
+- **[Hardware Requirements](../deployment/hardware_requirements.md)** - RPi4/Coral/Desktop/GPU tiers
+- **[Architecture Overview](../../architecture.md)** - Executive summary and performance targets
+- **[Signal Specification](../protocol/signal_specification.md)** - Physical layer interoperability

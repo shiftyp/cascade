@@ -376,3 +376,23 @@ def trust_transitions():
 ```
 
 These examples demonstrate the clean separation between protocol (discrete decisions) and model (continuous optimization) while showing how they work together to achieve optimal communication.
+
+---
+
+## See Also
+
+### Related Documentation
+- **[Protocol Layer](../protocol/README.md)** - Discrete decision framework (WHO/WHETHER/WHAT)
+- **[Model Layer](../model/README.md)** - Continuous optimization (HOW/WHEN/HOW MUCH)
+- **[Interface Specification](../interface/README.md)** - Clean boundary between layers
+- **[Architecture Overview](../../architecture.md)** - Executive summary
+
+### Example Scenarios
+- **[Emergency Net](emergency_net.md)** - Emergency communications and relay
+- **[Multi-User Scenarios](multi_user_scenarios.md)** - Contest and high-density operations
+- **[Continuous Coexistence](continuous_coexistence.md)** - Mixed traffic patterns
+
+### Protocol Details
+- **[Kernel Lifecycle](../protocol/kernel_lifecycle.md)** - How kernels evolve through use
+- **[Emergency Relay](../protocol/emergency_relay_network.md)** - 6-phase emergency protocol
+- **[QSO Protocol](../protocol/qso_protocol.md)** - Pairwise communication patterns

@@ -65,8 +65,8 @@ a_rx_kernel = {
     'max_patterns_simultaneous': 2,  # Can decode 2 patterns at once
     'preferred_fec_rate': 0.8,     # Heavy FEC needed
     'preferred_constellation': 'QPSK',  # Can't handle 8-QAM
-    'available_tones': [0-34, 40-69],  # Tones 35-39 have local QRM (run-length encoded)
-    'available_tone_count': 65,    # 65 of 70 tones usable
+    'available_tones': [0-3],  # All 4 tones usable (run-length encoded)
+    'available_tone_count': 4,     # All 4 tones usable
 }
 
 # Station B: x86 desktop, quiet rural location, excellent propagation
@@ -77,8 +77,8 @@ b_rx_kernel = {
     'max_patterns_simultaneous': 4,  # Can decode 4 patterns at once
     'preferred_fec_rate': 0.5,     # Light FEC sufficient
     'preferred_constellation': '16QAM',  # Can handle complex
-    'available_tones': [0-69],     # All 70 tones usable
-    'available_tone_count': 70,    # Perfect propagation
+    'available_tones': [0-3],      # All 4 tones usable
+    'available_tone_count': 4,     # Perfect propagation
 }
 
 # When B transmits to A:
@@ -94,7 +94,7 @@ b_rx_kernel = {
 # - A uses b_rx_kernel as hints
 # - Encodes with 16-QAM, FEC 0.5
 # - Uses 4 patterns (B can decode 4)
-# - Can use all 70 tones (B has excellent propagation)
+# - Can use all 78 tones (B has excellent propagation)
 # - B decodes easily with powerful hardware
 # - Throughput: 4 patterns × 80 bps = 320 bps
 # - Higher throughput A→B than B→A (asymmetric, natural)
@@ -111,7 +111,7 @@ b_rx_kernel = {
 
 ### Kernel Encodes Which Tones Receiver Can Decode
 
-**Critical innovation**: Each receiver measures and announces which of 70 discrete reference tones are usable at their location:
+**Critical innovation**: Each receiver measures and announces which of 78 discrete reference tones are usable at their location:
 
 ```python
 def measure_and_encode_available_tones():
@@ -122,8 +122,8 @@ def measure_and_encode_available_tones():
 
     available_tones = []
 
-    # Measure each of 70 discrete reference tones
-    for tone_idx in range(70):
+    # Measure each of 78 discrete reference tones
+    for tone_idx in range(78):
         freq_hz = REFERENCE_TONES[tone_idx]
 
         # Measure SNR at this exact frequency
@@ -137,7 +137,7 @@ def measure_and_encode_available_tones():
             available_tones.append(tone_idx)
 
     # Examples of availability patterns:
-    # Excellent: [0-69] (all 70 tones) → 1 range
+    # Excellent: [0-77] (all 78 tones) → 1 range
     # Selective fading: [0-34, 40-69] (60 tones, gap at 35-39) → 2 ranges
     # Heavy QRM: [5-12, 25-35, 50-69] (34 tones) → 3 ranges
     # Extreme: [10, 25, 40, 55] (4 tones only) → 4 single-tone ranges

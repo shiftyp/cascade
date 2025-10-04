@@ -55,10 +55,10 @@ class EncodingParams:
     selected_patterns: List[int]    # Subset of assigned patterns (from pool)
     pattern_pool: str              # Pool used: 'emergency', 'typical_dx', 'good_prop', 'nvis'
     fragment_duration: float        # Seconds per fragment
-    redundancy_factor: float        # FEC strength (1.0-3.0)
     iq_complexity_level: int       # Baked-in complexity of selected patterns (0-7)
     kernel_id: int                 # Natural frame identifier
-    available_tones: List[int]     # Which of 70 tones receiver can decode
+    available_tones: List[int]     # Which of 78 tones receiver can use (typically 60-78)
+    rs_structure: bool             # Always True (RS(32,20) pattern structure provides FEC)
 ```
 
 ### Streaming Fragments
@@ -225,7 +225,7 @@ class MockModel:
         return EncodingParams(
             selected_patterns=constraints.assigned_patterns[:2],
             fragment_duration=1.0,
-            redundancy_factor=2.0,
+            iq_complexity_level=2,  # Moderate
             collapse_level=1,
             kernel_id=0x1234567890ABCDEF
         )
@@ -265,7 +265,16 @@ This interface ensures clean separation while enabling optimal performance throu
 
 ## See Also
 
-- **[Protocol Layer](../protocol/README.md)** - Discrete decision-making and protocol constraints
-- **[Model Layer](../model/README.md)** - Continuous optimization within constraints
-- **[Augmented Inference](augmented_inference.md)** - Runtime inference optimizations
-- **[Expert Networks](../model/experts.md)** - How model optimizations are computed
+### Core Documentation
+- **[Protocol Layer](../protocol/README.md)** - Discrete decisions: WHO, WHETHER, WHAT, WHEN (discrete)
+- **[Model Layer](../model/README.md)** - Continuous optimization: HOW, WHEN (adaptive), HOW MUCH
+- **[Architecture Overview](../../architecture.md)** - Executive summary of 128-pattern chaos system
+
+### Interface Specifications
+- **[Version Compatibility](version_compatibility.md)** - Forward/backward compatibility guarantees
+- **[Signal Specification](../protocol/signal_specification.md)** - Physical layer (frozen protocol)
+- **[Pattern Architecture](../model/pattern_architecture.md)** - 128 patterns (fixed) with adaptive modulation
+
+### Examples
+- **[Example Code](../examples/README.md)** - Demonstrates protocol/model interaction
+- **[QSO Protocol](../protocol/qso_protocol.md)** - Pairwise communication showing interface in practice

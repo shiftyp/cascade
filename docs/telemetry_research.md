@@ -823,7 +823,7 @@ def train_v2_with_distillation(v1_model, combined_dataset):
 **Model updates do NOT break protocol compatibility**. CASCADE separates fixed protocol layer from adaptive model layer.
 
 **Protocol Layer (Fixed)**:
-- 256 patterns (64 beacon + 192 message)
+- 128 patterns (48 beacon + 80 message)
 - Pattern structure: 32 symbols × 8 tones
 - 4-FSK bootstrap
 - Message/ACK format
