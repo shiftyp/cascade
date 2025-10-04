@@ -1,0 +1,145 @@
+# Fly.io configuration for CASCADE KiwiSDR Data Collector
+# Modern Fly.io v2 format (2025)
+# Single-region deployment - geographic diversity comes from global SDR sources
+app = "cascade-kiwi-collector"
+primary_region = "iad"  # US East - good global connectivity
+kill_signal = "SIGINT"
+kill_timeout = 30
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  strategy = "rolling"
+
+[env]
+  PYTHON_VERSION = "3.11"
+  MODULE_NAME = "cascade_data"
+
+  # Collection scaling - Start conservative, increase as testing proves stability
+  # Target: 50-100 baseline SDRs, 200+ during events (FR-016, FR-018)
+  BASELINE_SDR_COUNT = "6"   # Increase to 50-100 after testing
+  MAX_SDR_COUNT = "50"        # Increase to 200+ after testing
+
+  # Alert thresholds - Adjust based on actual collection capacity
+  ALERT_SDR_AVAILABILITY = "50"      # % of SDRs that must be available
+  ALERT_MIN_HOURS_DAY = "20"         # Min collection hours/day (target: 200-500)
+  ALERT_STORAGE_PERCENT = "90"       # Storage usage alert threshold
+  ALERT_CONSECUTIVE_FAILURES = "5"   # Consecutive failures before alert
+
+  # Geographic diversity configuration
+  DIVERSITY_MONITORING = "enabled"
+  SCARCE_REGION_SLOTS = "0.2"
+  DIVERSITY_HOUR_UTC = "14"
+  PREFER_SCARCE_REGIONS = "true"
+
+  # Dashboard settings
+  DASHBOARD_ENABLED = "true"
+
+# Process groups - each runs in its own machine
+[processes]
+  scheduler = "python -m modules.data.src.collectors.scheduler"
+  worker = "python -m modules.data.src.collectors.worker"  # No limit - consume until resources exhausted
+  api = "python -m modules.data.src.dashboard.geographic_api"
+  qa_api = "python -m modules.data.src.dashboard.qa_sample_api"
+  dashboard = "cd modules/data/src/dashboard/geographic-dashboard && npm start"
+
+# Worker scaling configuration
+[[vm]]
+  memory = "2gb"
+  cpu_kind = "shared"
+  cpus = 2
+  processes = ["worker"]
+
+[metrics]
+  port = 9091  # Prometheus metrics for custom scaling
+
+# Scale workers based on resource usage, not HTTP requests
+# FR-041: Auto-scale 2-10 workers based on demand
+[[autoscaling]]
+  processes = ["worker"]
+  min_machines = 2
+  max_machines = 10
+
+  # Scale up when CPU > 70% or Memory > 80%
+  [[autoscaling.metric]]
+    source = "cpu"
+    threshold = 70
+
+  [[autoscaling.metric]]
+    source = "memory"
+    threshold = 80
+
+# Geographic Diversity API Service
+[[services]]
+  processes = ["api"]
+  internal_port = 8000
+  protocol = "tcp"
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 8000
+    handlers = ["http"]
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/api/diversity/metrics"
+
+# QA Sample API Service
+[[services]]
+  processes = ["qa_api"]
+  internal_port = 8001
+  protocol = "tcp"
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 8001
+    handlers = ["http"]
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+# Dashboard Service (Next.js)
+[[services]]
+  processes = ["dashboard"]
+  internal_port = 3000
+  protocol = "tcp"
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 3000
+    handlers = ["http", "tls"]
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/"
+
+# Metrics endpoint for monitoring
+[metrics]
+  port = 9090
+  path = "/metrics"
+
+# NOTE: Secrets are set via CLI, not in this file
+# Required secrets (set via: fly secrets set KEY=value):
+#   - DATABASE_URL (from fly postgres attach)
+#   - REDIS_URL (from fly redis create or external)
+#   - TIGRIS_ACCESS_KEY
+#   - TIGRIS_SECRET_KEY
+#   - TIGRIS_BUCKET
+#   - NOAA_API_KEY (optional)

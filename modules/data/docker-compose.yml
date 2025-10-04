@@ -1,0 +1,149 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:15-alpine
+    container_name: cascade_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cascade_data
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # KeyDB (Redis compatible) for distributed coordination
+  keydb:
+    image: eqalpha/keydb:latest
+    container_name: cascade_keydb
+    ports:
+      - "6379:6379"
+    volumes:
+      - keydb_data:/data
+    command: keydb-server --appendonly yes --save 60 1
+    healthcheck:
+      test: ["CMD", "keydb-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Commander (Web UI for Redis/KeyDB)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: cascade_redis_commander
+    environment:
+      REDIS_HOSTS: keydb:cascade_keydb:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - keydb
+
+  # Adminer (Web UI for PostgreSQL)
+  adminer:
+    image: adminer:latest
+    container_name: cascade_adminer
+    ports:
+      - "8082:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    depends_on:
+      - postgres
+
+  # Geographic Diversity API
+  diversity-api:
+    build: .
+    container_name: cascade_diversity_api
+    command: python -m modules.data.src.dashboard.geographic_api
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/cascade_data
+      REDIS_URL: redis://keydb:6379/0
+      PYTHONUNBUFFERED: 1
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - keydb
+    volumes:
+      - ./src:/app/modules/data/src
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/diversity/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Geographic Diversity Dashboard (Next.js)
+  diversity-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cascade_diversity_dashboard
+    command: sh -c "cd /app/src/dashboard/geographic-dashboard && npm run dev"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NODE_ENV: development
+    ports:
+      - "3000:3000"
+    depends_on:
+      - diversity-api
+    volumes:
+      - ./src/dashboard/geographic-dashboard:/app/src/dashboard/geographic-dashboard
+      - /app/src/dashboard/geographic-dashboard/node_modules
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Collection Scheduler with Diversity Awareness
+  scheduler:
+    build: .
+    container_name: cascade_scheduler
+    command: python -m modules.data.src.collectors.scheduler
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/cascade_data
+      REDIS_URL: redis://keydb:6379/0
+      PYTHONUNBUFFERED: 1
+      DIVERSITY_MONITORING: enabled
+      SCARCE_REGION_SLOTS: "0.2"
+      DIVERSITY_HOUR_UTC: "14"
+      PREFER_SCARCE_REGIONS: "true"
+    depends_on:
+      - postgres
+      - keydb
+    volumes:
+      - ./src:/app/modules/data/src
+      - ./data:/data
+    restart: unless-stopped
+
+  # Worker Pool
+  worker:
+    build: .
+    command: python -m modules.data.src.collectors.worker
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/cascade_data
+      REDIS_URL: redis://keydb:6379/0
+      PYTHONUNBUFFERED: 1
+    depends_on:
+      - postgres
+      - keydb
+      - scheduler
+    volumes:
+      - ./src:/app/modules/data/src
+      - ./data:/data
+    deploy:
+      replicas: 2
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  keydb_data:
+    driver: local

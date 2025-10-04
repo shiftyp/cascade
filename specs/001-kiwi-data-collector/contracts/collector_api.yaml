@@ -1,0 +1,197 @@
+openapi: 3.0.0
+info:
+  title: KiwiSDR Collector API
+  version: 1.0.0
+  description: Interface for managing KiwiSDR connections and recordings
+
+paths:
+  /collectors/connect:
+    post:
+      summary: Connect to KiwiSDR
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+                - frequency_hz
+                - mode
+              properties:
+                url:
+                  type: string
+                  example: "sdr.example.com:8073"
+                frequency_hz:
+                  type: integer
+                  minimum: 10000
+                  maximum: 30000000
+                  example: 14074000
+                mode:
+                  type: string
+                  enum: [iq, audio]
+                bandwidth_hz:
+                  type: integer
+                  default: 12000
+      responses:
+        200:
+          description: Connection established
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionInfo'
+        403:
+          description: SDR at usage limit
+        503:
+          description: SDR unavailable
+
+  /collectors/{session_id}/record:
+    post:
+      summary: Start recording
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - duration_seconds
+              properties:
+                duration_seconds:
+                  type: integer
+                  minimum: 1
+                  maximum: 1800
+                output_path:
+                  type: string
+      responses:
+        202:
+          description: Recording started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingStatus'
+
+  /collectors/{session_id}/stop:
+    post:
+      summary: Stop recording
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: Recording stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecordingResult'
+
+  /collectors/status:
+    get:
+      summary: Get all active collectors
+      responses:
+        200:
+          description: List of active collectors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CollectorStatus'
+
+components:
+  schemas:
+    ConnectionInfo:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        kiwisdr_url:
+          type: string
+        frequency_hz:
+          type: integer
+        bandwidth_hz:
+          type: integer
+        sample_rate:
+          type: integer
+        has_gps:
+          type: boolean
+        gps_location:
+          type: object
+          properties:
+            latitude:
+              type: number
+            longitude:
+              type: number
+            grid_square:
+              type: string
+
+    RecordingStatus:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [recording, pending, stopped]
+        start_time:
+          type: string
+          format: date-time
+        duration_seconds:
+          type: integer
+        bytes_recorded:
+          type: integer
+
+    RecordingResult:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        file_path:
+          type: string
+        file_size_bytes:
+          type: integer
+        duration_seconds:
+          type: number
+        samples_recorded:
+          type: integer
+        quality_metrics:
+          type: object
+          properties:
+            avg_signal_level:
+              type: number
+            dropout_count:
+              type: integer
+            gps_locked:
+              type: boolean
+
+    CollectorStatus:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        kiwisdr_url:
+          type: string
+        status:
+          type: string
+          enum: [connected, recording, disconnected, error]
+        uptime_seconds:
+          type: integer
+        data_collected_mb:
+          type: number
+        current_frequency_hz:
+          type: integer

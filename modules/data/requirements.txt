@@ -1,0 +1,57 @@
+# Core dependencies
+python>=3.11
+numpy>=1.24.0
+scipy>=1.10.0
+pandas>=2.0.0
+
+# KiwiSDR client
+kiwiclient>=0.1.0
+websocket-client>=1.5.0
+
+# Signal processing
+pyFT8>=0.1.0
+# wsjtx-lib (may need custom build)
+
+# Database
+psycopg2-binary>=2.9.0
+sqlalchemy>=2.0.0
+alembic>=1.10.0
+
+# Storage
+boto3>=1.26.0  # For S3/Tigris
+soundfile>=0.12.0  # For audio I/O
+python-flac>=0.1.0  # FLAC compression
+
+# Distributed coordination
+redis>=4.5.0
+redis-py>=4.5.0
+
+# API
+fastapi>=0.95.0
+uvicorn>=0.21.0
+pydantic>=2.0.0
+
+# Testing
+pytest>=7.3.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.10.0
+pytest-cov>=4.0.0
+
+# Linting
+ruff>=0.0.260
+
+# Monitoring & Dashboard
+rich>=13.3.0  # Terminal UI
+plotly>=5.14.0  # Waterfall plots
+dash>=2.10.0  # Web dashboard
+psutil>=5.9.0  # Resource monitoring for auto-scaling
+
+# External services
+httpx>=0.24.0  # Async HTTP client
+pyephem>=9.99  # Ephemeris calculations
+
+# Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0
+click>=8.1.0  # CLI framework
+schedule>=1.2.0  # Task scheduling
