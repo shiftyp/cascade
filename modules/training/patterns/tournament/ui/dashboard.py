@@ -167,13 +167,19 @@ class PatternGeneratorDashboard:
                 runtime_str = "00:00"
 
             # Create stats text
+            # Format best score
+            if self.optimizer.global_best_score == float('inf'):
+                best_score_str = "-"
+            else:
+                best_score_str = f"{self.optimizer.global_best_score:.2f} dB"
+
             stats_lines = [
                 f"[bold cyan]Active Trials:[/]    {active_count}",
                 f"[bold red]Eliminated:[/]       {eliminated_count}",
                 f"[bold yellow]Compute Used:[/]     {self.optimizer.compute_used:,}",
                 f"[bold green]Compute Left:[/]     {compute_remaining:,}",
                 "",
-                f"[bold]Best Score:[/]       {self.optimizer.global_best_score:.2f} dB",
+                f"[bold]Best Score:[/]       {best_score_str}",
                 f"[bold]Best Trial:[/]       #{self.optimizer.global_best_trial_id or '-'}",
                 "",
                 f"[bold]Runtime:[/]          {runtime_str}",
@@ -288,7 +294,8 @@ class PatternGeneratorDashboard:
             'paused': '[yellow]⏸ PAUSE[/yellow]',
             'eliminated': '[red]✗ ELIM[/red]',
             'completed': '[bold green]✓ DONE[/bold green]',
-            'pending': '[dim]○ WAIT[/dim]'
+            'pending': '[dim]○ WAIT[/dim]',
+            'error': '[red]⚠ ERROR[/red]'
         }
         return status_map.get(status, '[dim]?[/dim]')
 

@@ -635,6 +635,10 @@ class DynamicTournamentOptimizer:
                         # Submit trial for execution
                         iterations_to_run = min(self.eval_interval, trial.compute_budget + trial.bonus_budget - trial.iterations)
 
+                        # Update trial status to running
+                        trial.status = 'running'
+                        trial.start()
+
                         with open(master_debug, 'a') as f:
                             f.write(f"Submitting trial {trial_id}:\n")
                             f.write(f"  Iterations to run: {iterations_to_run}\n")
@@ -696,6 +700,10 @@ class DynamicTournamentOptimizer:
                 if trial.iterations >= trial.compute_budget + trial.bonus_budget:
                     continue
 
+                # Update trial status to running
+                trial.status = 'running'
+                trial.start()
+
                 try:
                     # Run the trial directly (no parallelism)
                     result = run_single_trial_worker(
@@ -716,19 +724,28 @@ class DynamicTournamentOptimizer:
 
         # Check for errors
         if 'error' in result:
+            trial.status = 'error'
             self.log_callback(f"ERROR in trial {trial_id}: {result['error']}")
             self.log_callback(f"Check logs/error_trial_{trial_id}.txt for details")
             return
 
         # Update trial state
         trial.iterations = result['final_iteration']
-        trial.best_score = result['best_score']
+        trial.best_score = float(result['best_score'])  # Ensure it's a float
+        trial.current_score = trial.best_score
         trial.convergence_rate = result['convergence_rate']
         trial.score_history.extend(result['score_history'])
 
         # Store patterns file path if available
         if 'patterns_file' in result:
             trial.patterns_file = result['patterns_file']
+
+        # Update trial status based on budget
+        total_budget = trial.compute_budget + trial.bonus_budget
+        if trial.iterations >= total_budget:
+            trial.status = 'completed'
+        else:
+            trial.status = 'paused'  # Waiting for next batch
 
         # Update global best
         if trial.best_score < self.global_best_score:
@@ -745,7 +762,6 @@ class DynamicTournamentOptimizer:
         self.compute_used += result['iterations_run']
 
         # Update progress
-        total_budget = trial.compute_budget + trial.bonus_budget
         trial.progress = trial.iterations / total_budget if total_budget > 0 else 1.0
         trial.calculate_eta(max(0, total_budget - trial.iterations))
 

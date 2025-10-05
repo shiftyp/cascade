@@ -47,9 +47,9 @@ class Trial:
         self.end_time = None
 
         # Performance metrics
-        # Start with a realistic initial score instead of infinity
-        self.best_score = -25.0  # Start at -25 dB (will be overwritten by actual scores)
-        self.current_score = -25.0
+        # Start with inf, will be updated with actual scores from worker
+        self.best_score = float('inf')  # Will be overwritten by actual scores
+        self.current_score = float('inf')
         self.score_history = []
         self.convergence_rate = 0.001  # Small non-zero default
         self.improvement_history = []
