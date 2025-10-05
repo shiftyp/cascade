@@ -27,6 +27,64 @@ from patterns import Pattern, generate_pattern_set
 from patterns.optimizer import optimize_pattern_two_phase
 
 
+def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
+                           checkpoint_dir: str, p_cores: List[int] = None) -> Dict[str, Any]:
+    """
+    Standalone function to run a single trial in a subprocess.
+    This must be a module-level function to be picklable.
+    """
+    import psutil
+    import os
+    import numpy as np
+    from pathlib import Path
+
+    # This runs in a separate process
+    # Set CPU affinity if on Windows/Linux
+    try:
+        p = psutil.Process()
+        if p_cores:
+            p.cpu_affinity(p_cores)
+            p.nice(psutil.HIGH_PRIORITY_CLASS if os.name == 'nt' else -10)
+    except:
+        pass  # Affinity setting failed, continue anyway
+
+    # Simulate optimization (replace with actual pattern generation)
+    np.random.seed(seed)
+    best_score = float('inf')
+    score_history = []
+
+    for i in range(iterations // 100):  # Simplified simulation
+        # In real implementation, this would call optimize_pattern_two_phase
+        score = best_score - np.random.exponential(0.1)  # Simulate improvement
+        if score < best_score:
+            best_score = score
+
+        score_history.append(best_score)
+
+        # Save checkpoint periodically
+        if (i * 100) % 10000 == 0 and checkpoint_dir:
+            trial_checkpoint_dir = Path(checkpoint_dir) / f"trial_{trial_id}"
+            trial_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            # In real implementation, save actual checkpoint
+
+    # Calculate convergence rate
+    if len(score_history) > 10:
+        recent_scores = score_history[-10:]
+        convergence_rate = abs(recent_scores[-1] - recent_scores[0]) / 10
+    else:
+        convergence_rate = 0.01
+
+    # Return results
+    return {
+        'trial_id': trial_id,
+        'iterations_run': iterations,
+        'best_score': best_score,
+        'final_iteration': iterations,
+        'convergence_rate': convergence_rate,
+        'score_history': score_history[-100:],  # Last 100 scores
+    }
+
+
 class DynamicTournamentOptimizer:
     """Tournament optimizer with dynamic compute allocation"""
 
@@ -155,10 +213,14 @@ class DynamicTournamentOptimizer:
                     continue
 
                 # Submit trial for execution
+                # Use standalone function to avoid pickling issues
                 future = executor.submit(
-                    self._run_single_trial,
+                    run_single_trial_worker,
                     trial_id,
-                    min(self.eval_interval, trial.compute_budget + trial.bonus_budget - trial.iterations)
+                    min(self.eval_interval, trial.compute_budget + trial.bonus_budget - trial.iterations),
+                    trial.seed,
+                    str(self.checkpoint_dir),  # Convert Path to string for subprocess
+                    trial.p_cores
                 )
                 futures[future] = trial_id
 
@@ -171,57 +233,6 @@ class DynamicTournamentOptimizer:
                 except Exception as e:
                     self.log_callback(f"Error in trial {trial_id}: {e}")
 
-    def _run_single_trial(self, trial_id: int, iterations: int) -> Dict[str, Any]:
-        """Run a single trial for specified iterations (runs in subprocess)"""
-        # This runs in a separate process
-        import psutil
-
-        # Set CPU affinity if on Windows/Linux
-        trial = Trial(trial_id, seed=1000 * (trial_id + 1))  # Recreate trial in subprocess
-
-        # Load checkpoint if it exists
-        checkpoint_dir = Path(f"checkpoints/trial_{trial_id}")
-        if checkpoint_dir.exists():
-            trial.checkpoint_dir = checkpoint_dir
-            trial.load_checkpoint()
-
-        # Set process affinity
-        try:
-            p = psutil.Process()
-            if trial.p_cores:
-                p.cpu_affinity(trial.p_cores)
-                p.nice(psutil.HIGH_PRIORITY_CLASS if os.name == 'nt' else -10)
-        except:
-            pass  # Affinity setting failed, continue anyway
-
-        # Run pattern optimization
-        trial.start()
-
-        # Simulate optimization (replace with actual pattern generation)
-        best_score = trial.best_score if hasattr(trial, 'best_score') else float('inf')
-
-        for i in range(iterations // 100):  # Simplified simulation
-            # In real implementation, this would call optimize_pattern_two_phase
-            score = best_score - np.random.exponential(0.1)  # Simulate improvement
-            if score < best_score:
-                best_score = score
-
-            trial.iterations += 100
-            trial.update_score(best_score)
-
-            # Checkpoint periodically
-            if trial.iterations % 10000 == 0:
-                trial.save_checkpoint()
-
-        # Return results
-        return {
-            'trial_id': trial_id,
-            'iterations_run': iterations,
-            'best_score': best_score,
-            'final_iteration': trial.iterations,
-            'convergence_rate': trial.convergence_rate,
-            'score_history': trial.score_history[-100:],  # Last 100 scores
-        }
 
     def _process_trial_result(self, trial_id: int, result: Dict[str, Any]):
         """Process results from a trial run"""
