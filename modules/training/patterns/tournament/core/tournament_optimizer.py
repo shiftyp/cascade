@@ -258,63 +258,86 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 original_pattern = pattern_set[pattern_idx].copy()
 
                 # Mutate pattern (flip random bits based on temperature)
-                num_flips = max(1, min(5, int(temperature * 10)))  # 1-5 bits based on temperature
+                num_flips = max(1, min(10, int(temperature * 15)))  # 1-10 bits, more aggressive
                 flip_positions = np.random.choice(len(original_pattern), num_flips, replace=False)
                 mutated_pattern = original_pattern.copy()
                 mutated_pattern[flip_positions] = 1 - mutated_pattern[flip_positions]
 
-                # Temporarily replace pattern to evaluate full set correlation
-                pattern_set[pattern_idx] = mutated_pattern
+                # Calculate ONLY correlations involving the mutated pattern
+                # This is much more targeted and likely to show improvement
+                max_correlation_new = -100.0
 
-                # Calculate maximum correlation across all pattern pairs (both normal and flip)
-                # This is the actual metric we're optimizing
-                max_correlation = -100.0  # Start with very low value
-                worst_pair = None
+                pattern_mut = mutated_pattern.astype(np.float32) - 0.5
 
-                # Check all unique pattern pairs
-                for i in range(128):
-                    for j in range(i + 1, 128):
-                        pattern_i = pattern_set[i].astype(np.float32) - 0.5  # Center at 0
+                for j in range(128):
+                    if j != pattern_idx:
                         pattern_j = pattern_set[j].astype(np.float32) - 0.5
 
-                        # Normal cross-correlation (should achieve -37.5 dB)
-                        # Use valid mode for actual correlation at zero lag
-                        corr_normal = np.abs(np.dot(pattern_i, pattern_j))
-                        corr_normal_db = 20 * np.log10(corr_normal / len(pattern_i) + 1e-10)
+                        # Normal correlation
+                        corr_normal = np.abs(np.dot(pattern_mut, pattern_j))
+                        corr_normal_db = 20 * np.log10(corr_normal / len(pattern_mut) + 1e-10)
+                        max_correlation_new = max(max_correlation_new, corr_normal_db)
 
-                        if corr_normal_db > max_correlation:
-                            max_correlation = corr_normal_db
-                            worst_pair = (i, j, 'normal')
-
-                        # Flip correlation (FSK inversion: 0↔1, should achieve -30 dB)
-                        pattern_j_flip = -pattern_j  # Flip is equivalent to negation after centering
-                        corr_flip = np.abs(np.dot(pattern_i, pattern_j_flip))
-                        corr_flip_db = 20 * np.log10(corr_flip / len(pattern_i) + 1e-10)
-
-                        # Apply weighting: flip correlation target is -30dB vs -37.5dB for normal
-                        # So we add 7.5dB penalty to flip correlations
+                        # Flip correlation
+                        pattern_j_flip = -pattern_j
+                        corr_flip = np.abs(np.dot(pattern_mut, pattern_j_flip))
+                        corr_flip_db = 20 * np.log10(corr_flip / len(pattern_mut) + 1e-10)
                         weighted_flip_db = corr_flip_db + 7.5
+                        max_correlation_new = max(max_correlation_new, weighted_flip_db)
 
-                        if weighted_flip_db > max_correlation:
-                            max_correlation = weighted_flip_db
-                            worst_pair = (i, j, 'flip')
+                # For comparison, calculate current pattern's worst correlation
+                max_correlation_old = -100.0
+                pattern_old = original_pattern.astype(np.float32) - 0.5
 
-                # Decide whether to keep mutation using simulated annealing
-                accept = False
-                if max_correlation < best_score:
-                    # Always accept improvements (lower correlation is better)
-                    accept = True
-                    best_score = max_correlation
+                for j in range(128):
+                    if j != pattern_idx:
+                        pattern_j = pattern_set[j].astype(np.float32) - 0.5
+
+                        # Normal correlation
+                        corr_normal = np.abs(np.dot(pattern_old, pattern_j))
+                        corr_normal_db = 20 * np.log10(corr_normal / len(pattern_old) + 1e-10)
+                        max_correlation_old = max(max_correlation_old, corr_normal_db)
+
+                        # Flip correlation
+                        pattern_j_flip = -pattern_j
+                        corr_flip = np.abs(np.dot(pattern_old, pattern_j_flip))
+                        corr_flip_db = 20 * np.log10(corr_flip / len(pattern_old) + 1e-10)
+                        weighted_flip_db = corr_flip_db + 7.5
+                        max_correlation_old = max(max_correlation_old, weighted_flip_db)
+
+                # Decide whether to keep mutation
+                # Accept if the mutated pattern has lower worst-case correlation than original
+                if max_correlation_new < max_correlation_old:
+                    # Improvement! Keep the mutation
+                    pattern_set[pattern_idx] = mutated_pattern
+
+                    # Update global best score periodically (every 100 iterations)
+                    # by checking the actual worst case across ALL patterns
+                    if current_iteration % 100 == 0:
+                        actual_worst = -100.0
+                        for i in range(128):
+                            for j in range(i + 1, 128):
+                                pi = pattern_set[i].astype(np.float32) - 0.5
+                                pj = pattern_set[j].astype(np.float32) - 0.5
+
+                                # Normal
+                                corr = np.abs(np.dot(pi, pj))
+                                corr_db = 20 * np.log10(corr / len(pi) + 1e-10)
+                                actual_worst = max(actual_worst, corr_db)
+
+                                # Flip
+                                corr_f = np.abs(np.dot(pi, -pj))
+                                corr_f_db = 20 * np.log10(corr_f / len(pi) + 1e-10)
+                                actual_worst = max(actual_worst, corr_f_db + 7.5)
+
+                        best_score = actual_worst
+
                 elif temperature > min_temperature:
                     # Sometimes accept worse solutions based on temperature
-                    delta = max_correlation - best_score
+                    delta = max_correlation_new - max_correlation_old
                     probability = np.exp(-delta / temperature)
                     if np.random.random() < probability:
-                        accept = True
-
-                if not accept:
-                    # Revert mutation
-                    pattern_set[pattern_idx] = original_pattern
+                        pattern_set[pattern_idx] = mutated_pattern
 
                 # Cool down
                 temperature = max(min_temperature, temperature * cooling_rate)
