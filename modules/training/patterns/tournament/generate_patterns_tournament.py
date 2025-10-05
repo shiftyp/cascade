@@ -42,7 +42,7 @@ class TournamentRunner:
             default_path = Path(__file__).parent / 'config' / 'tournament.yaml'
             if default_path.exists():
                 config_file = str(default_path)
-                print(f"Using default config: {config_file}")
+                # Don't print during init to avoid corrupting Rich UI
 
         default_config = {
             'tournament': {
@@ -85,7 +85,7 @@ class TournamentRunner:
         }
 
         if config_file and Path(config_file).exists():
-            print(f"Loading config from: {config_file}")
+            # Don't print during loading to avoid corrupting Rich UI
             with open(config_file, 'r') as f:
                 user_config = yaml.safe_load(f)
                 # Merge with defaults
@@ -95,13 +95,15 @@ class TournamentRunner:
                     else:
                         default_config[section] = user_config[section]
 
-                # Show what was loaded
+                # Store loaded config info for later logging
+                default_config['_config_file'] = config_file
                 if 'tournament' in user_config:
                     budget = user_config['tournament'].get('total_compute_budget')
                     if budget:
-                        print(f"  Loaded compute budget: {budget:,}")
+                        default_config['_loaded_budget'] = budget
         elif config_file:
-            print(f"Warning: Config file not found: {config_file}")
+            # Store warning for later display
+            default_config['_config_warning'] = f"Config file not found: {config_file}"
 
         return default_config
 
@@ -153,7 +155,8 @@ class TournamentRunner:
         """Unified logging callback"""
         if self.logger:
             self.logger.log(message, level=level)
-        else:
+        elif self.config.get('ui', {}).get('type', 'rich') != 'rich':
+            # Only print if not using Rich UI
             print(f"[{level}] {message}")
 
     def run_tournament(self):
@@ -191,16 +194,19 @@ class TournamentRunner:
 
     def run(self):
         """Main execution method"""
-        print("=" * 60)
-        print("CASCADE Pattern Tournament Generator")
-        print("=" * 60)
-        print(f"Configuration:")
-        print(f"  Trials: {self.config.get('tournament', {}).get('initial_trials', 8)}")
-        print(f"  Budget: {self.config.get('tournament', {}).get('total_compute_budget', 2_000_000):,} iterations")
-        print(f"  P-cores: {self.config.get('hardware', {}).get('num_p_cores', 8)}")
-        print(f"  UI: {self.config.get('ui', {}).get('type', 'rich')}")
-        print("=" * 60)
-        print()
+        # Only print to console if not using Rich UI
+        ui_type = self.config.get('ui', {}).get('type', 'rich')
+        if ui_type != 'rich':
+            print("=" * 60)
+            print("CASCADE Pattern Tournament Generator")
+            print("=" * 60)
+            print(f"Configuration:")
+            print(f"  Trials: {self.config.get('tournament', {}).get('initial_trials', 8)}")
+            print(f"  Budget: {self.config.get('tournament', {}).get('total_compute_budget', 2_000_000):,} iterations")
+            print(f"  P-cores: {self.config.get('hardware', {}).get('num_p_cores', 8)}")
+            print(f"  UI: {ui_type}")
+            print("=" * 60)
+            print()
 
         # Setup components
         self.setup_components()
@@ -220,7 +226,9 @@ class TournamentRunner:
                 refresh_rate = self.config.get('ui', {}).get('refresh_rate', 1.0)
                 self.dashboard.run(refresh_rate=refresh_rate)
             except KeyboardInterrupt:
-                print("\nStopping tournament...")
+                # Don't print when using Rich UI - it will handle the display
+                if self.config.get('ui', {}).get('type', 'rich') != 'rich':
+                    print("\nStopping tournament...")
                 self.stop()
         else:
             # No UI - just wait for tournament to finish
@@ -239,7 +247,9 @@ class TournamentRunner:
 
     def signal_handler(self, signum, frame):
         """Handle termination signals"""
-        print(f"\nReceived signal {signum}, stopping...")
+        # Don't print when using Rich UI
+        if self.config.get('ui', {}).get('type', 'rich') != 'rich':
+            print(f"\nReceived signal {signum}, stopping...")
         self.stop()
         sys.exit(0)
 

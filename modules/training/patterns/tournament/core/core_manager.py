@@ -137,7 +137,8 @@ class CoreManager:
             return True
 
         except Exception as e:
-            print(f"Failed to set CPU affinity: {e}")
+            # Log error silently to avoid corrupting Rich UI
+            pass
             return False
 
     def rotate_core_assignments(self) -> Dict[int, List[int]]:
@@ -202,10 +203,11 @@ class CoreManager:
                 'sub_processor', 'cpmincores', '100'
             ], capture_output=True)
 
-            print("Windows power optimizations applied")
+            # Success - log silently
 
         except Exception as e:
-            print(f"Failed to apply Windows optimizations: {e}")
+            # Log error silently to avoid corrupting Rich UI
+            pass
 
     def optimize_for_linux(self):
         """Apply Linux-specific optimizations"""
@@ -228,10 +230,11 @@ class CoreManager:
                         capture_output=True
                     )
 
-            print("Linux CPU governor set to performance")
+            # Success - log silently
 
         except Exception as e:
-            print(f"Failed to apply Linux optimizations: {e}")
+            # Log error silently to avoid corrupting Rich UI
+            pass
 
     def configure_numa_and_cache(self):
         """Configure NUMA and cache optimizations"""
@@ -251,7 +254,8 @@ class CoreManager:
             os.environ['OMP_DYNAMIC'] = 'FALSE'
 
         except Exception as e:
-            print(f"Failed to configure NUMA/cache: {e}")
+            # Log error silently to avoid corrupting Rich UI
+            pass
 
     def get_core_temperature(self, core_id: int) -> Optional[float]:
         """Get temperature of a specific core"""
@@ -350,8 +354,10 @@ class CoreManager:
 
         self.configure_numa_and_cache()
 
-        print(f"Core manager initialized:")
-        print(f"  Platform: {self.platform}")
-        print(f"  P-cores: {self.p_core_ids}")
-        print(f"  E-cores: {self.e_core_ids[:4]}... ({len(self.e_core_ids)} total)")
-        print(f"  Rotation: {'Enabled' if self.rotate_cores else 'Disabled'}")
+        # Store initialization info for logging (don't print to avoid corrupting Rich UI)
+        self.init_info = {
+            'platform': self.platform,
+            'p_cores': self.p_core_ids,
+            'e_cores': len(self.e_core_ids),
+            'rotation': self.rotate_cores
+        }
