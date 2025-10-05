@@ -3,14 +3,14 @@
 
 tournament:
   initial_trials: 8              # Start with 8 scout trials
-  total_compute_budget: 3200000  # Total iterations across all trials
-  min_iterations_before_elimination: 50000  # Give trials fair chance
-  evaluation_interval: 10000     # Check every 10k iterations
+  total_compute_budget: 4800000  # Total iterations across all trials (4.8M / 8 = 600k per trial avg)
+  min_iterations_before_elimination: 200000  # Give trials fair chance (200k before elimination)
+  evaluation_interval: 50000     # Check every 50k iterations
   checkpoint_dir: ./checkpoints  # Where to save checkpoints
 
 elimination:
   score_gap_threshold: 3.0       # Eliminate if >3 dB behind leader
-  stagnation_window: 30000       # Iterations without improvement
+  stagnation_window: 100000      # Iterations without improvement (increased for 16 patterns)
   convergence_threshold: 0.001   # Minimum convergence rate
   protect_top_n: 2               # Always keep top 2 trials
   minimum_diversity: 3           # Keep at least 3 trials

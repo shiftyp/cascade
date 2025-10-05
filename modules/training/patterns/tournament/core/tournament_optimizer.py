@@ -338,7 +338,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         min_temperature = 0.01
     
         # Run optimization iterations
-        iterations_per_update = max(100, iterations // 100)  # Update at most 100 times
+        # Return results more frequently for live dashboard updates (every 10k iterations)
+        iterations_per_update = min(10000, iterations // 5)  # Update at least 5 times, every 10k max
         current_iteration = start_iteration
         mutations_per_iteration = 10  # Test multiple mutations per iteration for better optimization
 
@@ -682,6 +683,7 @@ class DynamicTournamentOptimizer:
         """Run the tournament optimization"""
         self.start_time = datetime.now()
         self.initialize_trials()
+        self.last_checkpoint_poll = datetime.now()
 
         self.log_callback("=" * 60)
         self.log_callback("Starting CASCADE Pattern Tournament")
@@ -691,6 +693,12 @@ class DynamicTournamentOptimizer:
 
         # Main tournament loop
         while self.compute_used < self.total_budget and len(self.active_trials) > 0:
+            # Poll checkpoints for live updates (every 5 seconds)
+            if (datetime.now() - self.last_checkpoint_poll).total_seconds() >= 5:
+                for trial_id in self.active_trials:
+                    self._update_trial_from_checkpoint(trial_id)
+                self.last_checkpoint_poll = datetime.now()
+
             # Update phase
             self._update_phase()
 
@@ -727,10 +735,59 @@ class DynamicTournamentOptimizer:
             self.elimination_strategy.adjust_aggressiveness(new_phase)
             self.log_callback(f"\n>>> Entering {new_phase.upper()} phase\n")
 
+    def _update_trial_from_checkpoint(self, trial_id: int):
+        """Update trial statistics from its checkpoint file (for live updates)"""
+        trial = self.trials[trial_id]
+        checkpoint_file = self.checkpoint_dir / f"trial_{trial_id}" / "latest_checkpoint.pkl"
+
+        if checkpoint_file.exists():
+            try:
+                import pickle
+                with open(checkpoint_file, 'rb') as f:
+                    checkpoint = pickle.load(f)
+
+                # Update trial stats if checkpoint has newer data
+                if checkpoint.get('iteration', 0) > trial.iterations:
+                    trial.iterations = checkpoint['iteration']
+                    trial.best_score = float(checkpoint.get('best_score', trial.best_score))
+                    trial.current_score = trial.best_score
+
+                    # Update progress
+                    total_budget = trial.compute_budget + trial.bonus_budget
+                    trial.progress = trial.iterations / total_budget if total_budget > 0 else 0
+                    trial.calculate_eta(max(0, total_budget - trial.iterations))
+
+                    # Update convergence rate
+                    score_history = checkpoint.get('score_history', [])
+                    if len(score_history) > 10:
+                        recent = score_history[-10:]
+                        older = score_history[-20:-10] if len(score_history) >= 20 else score_history[:10]
+                        if all(np.isfinite(recent)) and all(np.isfinite(older)):
+                            import numpy as np
+                            recent_avg = np.mean(recent)
+                            older_avg = np.mean(older)
+                            score_diff = older_avg - recent_avg
+                            trial.convergence_rate = max(0.001, abs(score_diff) / 10)
+
+                    # Update global best
+                    if trial.best_score < self.global_best_score:
+                        self.global_best_score = trial.best_score
+                        self.global_best_trial_id = trial_id
+                        trial.is_best = True
+                        for t in self.trials:
+                            if t.trial_id != trial_id:
+                                t.is_best = False
+            except Exception:
+                pass  # Ignore checkpoint read errors
+
     def _run_trial_batch(self):
         """Run all active trials for eval_interval iterations"""
         if not self.active_trials:
             return
+
+        # Update live statistics from checkpoints before running new batch
+        for trial_id in self.active_trials:
+            self._update_trial_from_checkpoint(trial_id)
 
         # Prepare batch execution
         batch_size = min(len(self.active_trials), 8)  # Max 8 parallel workers

@@ -39,6 +39,19 @@ pip install rich psutil numpy pyyaml
 conda install -c intel numpy scipy mkl
 ```
 
+### Windows Users
+
+For best Rich UI experience on Windows:
+1. **Use Windows Terminal** (recommended) - Download from Microsoft Store
+2. **Or use WSL2** - Linux environment on Windows
+3. If stuck with PowerShell: Dashboard will use slower refresh (2s) to reduce blinking
+
+```powershell
+# Windows Terminal: Works perfectly
+# PowerShell: May have screen flicker (use --refresh-rate 2)
+python generate_patterns_tournament.py --refresh-rate 2
+```
+
 ## Quick Start
 
 ### Default Tournament Mode (Recommended)

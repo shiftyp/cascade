@@ -343,13 +343,18 @@ class PatternGeneratorDashboard:
         self.console.clear()
         self.console.show_cursor(False)
 
+        # Detect Windows for different rendering strategy
+        import platform
+        is_windows = platform.system() == "Windows"
+
         try:
             with Live(
                 self.layout,
-                refresh_per_second=1.0 / refresh_rate,
-                screen=True,
+                refresh_per_second=1.0 / max(refresh_rate, 2.0) if is_windows else 1.0 / refresh_rate,
+                screen=not is_windows,  # Disable screen mode on Windows to reduce blinking
                 console=self.console,
-                transient=False
+                transient=False,
+                auto_refresh=True
             ) as live:
                 while self.running:
                     # Update all panels

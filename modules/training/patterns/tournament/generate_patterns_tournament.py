@@ -47,14 +47,14 @@ class TournamentRunner:
         default_config = {
             'tournament': {
                 'initial_trials': 8,
-                'total_compute_budget': 2_000_000,
-                'min_iterations_before_elimination': 50_000,
-                'evaluation_interval': 10_000,
+                'total_compute_budget': 4_800_000,
+                'min_iterations_before_elimination': 200_000,
+                'evaluation_interval': 50_000,
                 'checkpoint_dir': './checkpoints'
             },
             'elimination': {
                 'score_gap_threshold': 3.0,
-                'stagnation_window': 30_000,
+                'stagnation_window': 100_000,
                 'convergence_threshold': 0.001,
                 'protect_top_n': 2,
                 'minimum_diversity': 3,
@@ -313,7 +313,7 @@ def main():
     parser.add_argument(
         '--budget',
         type=int,
-        default=2_000_000,
+        default=4_800_000,
         help='Total compute budget (iterations)'
     )
 
@@ -335,14 +335,14 @@ def main():
     parser.add_argument(
         '--min-iterations',
         type=int,
-        default=50_000,
+        default=200_000,
         help='Minimum iterations before elimination'
     )
 
     parser.add_argument(
         '--eval-interval',
         type=int,
-        default=10_000,
+        default=50_000,
         help='Evaluation interval'
     )
 
