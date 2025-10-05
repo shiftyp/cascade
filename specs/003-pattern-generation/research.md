@@ -175,3 +175,101 @@ correlation_db = 20 * log10(correlation / 32)
 - Alternative: Cloud 32×100K for users without capable hardware
 
 **Reference**: Platform performance comparison and ROI analysis (2025-10-04)
+
+---
+
+### 7. FSK Order Selection: 2-FSK vs 4-FSK (FINAL - 2025-10-04)
+
+**Decision**: Use 2-FSK (2 adjacent tones per pattern) for optimal λ minimization
+
+**Capacity with 150-tone grid (3 kHz SSB channel)**:
+
+| FSK Order | Tones/Pattern | Non-Overlap Capacity | Avg λ | BPSK % |
+|-----------|---------------|---------------------|-------|---------|
+| **2-FSK** | 2 (64 Hz) | **75 patterns** | **0.08-0.10** | **59%** ✅ |
+| 4-FSK | 4 (128 Hz) | 37 patterns | 0.17 | 29% |
+| 6-FSK | 6 (192 Hz) | 25 patterns | 0.22-0.25 | 20% |
+
+**Analysis**:
+```
+To achieve 128 patterns:
+- 2-FSK: 75 frequency-orthogonal (λ=0) + 53 IQ-orthogonal (λ=0.15-0.30)
+- 4-FSK: 37 frequency-orthogonal (λ=0) + 91 IQ-orthogonal (λ=0.15-0.35)
+- 6-FSK: 25 frequency-orthogonal (λ=0) + 103 IQ-orthogonal (λ=0.20-0.40)
+
+More tones per pattern → less frequency diversity → more IQ complexity needed
+```
+
+**Why 2-FSK for emergency communications**:
+1. **Low-SNR performance**: λ=0.09 avg vs 0.17 (47% reduction)
+   - Can decode at 2-3 dB lower SNR
+   - Critical for weak/emergency paths
+2. **BPSK majority**: 59% patterns at λ=0 (vs 29% with 4-FSK)
+   - Maximum robustness for emergencies
+   - Better phase distortion tolerance
+3. **Equipment scalability**: Modular transmissions (1×, 2×, 4×, 8× 2-FSK)
+   - QRP: 1 pattern @ 44 bps
+   - Modern: 4 patterns @ 175 bps
+   - Premium: 8 patterns @ 350 bps
+4. **Backward compatible**: Legacy and SDR coexist naturally
+
+**Trade-off**: Reduced selective fading diversity (64 Hz vs 128 Hz span)
+- Compensated by +2-3 dB SNR margin from lower λ
+- Net effect: 2-FSK superior overall
+
+**Reference**: FSK order analysis, equipment scalability discussion (2025-10-04)
+
+---
+
+### 8. Equipment Targeting: QMX as Baseline (FINAL - 2025-10-04)
+
+**Decision**: Design CASCADE for QMX-class SDR ($150) as primary target, support legacy as fallback
+
+**Equipment cost trends**:
+```
+Entry-level SDR:
+2020: $550 (Hermes Lite 2)
+2025: $150 (QMX assembled)
+2030: $75-100 (projected)
+
+Traditional HF:
+Flat ($600-1400) or rising
+
+Crossover: SDR now cheaper than legacy for new purchases
+```
+
+**Market projections**:
+```
+SDR adoption (digital mode users):
+2025: 25-30%
+2027: 40-50%
+2030: 60-70%
+
+By 2030: SDR is majority among active digital mode operators
+```
+
+**QMX advantages for CASCADE** ($180 with GPS):
+1. 200 sym/s capable (NN-enhanced) → 44-175 bps
+2. GPS-disciplined (±0.1 Hz) → enables 20 Hz tone spacing
+3. IQ mode (15-20 kHz BW) → multi-band monitoring
+4. Cost ($180) < legacy maintenance
+5. Modular 2-FSK scaling (1×, 2×, 4× transmissions)
+
+**Dual-mode strategy**:
+- **SDR mode** (primary): 200 sym/s, 20 Hz spacing, full 3 kHz channel
+  - Equipment: QMX ($180), modern SDR
+  - Market: 30% today → 60% by 2030
+  - Throughput: 44-350 bps
+
+- **Legacy mode** (fallback): 40 sym/s, legacy-compatible
+  - Equipment: ANY SSB radio since 1970
+  - Market: 70% today → 30% by 2030 (still important!)
+  - Throughput: 8.75-17.5 bps
+  - Use case: Emergency fallback, universal participation
+
+**Cognitive coexistence**: Legacy and SDR share same 3 kHz channel
+- Kernel detects equipment type
+- Coordinates assignments to avoid collisions
+- Network capacity improves as SDR adoption grows
+
+**Reference**: QMX specification analysis, market research, cost-benefit for EMCOMM deployment (2025-10-04)

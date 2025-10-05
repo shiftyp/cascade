@@ -14,7 +14,7 @@ def test_validate_checks_all_pairs():
     patterns = []
     for i in range(4):
         # Each pattern uses a different tone for orthogonality
-        freq_seq = np.full(32, i % 4, dtype='uint8')
+        freq_seq = np.full(32, i % 2, dtype='uint8')  # 2-FSK: alternate between 0 and 1
         iq_traj = np.ones(32, dtype='complex64')
         patterns.append(Pattern(
             pattern_id=i,
@@ -34,10 +34,10 @@ def test_validate_checks_all_pairs():
 
 def test_validate_returns_true_for_good_patterns():
     """T007: Returns True only if ALL pairs <-37.5 dB"""
-    # Create orthogonal patterns (different tones)
+    # Create orthogonal patterns (different tones - 2-FSK has only 2 tone options)
     patterns = []
-    for i in range(4):
-        freq_seq = np.full(32, i, dtype='uint8')  # Each uses different tone
+    for i in range(2):
+        freq_seq = np.full(32, i % 2, dtype='uint8')  # 2-FSK: only tones 0 or 1  # Use tone 0 and tone 1
         iq_traj = np.ones(32, dtype='complex64')
         patterns.append(Pattern(
             pattern_id=i,
@@ -48,7 +48,7 @@ def test_validate_returns_true_for_good_patterns():
 
     passes, stats = validate_orthogonality(patterns, target_db=-37.5)
 
-    # All patterns use different tones, should be highly orthogonal
+    # Patterns use different tones (0 vs 1), should be highly orthogonal
     assert passes is True
     assert stats['min_correlation_db'] < -37.5
 
@@ -58,7 +58,7 @@ def test_validate_returns_false_for_bad_patterns():
     # Create mostly orthogonal patterns, but two identical
     patterns = []
     for i in range(3):
-        freq_seq = np.full(32, i, dtype='uint8')
+        freq_seq = np.full(32, i % 2, dtype='uint8')  # 2-FSK: only tones 0 or 1
         iq_traj = np.ones(32, dtype='complex64')
         patterns.append(Pattern(
             pattern_id=i,
@@ -119,7 +119,7 @@ def test_validate_statistics_returned():
     """T007: Verify statistics dict contains min/max/mean"""
     patterns = []
     for i in range(3):
-        freq_seq = np.full(32, i, dtype='uint8')
+        freq_seq = np.full(32, i % 2, dtype='uint8')  # 2-FSK: only tones 0 or 1
         iq_traj = np.ones(32, dtype='complex64')
         patterns.append(Pattern(
             pattern_id=i,

@@ -79,7 +79,7 @@ def optimize_pattern(
             # Mutate tone sequence (70% of mutations)
             new_freq = current_freq.copy()
             mut_index = rng.randint(0, 32)
-            new_freq[mut_index] = rng.randint(0, 4)
+            new_freq[mut_index] = rng.randint(0, 2)  # 2-FSK: tone indices 0-1
             new_lambda = current_lambda
         else:
             # Mutate λ (30% of mutations)
@@ -288,7 +288,7 @@ def optimize_pattern_direct_iq(
             # Mutate frequency sequence (50%)
             new_freq = current_freq.copy()
             mut_index = rng.randint(0, 32)
-            new_freq[mut_index] = rng.randint(0, 4)
+            new_freq[mut_index] = rng.randint(0, 2)  # 2-FSK: tone indices 0-1
             new_iq = current_iq.copy()
 
         else:
@@ -516,7 +516,7 @@ def optimize_pattern_two_phase(
         # Mutate frequency only
         new_freq = current_freq.copy()
         mut_index = rng.randint(0, 32)
-        new_freq[mut_index] = rng.randint(0, 4)
+        new_freq[mut_index] = rng.randint(0, 2)  # 2-FSK: tone indices 0-1
 
         new_pattern = Pattern(
             pattern_id=pattern_id,
@@ -586,7 +586,7 @@ def optimize_pattern_two_phase(
             # Occasional frequency adjustment
             new_freq = current_freq.copy()
             mut_index = rng.randint(0, 32)
-            new_freq[mut_index] = rng.randint(0, 4)
+            new_freq[mut_index] = rng.randint(0, 2)  # 2-FSK: tone indices 0-1
             new_iq = current_iq.copy()
         else:
             # IQ mutation (primary)

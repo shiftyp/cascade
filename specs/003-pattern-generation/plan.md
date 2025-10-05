@@ -211,13 +211,15 @@ python -m modules.training.patterns.validator cascade_patterns_128.bin
 **Estimated**: 47 tasks (41 core + 6 optimization enhancements)
 
 **Timeline**:
-- Development: 22-27 hours (includes two-phase + phase-aware implementation)
+- Development: 22-27 hours (includes two-phase + phase-aware + 2-FSK implementation)
 - Testing: 3-5 hours
-- **Production generation (optimal)**: 72-96 hours local (8 trials × 400K iterations)
-  - Expected: -42.6 dB, λ=0.17, $0 cost
+- **Production generation (optimal)**: 72-96 hours local (8 trials × 400K, 2-FSK architecture)
+  - Expected: -42.6 to -43 dB separation, **λ=0.08-0.10**, $0 cost
+  - BPSK patterns: 75 (59%) - exceptional low-SNR robustness
   - Best for: Core Ultra 7 265K, Ryzen 9, similar high-end CPUs
-- **Production generation (fast)**: 30-40 hours Fly.io (32 workers × 100K iterations)
-  - Expected: -40.7 dB, λ=0.22, $9.60 cost
+  - Equipment throughput: QMX @ 200 sym/s = 44-175 bps (1× to 4× 2-FSK)
+- **Production generation (fast)**: 30-40 hours Fly.io (32 workers × 100K, 2-FSK)
+  - Expected: -40.7 dB, λ=0.14-0.16, $9.60 cost
   - Best for: Users without capable local hardware or need faster results
 
 ---

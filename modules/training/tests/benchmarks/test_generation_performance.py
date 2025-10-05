@@ -111,7 +111,7 @@ def test_validation_time():
 
     patterns = []
     for i in range(64):
-        freq = np.random.randint(0, 4, size=32, dtype='uint8')
+        freq = np.random.randint(0, 2, size=32, dtype='uint8')  # 2-FSK
         iq = np.ones(32, dtype='complex64')
         patterns.append(Pattern(i, freq, iq, 0.0))
 
@@ -136,7 +136,7 @@ def test_visualization_generation_time():
     # Create test patterns
     patterns = []
     for i in range(16):
-        freq = np.random.randint(0, 4, size=32, dtype='uint8')
+        freq = np.random.randint(0, 2, size=32, dtype='uint8')  # 2-FSK
         iq = (np.random.randn(32) + 1j * np.random.randn(32)).astype('complex64')
         iq = iq / np.sqrt(np.mean(np.abs(iq)**2))
         patterns.append(Pattern(i, freq, iq, i * 0.05))

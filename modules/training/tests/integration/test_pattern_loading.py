@@ -19,7 +19,7 @@ def test_pattern_loading_from_file():
     # Create test patterns
     patterns = []
     for i in range(16):
-        freq = np.random.randint(0, 4, size=32, dtype='uint8')
+        freq = np.random.randint(0, 2, size=32, dtype='uint8')  # 2-FSK
         iq = (np.random.randn(32) + 1j * np.random.randn(32)).astype('complex64')
         # Normalize
         iq = iq / np.sqrt(np.mean(np.abs(iq)**2))
@@ -62,7 +62,7 @@ def test_pattern_selection_by_lambda():
     # Create patterns with different lambda values
     patterns = []
     for i in range(20):
-        freq = np.random.randint(0, 4, size=32, dtype='uint8')
+        freq = np.random.randint(0, 2, size=32, dtype='uint8')  # 2-FSK
         iq = np.ones(32, dtype='complex64')
         # Distribute lambdas: 0.0, 0.1, 0.2, ..., 0.9, then repeat
         lam = (i % 10) * 0.1
