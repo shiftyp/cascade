@@ -3,7 +3,7 @@
 
 tournament:
   initial_trials: 8              # Start with 8 scout trials
-  total_compute_budget: 2000000  # Total iterations across all trials
+  total_compute_budget: 3200000  # Total iterations across all trials
   min_iterations_before_elimination: 50000  # Give trials fair chance
   evaluation_interval: 10000     # Check every 10k iterations
   checkpoint_dir: ./checkpoints  # Where to save checkpoints

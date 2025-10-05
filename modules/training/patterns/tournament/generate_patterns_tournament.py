@@ -35,8 +35,15 @@ class TournamentRunner:
         self.core_manager = None
         self.running = False
 
-    def load_config(self, config_file: str) -> dict:
+    def load_config(self, config_file: str = None) -> dict:
         """Load configuration from file or use defaults"""
+        # Check for default config file if none specified
+        if not config_file:
+            default_path = Path(__file__).parent / 'config' / 'tournament.yaml'
+            if default_path.exists():
+                config_file = str(default_path)
+                print(f"Using default config: {config_file}")
+
         default_config = {
             'tournament': {
                 'initial_trials': 8,
@@ -78,6 +85,7 @@ class TournamentRunner:
         }
 
         if config_file and Path(config_file).exists():
+            print(f"Loading config from: {config_file}")
             with open(config_file, 'r') as f:
                 user_config = yaml.safe_load(f)
                 # Merge with defaults
@@ -86,6 +94,14 @@ class TournamentRunner:
                         default_config[section].update(user_config[section])
                     else:
                         default_config[section] = user_config[section]
+
+                # Show what was loaded
+                if 'tournament' in user_config:
+                    budget = user_config['tournament'].get('total_compute_budget')
+                    if budget:
+                        print(f"  Loaded compute budget: {budget:,}")
+        elif config_file:
+            print(f"Warning: Config file not found: {config_file}")
 
         return default_config
 
@@ -393,10 +409,12 @@ def main():
 
     args = parser.parse_args()
 
-    # Create config from arguments
-    if args.config:
-        runner = TournamentRunner(args.config)
-    else:
+    # Always create runner (loads default config if available)
+    runner = TournamentRunner(args.config)
+
+    # Override with command-line arguments only if they differ from defaults
+    # This allows the YAML file to take precedence over hardcoded defaults
+    if not args.config:
         # Parse P-cores argument
         p_cores = args.p_cores
         if '-' in p_cores:
@@ -405,43 +423,44 @@ def main():
         else:
             num_p_cores = int(p_cores)
 
-        # Build config from command-line arguments
-        config = {
-            'tournament': {
-                'initial_trials': args.trials,
-                'total_compute_budget': args.budget,
-                'min_iterations_before_elimination': args.min_iterations,
-                'evaluation_interval': args.eval_interval,
-                'checkpoint_dir': args.checkpoint_dir
-            },
-            'elimination': {
-                'aggressive_mode': args.aggressive_elimination,
-                'minimum_diversity': args.min_survivors
-            },
-            'pattern': {
-                'flip_weight': args.flip_weight
-            },
-            'hardware': {
-                'num_p_cores': num_p_cores,
-                'rotate_cores': args.rotate_cores,
-                'execution_mode': args.execution_mode
-            },
-            'ui': {
-                'type': args.ui,
-                'refresh_rate': args.refresh_rate
-            },
-            'logging': {
-                'log_dir': args.log_dir
-            }
-        }
+        # Only override if values were explicitly provided (differ from defaults)
+        if args.trials != 8:
+            runner.config.setdefault('tournament', {})['initial_trials'] = args.trials
 
-        runner = TournamentRunner()
-        # Deep merge with defaults
-        for section, values in config.items():
-            if section in runner.config:
-                runner.config[section].update(values)
-            else:
-                runner.config[section] = values
+        if args.budget != 2000000:
+            runner.config.setdefault('tournament', {})['total_compute_budget'] = args.budget
+
+        if args.min_iterations != 50000:
+            runner.config.setdefault('tournament', {})['min_iterations_before_elimination'] = args.min_iterations
+
+        if args.eval_interval != 10000:
+            runner.config.setdefault('tournament', {})['evaluation_interval'] = args.eval_interval
+
+        if args.checkpoint_dir != './checkpoints':
+            runner.config.setdefault('tournament', {})['checkpoint_dir'] = args.checkpoint_dir
+
+        if args.aggressive_elimination:
+            runner.config.setdefault('elimination', {})['aggressive_mode'] = True
+
+        if args.min_survivors != 2:
+            runner.config.setdefault('elimination', {})['minimum_diversity'] = args.min_survivors
+
+        if args.flip_weight != 0.6:
+            runner.config.setdefault('pattern', {})['flip_weight'] = args.flip_weight
+
+        # Always set hardware config from command line
+        runner.config.setdefault('hardware', {})['num_p_cores'] = num_p_cores
+        runner.config.setdefault('hardware', {})['rotate_cores'] = args.rotate_cores
+        runner.config.setdefault('hardware', {})['execution_mode'] = args.execution_mode
+
+        if args.ui != 'rich':
+            runner.config.setdefault('ui', {})['type'] = args.ui
+
+        if args.refresh_rate != 1.0:
+            runner.config.setdefault('ui', {})['refresh_rate'] = args.refresh_rate
+
+        if args.log_dir != './logs':
+            runner.config.setdefault('logging', {})['log_dir'] = args.log_dir
 
     # Run the tournament
     runner.run()
