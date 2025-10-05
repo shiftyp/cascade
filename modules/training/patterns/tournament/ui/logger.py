@@ -34,12 +34,14 @@ class DualLogger:
         log_dir: str = "./logs",
         ui_dashboard=None,
         file_level: int = logging.DEBUG,
-        ui_level: str = "INFO"
+        ui_level: str = "INFO",
+        use_console: bool = True
     ):
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(exist_ok=True, parents=True)
         self.ui_dashboard = ui_dashboard
         self.ui_level = ui_level
+        self.use_console = use_console
 
         # Create timestamp for this run
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -82,13 +84,15 @@ class DualLogger:
 
         self.file_logger.addHandler(file_handler)
 
-        # Console handler for debugging
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.WARNING)
-        console_handler.setFormatter(
-            logging.Formatter('%(levelname)-8s | %(message)s')
-        )
-        self.file_logger.addHandler(console_handler)
+        # Console handler for debugging - ONLY if not using Rich UI
+        # Rich UI handles its own display, console output corrupts it
+        if self.use_console:
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.WARNING)
+            console_handler.setFormatter(
+                logging.Formatter('%(levelname)-8s | %(message)s')
+            )
+            self.file_logger.addHandler(console_handler)
 
         # Log initialization
         self.file_logger.info("=" * 80)

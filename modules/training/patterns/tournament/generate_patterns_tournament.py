@@ -126,12 +126,14 @@ class TournamentRunner:
         )
         self.core_manager.apply_optimizations()
 
-        # Initialize logger
+        # Initialize logger (pass UI type to control console output)
+        ui_type = self.config.get('ui', {}).get('type', 'rich')
         self.logger = DualLogger(
             log_dir=log_dir,
             ui_dashboard=None,  # Will set after dashboard creation
             file_level=logging_config.get('file_level', 'DEBUG'),
-            ui_level=logging_config.get('ui_level', 'INFO')
+            ui_level=logging_config.get('ui_level', 'INFO'),
+            use_console=(ui_type != 'rich')  # Disable console output for Rich UI
         )
 
         # Initialize optimizer
