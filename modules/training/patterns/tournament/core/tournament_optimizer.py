@@ -172,21 +172,30 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write("No checkpoint found, generating initial patterns\n")
                 f.flush()
 
-            # Generate initial 128 frequency patterns (2-FSK binary sequences)
+            # Generate initial 128 CASCADE patterns (2-FSK binary sequences)
+            # CASCADE: 48 beacon patterns + 80 message patterns = 128 total
             pattern_set = []
             pattern_length = 32  # 32 symbols at 200 symbols/second = 160ms (CASCADE standard)
 
             with open(debug_file_path, 'a') as f:
-                f.write(f"Generating {128} patterns of length {pattern_length}\n")
+                f.write(f"Generating 128 CASCADE patterns (48 beacon + 80 message)\n")
+                f.write(f"Pattern length: {pattern_length} symbols (160ms)\n")
+                f.write(f"Modulation: 2-FSK (binary frequency sequences)\n")
                 f.flush()
 
-            # Use Zadoff-Chu sequences as base for first 31 patterns
-            for i in range(31):
-                freq_seq = generate_zadoff_chu_pattern(u=i, N=pattern_length)
+            # Beacon patterns (0-47): Use Zadoff-Chu as base for good auto-correlation
+            for i in range(48):
+                if i < 31:  # We have 31 unique Zadoff-Chu roots
+                    freq_seq = generate_zadoff_chu_pattern(u=i, N=pattern_length)
+                else:
+                    # Generate pseudo-random beacon patterns for remaining
+                    np.random.seed(seed + i)  # Deterministic generation
+                    freq_seq = np.random.randint(0, 2, pattern_length, dtype=np.uint8)
                 pattern_set.append(freq_seq)
 
-            # Random patterns for the rest
-            for i in range(31, 128):
+            # Message patterns (48-127): Start with random, will optimize
+            for i in range(48, 128):
+                np.random.seed(seed + i)  # Deterministic generation
                 freq_seq = np.random.randint(0, 2, pattern_length, dtype=np.uint8)
                 pattern_set.append(freq_seq)
 
@@ -196,6 +205,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.flush()
 
             # Calculate initial score (max cross-correlation across all pairs)
+            # This is the REAL CASCADE correlation calculation
             max_correlation = -100.0
             correlation_count = 0
 
@@ -204,16 +214,19 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     pattern_i = pattern_set[i].astype(np.float32) - 0.5
                     pattern_j = pattern_set[j].astype(np.float32) - 0.5
 
-                    # Normal correlation
-                    corr_normal = np.abs(np.dot(pattern_i, pattern_j))
-                    corr_normal_db = 20 * np.log10(corr_normal / pattern_length + 1e-10)
+                    # Normal correlation - check ALL time shifts for CASCADE
+                    # This is computationally intensive as required for real patterns
+                    xcorr_normal = np.correlate(pattern_i, pattern_j, mode='full')
+                    peak_normal = np.max(np.abs(xcorr_normal))
+                    corr_normal_db = 20 * np.log10(peak_normal / pattern_length + 1e-10)
                     max_correlation = max(max_correlation, corr_normal_db)
 
-                    # Flip correlation (FSK inversion)
+                    # Flip correlation (FSK inversion) - also check all shifts
                     pattern_j_flip = -pattern_j
-                    corr_flip = np.abs(np.dot(pattern_i, pattern_j_flip))
-                    corr_flip_db = 20 * np.log10(corr_flip / pattern_length + 1e-10)
-                    # Weight flip correlation (target -30dB vs -37.5dB)
+                    xcorr_flip = np.correlate(pattern_i, pattern_j_flip, mode='full')
+                    peak_flip = np.max(np.abs(xcorr_flip))
+                    corr_flip_db = 20 * np.log10(peak_flip / pattern_length + 1e-10)
+                    # Weight flip correlation (target -30dB vs -37.5dB for CASCADE)
                     max_correlation = max(max_correlation, corr_flip_db + 7.5)
 
                     correlation_count += 2
@@ -263,8 +276,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 mutated_pattern = original_pattern.copy()
                 mutated_pattern[flip_positions] = 1 - mutated_pattern[flip_positions]
 
-                # Calculate ONLY correlations involving the mutated pattern
-                # This is much more targeted and likely to show improvement
+                # Calculate CASCADE correlations for the mutated pattern
+                # Full cross-correlation with all time shifts - this is the REAL computation
                 max_correlation_new = -100.0
 
                 pattern_mut = mutated_pattern.astype(np.float32) - 0.5
@@ -273,16 +286,18 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     if j != pattern_idx:
                         pattern_j = pattern_set[j].astype(np.float32) - 0.5
 
-                        # Normal correlation
-                        corr_normal = np.abs(np.dot(pattern_mut, pattern_j))
-                        corr_normal_db = 20 * np.log10(corr_normal / len(pattern_mut) + 1e-10)
+                        # Normal correlation - CASCADE requires checking all time shifts
+                        xcorr_normal = np.correlate(pattern_mut, pattern_j, mode='full')
+                        peak_normal = np.max(np.abs(xcorr_normal))
+                        corr_normal_db = 20 * np.log10(peak_normal / len(pattern_mut) + 1e-10)
                         max_correlation_new = max(max_correlation_new, corr_normal_db)
 
-                        # Flip correlation
+                        # Flip correlation (2-FSK inversion for CASCADE)
                         pattern_j_flip = -pattern_j
-                        corr_flip = np.abs(np.dot(pattern_mut, pattern_j_flip))
-                        corr_flip_db = 20 * np.log10(corr_flip / len(pattern_mut) + 1e-10)
-                        weighted_flip_db = corr_flip_db + 7.5
+                        xcorr_flip = np.correlate(pattern_mut, pattern_j_flip, mode='full')
+                        peak_flip = np.max(np.abs(xcorr_flip))
+                        corr_flip_db = 20 * np.log10(peak_flip / len(pattern_mut) + 1e-10)
+                        weighted_flip_db = corr_flip_db + 7.5  # CASCADE weighting
                         max_correlation_new = max(max_correlation_new, weighted_flip_db)
 
                 # For comparison, calculate current pattern's worst correlation
@@ -293,15 +308,17 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     if j != pattern_idx:
                         pattern_j = pattern_set[j].astype(np.float32) - 0.5
 
-                        # Normal correlation
-                        corr_normal = np.abs(np.dot(pattern_old, pattern_j))
-                        corr_normal_db = 20 * np.log10(corr_normal / len(pattern_old) + 1e-10)
+                        # Normal correlation with all shifts
+                        xcorr_normal = np.correlate(pattern_old, pattern_j, mode='full')
+                        peak_normal = np.max(np.abs(xcorr_normal))
+                        corr_normal_db = 20 * np.log10(peak_normal / len(pattern_old) + 1e-10)
                         max_correlation_old = max(max_correlation_old, corr_normal_db)
 
                         # Flip correlation
                         pattern_j_flip = -pattern_j
-                        corr_flip = np.abs(np.dot(pattern_old, pattern_j_flip))
-                        corr_flip_db = 20 * np.log10(corr_flip / len(pattern_old) + 1e-10)
+                        xcorr_flip = np.correlate(pattern_old, pattern_j_flip, mode='full')
+                        peak_flip = np.max(np.abs(xcorr_flip))
+                        corr_flip_db = 20 * np.log10(peak_flip / len(pattern_old) + 1e-10)
                         weighted_flip_db = corr_flip_db + 7.5
                         max_correlation_old = max(max_correlation_old, weighted_flip_db)
 
@@ -311,26 +328,28 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     # Improvement! Keep the mutation
                     pattern_set[pattern_idx] = mutated_pattern
 
-                    # Update global best score periodically (every 100 iterations)
-                    # by checking the actual worst case across ALL patterns
-                    if current_iteration % 100 == 0:
-                        actual_worst = -100.0
-                        for i in range(128):
-                            for j in range(i + 1, 128):
-                                pi = pattern_set[i].astype(np.float32) - 0.5
-                                pj = pattern_set[j].astype(np.float32) - 0.5
+                # Update global best score periodically (every 10 iterations for accuracy)
+                # by checking the actual worst case across ALL patterns
+                if current_iteration % 10 == 0:
+                    actual_worst = -100.0
+                    for i in range(128):
+                        for j in range(i + 1, 128):
+                            pi = pattern_set[i].astype(np.float32) - 0.5
+                            pj = pattern_set[j].astype(np.float32) - 0.5
 
-                                # Normal
-                                corr = np.abs(np.dot(pi, pj))
-                                corr_db = 20 * np.log10(corr / len(pi) + 1e-10)
-                                actual_worst = max(actual_worst, corr_db)
+                            # Normal correlation with full convolution for accuracy
+                            corr = np.correlate(pi, pj, mode='full')
+                            max_corr = np.max(np.abs(corr))
+                            corr_db = 20 * np.log10(max_corr / len(pi) + 1e-10)
+                            actual_worst = max(actual_worst, corr_db)
 
-                                # Flip
-                                corr_f = np.abs(np.dot(pi, -pj))
-                                corr_f_db = 20 * np.log10(corr_f / len(pi) + 1e-10)
-                                actual_worst = max(actual_worst, corr_f_db + 7.5)
+                            # Flip correlation
+                            corr_f = np.correlate(pi, -pj, mode='full')
+                            max_corr_f = np.max(np.abs(corr_f))
+                            corr_f_db = 20 * np.log10(max_corr_f / len(pi) + 1e-10)
+                            actual_worst = max(actual_worst, corr_f_db + 7.5)
 
-                        best_score = actual_worst
+                    best_score = actual_worst
 
                 elif temperature > min_temperature:
                     # Sometimes accept worse solutions based on temperature
@@ -633,7 +652,15 @@ class DynamicTournamentOptimizer:
                             continue
 
                         # Submit trial for execution
-                        iterations_to_run = min(self.eval_interval, trial.compute_budget + trial.bonus_budget - trial.iterations)
+                        # First run: at least min_iterations (50k)
+                        # Subsequent runs: eval_interval (10k) chunks
+                        if trial.iterations == 0:
+                            iterations_to_run = max(self.min_iterations, self.eval_interval)
+                        else:
+                            iterations_to_run = min(
+                                self.eval_interval,
+                                trial.compute_budget + trial.bonus_budget - trial.iterations
+                            )
 
                         # Update trial status to running
                         trial.status = 'running'
@@ -706,9 +733,19 @@ class DynamicTournamentOptimizer:
 
                 try:
                     # Run the trial directly (no parallelism)
+                    # First run: at least min_iterations (50k)
+                    # Subsequent runs: eval_interval (10k) chunks
+                    if trial.iterations == 0:
+                        iterations_to_run = max(self.min_iterations, self.eval_interval)
+                    else:
+                        iterations_to_run = min(
+                            self.eval_interval,
+                            trial.compute_budget + trial.bonus_budget - trial.iterations
+                        )
+
                     result = run_single_trial_worker(
                         trial_id,
-                        min(self.eval_interval, trial.compute_budget + trial.bonus_budget - trial.iterations),
+                        iterations_to_run,
                         trial.seed,
                         str(self.checkpoint_dir),
                         trial.p_cores
