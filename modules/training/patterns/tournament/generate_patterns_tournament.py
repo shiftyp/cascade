@@ -91,37 +91,44 @@ class TournamentRunner:
 
     def setup_components(self):
         """Initialize all components"""
-        # Create directories
-        Path(self.config['tournament']['checkpoint_dir']).mkdir(parents=True, exist_ok=True)
-        Path(self.config['logging']['log_dir']).mkdir(parents=True, exist_ok=True)
+        # Create directories with safe access
+        tournament_config = self.config.get('tournament', {})
+        logging_config = self.config.get('logging', {})
+        checkpoint_dir = tournament_config.get('checkpoint_dir', './checkpoints')
+        log_dir = logging_config.get('log_dir', './logs')
+
+        Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
 
         # Initialize core manager
+        hardware_config = self.config.get('hardware', {})
         self.core_manager = CoreManager(
-            num_p_cores=self.config['hardware']['num_p_cores'],
-            rotate_cores=self.config['hardware']['rotate_cores']
+            num_p_cores=hardware_config.get('num_p_cores', 8),
+            rotate_cores=hardware_config.get('rotate_cores', True)
         )
         self.core_manager.apply_optimizations()
 
         # Initialize logger
         self.logger = DualLogger(
-            log_dir=self.config['logging']['log_dir'],
+            log_dir=log_dir,
             ui_dashboard=None,  # Will set after dashboard creation
-            file_level=self.config['logging']['file_level'],
-            ui_level=self.config['logging']['ui_level']
+            file_level=logging_config.get('file_level', 'DEBUG'),
+            ui_level=logging_config.get('ui_level', 'INFO')
         )
 
         # Initialize optimizer
         self.optimizer = DynamicTournamentOptimizer(
-            total_compute_budget=self.config['tournament']['total_compute_budget'],
-            num_initial_trials=self.config['tournament']['initial_trials'],
-            min_iterations=self.config['tournament']['min_iterations_before_elimination'],
-            eval_interval=self.config['tournament']['evaluation_interval'],
-            checkpoint_dir=self.config['tournament']['checkpoint_dir'],
+            total_compute_budget=tournament_config.get('total_compute_budget', 2_000_000),
+            num_initial_trials=tournament_config.get('initial_trials', 8),
+            min_iterations=tournament_config.get('min_iterations_before_elimination', 50_000),
+            eval_interval=tournament_config.get('evaluation_interval', 10_000),
+            checkpoint_dir=checkpoint_dir,
             log_callback=self.log_message
         )
 
         # Initialize dashboard
-        if self.config['ui']['type'] == 'rich':
+        ui_config = self.config.get('ui', {})
+        if ui_config.get('type', 'rich') == 'rich':
             self.dashboard = PatternGeneratorDashboard(self.optimizer)
             self.logger.ui_dashboard = self.dashboard
 
@@ -155,7 +162,8 @@ class TournamentRunner:
 
     def save_patterns(self, patterns):
         """Save generated patterns to file"""
-        output_dir = Path(self.config['tournament']['checkpoint_dir']) / 'output'
+        checkpoint_dir = self.config.get('tournament', {}).get('checkpoint_dir', './checkpoints')
+        output_dir = Path(checkpoint_dir) / 'output'
         output_dir.mkdir(exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -170,10 +178,10 @@ class TournamentRunner:
         print("CASCADE Pattern Tournament Generator")
         print("=" * 60)
         print(f"Configuration:")
-        print(f"  Trials: {self.config['tournament']['initial_trials']}")
-        print(f"  Budget: {self.config['tournament']['total_compute_budget']:,} iterations")
-        print(f"  P-cores: {self.config['hardware']['num_p_cores']}")
-        print(f"  UI: {self.config['ui']['type']}")
+        print(f"  Trials: {self.config.get('tournament', {}).get('initial_trials', 8)}")
+        print(f"  Budget: {self.config.get('tournament', {}).get('total_compute_budget', 2_000_000):,} iterations")
+        print(f"  P-cores: {self.config.get('hardware', {}).get('num_p_cores', 8)}")
+        print(f"  UI: {self.config.get('ui', {}).get('type', 'rich')}")
         print("=" * 60)
         print()
 
@@ -192,7 +200,8 @@ class TournamentRunner:
         # Run UI in main thread
         if self.dashboard:
             try:
-                self.dashboard.run(refresh_rate=self.config['ui']['refresh_rate'])
+                refresh_rate = self.config.get('ui', {}).get('refresh_rate', 1.0)
+                self.dashboard.run(refresh_rate=refresh_rate)
             except KeyboardInterrupt:
                 print("\nStopping tournament...")
                 self.stop()
@@ -380,6 +389,14 @@ def main():
     if args.config:
         runner = TournamentRunner(args.config)
     else:
+        # Parse P-cores argument
+        p_cores = args.p_cores
+        if '-' in p_cores:
+            start, end = map(int, p_cores.split('-'))
+            num_p_cores = end - start + 1
+        else:
+            num_p_cores = int(p_cores)
+
         # Build config from command-line arguments
         config = {
             'tournament': {
@@ -397,6 +414,7 @@ def main():
                 'flip_weight': args.flip_weight
             },
             'hardware': {
+                'num_p_cores': num_p_cores,
                 'rotate_cores': args.rotate_cores
             },
             'ui': {
@@ -409,7 +427,12 @@ def main():
         }
 
         runner = TournamentRunner()
-        runner.config.update(config)
+        # Deep merge with defaults
+        for section, values in config.items():
+            if section in runner.config:
+                runner.config[section].update(values)
+            else:
+                runner.config[section] = values
 
     # Run the tournament
     runner.run()
