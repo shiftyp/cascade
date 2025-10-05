@@ -29,7 +29,7 @@ class PatternGeneratorDashboard:
         self.optimizer = tournament_optimizer
         self.layout = Layout()
         self.running = False
-        self.recent_logs = deque(maxlen=12)
+        self.recent_logs = deque(maxlen=8)  # Match reduced log panel size
         self.start_time = None
 
         # UI update thread
@@ -55,8 +55,8 @@ class PatternGeneratorDashboard:
 
         # Main area split
         self.layout["main"].split(
-            Layout(name="trials", size=15),
-            Layout(name="log", size=12)
+            Layout(name="trials", size=18),  # Increased to fit all 8 trials
+            Layout(name="log", size=9)
         )
 
         # Sidebar split
