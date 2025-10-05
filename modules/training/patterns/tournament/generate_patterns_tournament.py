@@ -61,10 +61,14 @@ class TournamentRunner:
                 'aggressive_mode': False
             },
             'pattern': {
-                'count': 128,
-                'flip_weight': 0.6,
-                'target_db': -37.5,
-                'flip_target_db': -30.0
+                'count': 16,
+                'length': 512,
+                'unique_data_positions': 128,
+                'redundancy_factor': 4,
+                'erasure_tolerance': 0.375,
+                'target_normal_db': -30.0,
+                'target_flip_db': -28.0,
+                'target_erasure_db': -27.0
             },
             'hardware': {
                 'num_p_cores': 8,
@@ -357,10 +361,17 @@ def main():
 
     # Pattern parameters
     parser.add_argument(
-        '--flip-weight',
-        type=float,
-        default=0.6,
-        help='Weight for flip-orthogonality'
+        '--pattern-count',
+        type=int,
+        default=16,
+        help='Number of patterns to generate'
+    )
+
+    parser.add_argument(
+        '--pattern-length',
+        type=int,
+        default=512,
+        help='Symbols per pattern'
     )
 
     # Hardware parameters
@@ -472,8 +483,11 @@ def main():
         if args.min_survivors != 2:
             runner.config.setdefault('elimination', {})['minimum_diversity'] = args.min_survivors
 
-        if args.flip_weight != 0.6:
-            runner.config.setdefault('pattern', {})['flip_weight'] = args.flip_weight
+        if args.pattern_count != 16:
+            runner.config.setdefault('pattern', {})['count'] = args.pattern_count
+
+        if args.pattern_length != 512:
+            runner.config.setdefault('pattern', {})['length'] = args.pattern_length
 
         # Always set hardware config from command line
         runner.config.setdefault('hardware', {})['num_p_cores'] = num_p_cores

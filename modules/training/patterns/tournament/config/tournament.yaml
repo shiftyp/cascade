@@ -17,10 +17,14 @@ elimination:
   aggressive_mode: false         # Set true for faster elimination
 
 pattern:
-  count: 128                     # Number of patterns to generate
-  flip_weight: 0.6               # Weight for flip-orthogonality (0.0-1.0)
-  target_db: -37.5               # Normal orthogonality target
-  flip_target_db: -30.0          # Flip orthogonality target
+  count: 16                      # Number of patterns to generate
+  length: 512                    # Symbols per pattern (2.56 seconds at 200 sym/s)
+  unique_data_positions: 128     # Unique data positions (4x redundancy)
+  redundancy_factor: 4           # Each data position repeated 4x
+  erasure_tolerance: 0.375       # Can lose 37.5% of symbols
+  target_normal_db: -30.0        # Normal orthogonality target (Welch bound: -30.4)
+  target_flip_db: -28.0          # Flip orthogonality target
+  target_erasure_db: -27.0       # With 37.5% erasure
 
 hardware:
   num_p_cores: 8                 # Number of P-cores (265K has 8)
