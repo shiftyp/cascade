@@ -476,8 +476,14 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                                 erasure_db = test_with_erasure(pi, pj, 0.375)
                                 worst_erasure = max(worst_erasure, erasure_db)
 
-                    # Combined worst-case score
-                    best_score = max(worst_normal, worst_flip + 2.0, worst_erasure + 3.0)
+                    # Combined worst-case score (current evaluation)
+                    current_score = max(worst_normal, worst_flip + 2.0, worst_erasure + 3.0)
+
+                    # Track the best (lowest) score ever achieved
+                    best_score = min(best_score, current_score)
+
+                    # Update score history for convergence tracking
+                    score_history.append(best_score)
 
                 elif temperature > min_temperature:
                     # Sometimes accept worse solutions based on temperature
@@ -492,9 +498,6 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
                 if current_iteration >= iterations:
                     break
-    
-            # Update score history
-            score_history.append(best_score)
 
             # Log progress periodically (every 10 seconds or every 1000 iterations)
             current_time = time.time()
@@ -796,6 +799,10 @@ class DynamicTournamentOptimizer:
                         for t in self.trials:
                             if t.trial_id != trial_id:
                                 t.is_best = False
+
+                    # Update compute used based on actual trial iterations
+                    # This ensures compute_used reflects real-time progress
+                    self.compute_used = sum(t.iterations for t in self.trials)
             except Exception:
                 pass  # Ignore checkpoint read errors
 
@@ -1007,8 +1014,9 @@ class DynamicTournamentOptimizer:
                 if t.trial_id != trial_id:
                     t.is_best = False
 
-        # Update compute used
-        self.compute_used += result['iterations_run']
+        # Update compute used based on actual trial iterations
+        # This is always calculated, never incremented, to avoid double-counting
+        self.compute_used = sum(t.iterations for t in self.trials)
 
         # Update progress
         trial.progress = trial.iterations / total_budget if total_budget > 0 else 1.0
