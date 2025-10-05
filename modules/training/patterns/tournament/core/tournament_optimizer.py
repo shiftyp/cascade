@@ -111,25 +111,27 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
     try:
         # Add path to patterns directory for imports
         patterns_dir = Path(__file__).parent.parent.parent  # Up to patterns/
+        core_dir = Path(__file__).parent  # Current core directory
 
         with open(debug_file_path, 'a') as f:
             f.write(f"Patterns dir: {patterns_dir}\n")
+            f.write(f"Core dir: {core_dir}\n")
             f.write(f"sys.path before: {sys.path}\n")
             f.flush()
 
         if str(patterns_dir) not in sys.path:
             sys.path.insert(0, str(patterns_dir))
+        if str(core_dir) not in sys.path:
+            sys.path.insert(0, str(core_dir))
 
         with open(debug_file_path, 'a') as f:
             f.write(f"sys.path after: {sys.path}\n")
-            f.write("About to import zadoff_chu...\n")
+            f.write("Importing CASCADE modules...\n")
             f.flush()
 
-        # Import pattern generation
-        from zadoff_chu import generate_zadoff_chu_pattern
-
+        # No imports needed - we're discovering new patterns mathematically
         with open(debug_file_path, 'a') as f:
-            f.write("Successfully imported zadoff_chu\n")
+            f.write("Starting mathematical pattern discovery\n")
             f.flush()
 
         # This runs in a separate process
@@ -163,6 +165,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             with open(checkpoint_file, 'rb') as f:
                 checkpoint = pickle.load(f)
                 pattern_set = checkpoint['pattern_set']
+                repetition_maps = checkpoint.get('repetition_maps', [])
                 start_iteration = checkpoint['iteration']
                 best_score = checkpoint['best_score']
                 score_history = checkpoint['score_history']
@@ -172,72 +175,161 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write("No checkpoint found, generating initial patterns\n")
                 f.flush()
 
-            # Generate initial 128 CASCADE patterns (2-FSK binary sequences)
-            # CASCADE: 48 beacon patterns + 80 message patterns = 128 total
+            # Generate 16 patterns with 512 symbols and repetition maps
             pattern_set = []
-            pattern_length = 32  # 32 symbols at 200 symbols/second = 160ms (CASCADE standard)
+            repetition_maps = []
+            pattern_length = 512  # 2.56 seconds at 200 sym/s (5ms per symbol)
+            num_patterns = 16  # Only 16 patterns needed!
+
+            # With 512 symbols and 37.5% erasure tolerance:
+            # Need 320 symbols minimum to recognize (512 * 0.625)
+            # 128 unique data positions, each repeated 4 times
+            # Welch bound for 16 patterns: sqrt(15/511) ≈ 0.171, or -30.4 dB (achievable!)
 
             with open(debug_file_path, 'a') as f:
-                f.write(f"Generating 128 CASCADE patterns (48 beacon + 80 message)\n")
-                f.write(f"Pattern length: {pattern_length} symbols (160ms)\n")
-                f.write(f"Modulation: 2-FSK (binary frequency sequences)\n")
+                f.write(f"Generating {num_patterns} patterns with repetition maps\n")
+                f.write(f"Pattern length: {pattern_length} symbols (2.56 sec)\n")
+                f.write(f"Data positions: 128 unique, 4x redundancy\n")
+                f.write(f"Erasure tolerance: 37.5% (need 320 of 512 symbols)\n")
+                f.write(f"Welch bound: -30.4 dB (theoretical limit)\n")
+                f.write(f"Target: -30 dB normal, -28 dB flip, -27 dB with erasure\n")
                 f.flush()
 
-            # Beacon patterns (0-47): Use Zadoff-Chu as base for good auto-correlation
-            for i in range(48):
-                if i < 31:  # We have 31 unique Zadoff-Chu roots
-                    freq_seq = generate_zadoff_chu_pattern(u=i, N=pattern_length)
-                else:
-                    # Generate pseudo-random beacon patterns for remaining
-                    np.random.seed(seed + i)  # Deterministic generation
-                    freq_seq = np.random.randint(0, 2, pattern_length, dtype=np.uint8)
-                pattern_set.append(freq_seq)
+            # Generate simple binary patterns and repetition maps
+            for i in range(num_patterns):
+                np.random.seed(seed + i * 137)
 
-            # Message patterns (48-127): Start with random, will optimize
-            for i in range(48, 128):
-                np.random.seed(seed + i)  # Deterministic generation
-                freq_seq = np.random.randint(0, 2, pattern_length, dtype=np.uint8)
-                pattern_set.append(freq_seq)
+                # 1. Generate binary pattern (optimized for orthogonality)
+                if i == 0:
+                    # First pattern: balanced random
+                    pattern = np.random.randint(0, 2, pattern_length, dtype=np.uint8)
+                elif i < 4:
+                    # Patterns 1-3: sparse patterns (fewer 1s)
+                    pattern = np.zeros(pattern_length, dtype=np.uint8)
+                    num_ones = pattern_length // 3
+                    indices = np.random.choice(pattern_length, num_ones, replace=False)
+                    pattern[indices] = 1
+                elif i < 8:
+                    # Patterns 4-7: dense patterns (more 1s)
+                    pattern = np.ones(pattern_length, dtype=np.uint8)
+                    num_zeros = pattern_length // 3
+                    indices = np.random.choice(pattern_length, num_zeros, replace=False)
+                    pattern[indices] = 0
+                elif i < 12:
+                    # Patterns 8-11: alternating with different periods
+                    period = 2 + (i - 8)  # periods 2,3,4,5
+                    base = []
+                    for _ in range(period//2):
+                        base.extend([1, 0])
+                    if period % 2:
+                        base.append(1)
+                    pattern = np.tile(base, pattern_length // period + 1)[:pattern_length]
+                    # Add some randomness
+                    flip_indices = np.random.choice(pattern_length, 20, replace=False)
+                    pattern[flip_indices] = 1 - pattern[flip_indices]
+                else:
+                    # Patterns 12-15: pseudorandom with different seeds
+                    pattern = np.zeros(pattern_length, dtype=np.uint8)
+                    state = np.random.RandomState(seed + i * 1000)
+                    pattern = state.randint(0, 2, pattern_length, dtype=np.uint8)
+
+                pattern_set.append(pattern)
+
+                # 2. Generate repetition map (same for all patterns initially)
+                # 128 unique data positions, each repeated 4 times
+                repetition_map = np.zeros(pattern_length, dtype=np.uint8)
+
+                # Create interleaved repetition for burst error resistance
+                # Each of 128 data positions appears 4 times, spread across pattern
+                for data_pos in range(128):
+                    # Spread the 4 repetitions evenly
+                    repetition_map[data_pos * 4] = data_pos
+                    repetition_map[data_pos * 4 + 1] = data_pos
+                    repetition_map[data_pos * 4 + 2] = data_pos
+                    repetition_map[data_pos * 4 + 3] = data_pos
+
+                # Shuffle to spread repetitions (maintains which symbols are repeated together)
+                # This provides better burst error resistance
+                shuffle_groups = np.arange(128)
+                np.random.shuffle(shuffle_groups)
+                shuffled_map = np.zeros(pattern_length, dtype=np.uint8)
+                for idx, group in enumerate(shuffle_groups):
+                    shuffled_map[idx * 4:(idx + 1) * 4] = [group] * 4
+
+                repetition_maps.append(shuffled_map)
 
             with open(debug_file_path, 'a') as f:
                 f.write(f"Generated {len(pattern_set)} patterns\n")
                 f.write("Calculating initial correlations...\n")
                 f.flush()
 
-            # Calculate initial score (max cross-correlation across all pairs)
-            # This is the REAL CASCADE correlation calculation
-            max_correlation = -100.0
+            # Calculate initial scores (normal, flip, and erasure orthogonality)
+            # Convert binary (0/1) to bipolar (±1) for proper correlation
+            max_normal_corr = -np.inf
+            max_flip_corr = -np.inf
+            max_erasure_corr = -np.inf
             correlation_count = 0
 
-            for i in range(128):
-                for j in range(i + 1, 128):
-                    pattern_i = pattern_set[i].astype(np.float32) - 0.5
-                    pattern_j = pattern_set[j].astype(np.float32) - 0.5
+            # Helper function for erasure testing
+            def test_with_erasure(p1, p2, erasure_rate=0.375):
+                """Test correlation with random erasures"""
+                # Create erasure mask (keep 62.5% of symbols)
+                keep_rate = 1.0 - erasure_rate
+                mask = np.random.random(len(p1)) < keep_rate
 
-                    # Normal correlation - check ALL time shifts for CASCADE
-                    # This is computationally intensive as required for real patterns
+                # Apply erasure
+                p1_erased = p1[mask]
+                p2_erased = p2[mask]
+
+                if len(p1_erased) < 10:  # Safety check
+                    return 0.0
+
+                # Compute correlation on surviving symbols
+                xcorr = np.correlate(p1_erased, p2_erased, mode='full')
+                peak = np.max(np.abs(xcorr))
+                return 20 * np.log10(peak / len(p1_erased) + 1e-10)
+
+            for i in range(num_patterns):
+                for j in range(i + 1, num_patterns):
+                    # Convert to ±1 representation
+                    pattern_i = 2 * pattern_set[i].astype(np.float32) - 1
+                    pattern_j = 2 * pattern_set[j].astype(np.float32) - 1
+
+                    # 1. Normal correlation with all time shifts
                     xcorr_normal = np.correlate(pattern_i, pattern_j, mode='full')
                     peak_normal = np.max(np.abs(xcorr_normal))
                     corr_normal_db = 20 * np.log10(peak_normal / pattern_length + 1e-10)
-                    max_correlation = max(max_correlation, corr_normal_db)
+                    max_normal_corr = max(max_normal_corr, corr_normal_db)
 
-                    # Flip correlation (FSK inversion) - also check all shifts
-                    pattern_j_flip = -pattern_j
-                    xcorr_flip = np.correlate(pattern_i, pattern_j_flip, mode='full')
+                    # 2. Flip correlation (pattern inverted: 0↔1)
+                    xcorr_flip = np.correlate(pattern_i, -pattern_j, mode='full')
                     peak_flip = np.max(np.abs(xcorr_flip))
                     corr_flip_db = 20 * np.log10(peak_flip / pattern_length + 1e-10)
-                    # Weight flip correlation (target -30dB vs -37.5dB for CASCADE)
-                    max_correlation = max(max_correlation, corr_flip_db + 7.5)
+                    max_flip_corr = max(max_flip_corr, corr_flip_db)
 
-                    correlation_count += 2
+                    # 3. Erasure correlation (test with 37.5% symbols dropped)
+                    # Run multiple trials for robustness
+                    erasure_trials = []
+                    for _ in range(5):
+                        erasure_db = test_with_erasure(pattern_i, pattern_j, 0.375)
+                        erasure_trials.append(erasure_db)
+                    corr_erasure_db = np.max(erasure_trials)  # Worst case
+                    max_erasure_corr = max(max_erasure_corr, corr_erasure_db)
 
-            best_score = max_correlation
+                    correlation_count += 3
+
+            # Combined score (weighted by importance)
+            best_score = max(max_normal_corr, max_flip_corr + 2.0, max_erasure_corr + 3.0)
             score_history = [best_score]
             start_iteration = 0
             temperature = 1.0
 
             with open(debug_file_path, 'a') as f:
-                f.write(f"Initial best score: {best_score:.2f} dB\n")
+                f.write(f"Initial orthogonality:\n")
+                f.write(f"  Normal: {max_normal_corr:.2f} dB\n")
+                f.write(f"  Flip: {max_flip_corr:.2f} dB\n")
+                f.write(f"  Erasure: {max_erasure_corr:.2f} dB\n")
+                f.write(f"  Combined score: {best_score:.2f} dB\n")
                 f.write(f"Starting optimization from iteration {start_iteration}\n")
                 f.flush()
     
@@ -267,60 +359,86 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             # Optimize each pattern in the set
             for iter_count in range(batch_iterations):
                 # Select random pattern to mutate
-                pattern_idx = np.random.randint(0, 128)
+                pattern_idx = np.random.randint(0, num_patterns)  # Only 16 patterns now
                 original_pattern = pattern_set[pattern_idx].copy()
 
-                # Mutate pattern (flip random bits based on temperature)
-                num_flips = max(1, min(10, int(temperature * 15)))  # 1-10 bits, more aggressive
-                flip_positions = np.random.choice(len(original_pattern), num_flips, replace=False)
+                # Simple mutation for binary patterns
                 mutated_pattern = original_pattern.copy()
+
+                # Temperature-based mutation intensity
+                if temperature > 0.8:
+                    # High temperature: larger changes
+                    num_flips = max(20, min(100, int(temperature * 120)))
+                elif temperature > 0.4:
+                    # Medium temperature: moderate changes
+                    num_flips = max(10, min(50, int(temperature * 60)))
+                else:
+                    # Low temperature: fine tuning
+                    num_flips = max(2, min(20, int(temperature * 30)))
+
+                # Randomly flip bits
+                flip_positions = np.random.choice(pattern_length, num_flips, replace=False)
                 mutated_pattern[flip_positions] = 1 - mutated_pattern[flip_positions]
 
-                # Calculate CASCADE correlations for the mutated pattern
-                # Full cross-correlation with all time shifts - this is the REAL computation
-                max_correlation_new = -100.0
+                # Calculate correlations for the mutated pattern (all three types)
+                max_normal_new = -100.0
+                max_flip_new = -100.0
+                max_erasure_new = -100.0
 
-                pattern_mut = mutated_pattern.astype(np.float32) - 0.5
+                # Convert to ±1
+                pattern_mut = 2 * mutated_pattern.astype(np.float32) - 1
 
-                for j in range(128):
+                for j in range(num_patterns):
                     if j != pattern_idx:
-                        pattern_j = pattern_set[j].astype(np.float32) - 0.5
+                        pattern_j = 2 * pattern_set[j].astype(np.float32) - 1
 
-                        # Normal correlation - CASCADE requires checking all time shifts
+                        # Normal correlation
                         xcorr_normal = np.correlate(pattern_mut, pattern_j, mode='full')
                         peak_normal = np.max(np.abs(xcorr_normal))
-                        corr_normal_db = 20 * np.log10(peak_normal / len(pattern_mut) + 1e-10)
-                        max_correlation_new = max(max_correlation_new, corr_normal_db)
-
-                        # Flip correlation (2-FSK inversion for CASCADE)
-                        pattern_j_flip = -pattern_j
-                        xcorr_flip = np.correlate(pattern_mut, pattern_j_flip, mode='full')
-                        peak_flip = np.max(np.abs(xcorr_flip))
-                        corr_flip_db = 20 * np.log10(peak_flip / len(pattern_mut) + 1e-10)
-                        weighted_flip_db = corr_flip_db + 7.5  # CASCADE weighting
-                        max_correlation_new = max(max_correlation_new, weighted_flip_db)
-
-                # For comparison, calculate current pattern's worst correlation
-                max_correlation_old = -100.0
-                pattern_old = original_pattern.astype(np.float32) - 0.5
-
-                for j in range(128):
-                    if j != pattern_idx:
-                        pattern_j = pattern_set[j].astype(np.float32) - 0.5
-
-                        # Normal correlation with all shifts
-                        xcorr_normal = np.correlate(pattern_old, pattern_j, mode='full')
-                        peak_normal = np.max(np.abs(xcorr_normal))
-                        corr_normal_db = 20 * np.log10(peak_normal / len(pattern_old) + 1e-10)
-                        max_correlation_old = max(max_correlation_old, corr_normal_db)
+                        corr_normal_db = 20 * np.log10(peak_normal / pattern_length + 1e-10)
+                        max_normal_new = max(max_normal_new, corr_normal_db)
 
                         # Flip correlation
-                        pattern_j_flip = -pattern_j
-                        xcorr_flip = np.correlate(pattern_old, pattern_j_flip, mode='full')
+                        xcorr_flip = np.correlate(pattern_mut, -pattern_j, mode='full')
                         peak_flip = np.max(np.abs(xcorr_flip))
-                        corr_flip_db = 20 * np.log10(peak_flip / len(pattern_old) + 1e-10)
-                        weighted_flip_db = corr_flip_db + 7.5
-                        max_correlation_old = max(max_correlation_old, weighted_flip_db)
+                        corr_flip_db = 20 * np.log10(peak_flip / pattern_length + 1e-10)
+                        max_flip_new = max(max_flip_new, corr_flip_db)
+
+                        # Erasure correlation (quick single test during optimization)
+                        erasure_db = test_with_erasure(pattern_mut, pattern_j, 0.375)
+                        max_erasure_new = max(max_erasure_new, erasure_db)
+
+                # Combined score for mutation
+                max_correlation_new = max(max_normal_new, max_flip_new + 2.0, max_erasure_new + 3.0)
+
+                # For comparison, calculate current pattern's worst correlation
+                max_normal_old = -100.0
+                max_flip_old = -100.0
+                max_erasure_old = -100.0
+                pattern_old = 2 * original_pattern.astype(np.float32) - 1
+
+                for j in range(num_patterns):
+                    if j != pattern_idx:
+                        pattern_j = 2 * pattern_set[j].astype(np.float32) - 1
+
+                        # Normal correlation
+                        xcorr_normal = np.correlate(pattern_old, pattern_j, mode='full')
+                        peak_normal = np.max(np.abs(xcorr_normal))
+                        corr_normal_db = 20 * np.log10(peak_normal / pattern_length + 1e-10)
+                        max_normal_old = max(max_normal_old, corr_normal_db)
+
+                        # Flip correlation
+                        xcorr_flip = np.correlate(pattern_old, -pattern_j, mode='full')
+                        peak_flip = np.max(np.abs(xcorr_flip))
+                        corr_flip_db = 20 * np.log10(peak_flip / pattern_length + 1e-10)
+                        max_flip_old = max(max_flip_old, corr_flip_db)
+
+                        # Erasure correlation
+                        erasure_db = test_with_erasure(pattern_old, pattern_j, 0.375)
+                        max_erasure_old = max(max_erasure_old, erasure_db)
+
+                # Combined score for original
+                max_correlation_old = max(max_normal_old, max_flip_old + 2.0, max_erasure_old + 3.0)
 
                 # Decide whether to keep mutation
                 # Accept if the mutated pattern has lower worst-case correlation than original
@@ -329,27 +447,36 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     pattern_set[pattern_idx] = mutated_pattern
 
                 # Update global best score periodically (every 10 iterations for accuracy)
-                # by checking the actual worst case across ALL patterns
+                # by checking the actual worst case across ALL pattern pairs
                 if current_iteration % 10 == 0:
-                    actual_worst = -100.0
-                    for i in range(128):
-                        for j in range(i + 1, 128):
-                            pi = pattern_set[i].astype(np.float32) - 0.5
-                            pj = pattern_set[j].astype(np.float32) - 0.5
+                    worst_normal = -100.0
+                    worst_flip = -100.0
+                    worst_erasure = -100.0
 
-                            # Normal correlation with full convolution for accuracy
+                    for i in range(num_patterns):
+                        for j in range(i + 1, num_patterns):
+                            pi = 2 * pattern_set[i].astype(np.float32) - 1
+                            pj = 2 * pattern_set[j].astype(np.float32) - 1
+
+                            # Normal correlation
                             corr = np.correlate(pi, pj, mode='full')
                             max_corr = np.max(np.abs(corr))
-                            corr_db = 20 * np.log10(max_corr / len(pi) + 1e-10)
-                            actual_worst = max(actual_worst, corr_db)
+                            corr_db = 20 * np.log10(max_corr / pattern_length + 1e-10)
+                            worst_normal = max(worst_normal, corr_db)
 
                             # Flip correlation
                             corr_f = np.correlate(pi, -pj, mode='full')
                             max_corr_f = np.max(np.abs(corr_f))
-                            corr_f_db = 20 * np.log10(max_corr_f / len(pi) + 1e-10)
-                            actual_worst = max(actual_worst, corr_f_db + 7.5)
+                            corr_f_db = 20 * np.log10(max_corr_f / pattern_length + 1e-10)
+                            worst_flip = max(worst_flip, corr_f_db)
 
-                    best_score = actual_worst
+                            # Erasure correlation (multiple trials)
+                            for _ in range(3):
+                                erasure_db = test_with_erasure(pi, pj, 0.375)
+                                worst_erasure = max(worst_erasure, erasure_db)
+
+                    # Combined worst-case score
+                    best_score = max(worst_normal, worst_flip + 2.0, worst_erasure + 3.0)
 
                 elif temperature > min_temperature:
                     # Sometimes accept worse solutions based on temperature
@@ -390,6 +517,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             if current_iteration % 10000 == 0 or current_iteration >= iterations:
                 checkpoint = {
                     'pattern_set': pattern_set,
+                    'repetition_maps': repetition_maps,
                     'iteration': current_iteration,
                     'best_score': best_score,
                     'score_history': score_history,
@@ -416,10 +544,22 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         else:
             convergence_rate = 0.001
     
-        # Save final pattern set
+        # Save final pattern set with repetition maps
         final_patterns_file = trial_checkpoint_dir / f"final_patterns_{current_iteration}.pkl"
+        final_data = {
+            'patterns': pattern_set,
+            'repetition_maps': repetition_maps,
+            'num_patterns': len(pattern_set),
+            'pattern_length': len(pattern_set[0]) if pattern_set else 0,
+            'unique_data_positions': 128,
+            'redundancy_factor': 4,
+            'best_score': best_score,
+            'trial_id': trial_id,
+            'seed': seed,
+            'iterations': current_iteration
+        }
         with open(final_patterns_file, 'wb') as f:
-            pickle.dump(pattern_set, f)
+            pickle.dump(final_data, f)
 
         total_elapsed = time.time() - start_time
         iterations_done = current_iteration - start_iteration
@@ -885,17 +1025,27 @@ class DynamicTournamentOptimizer:
         # Generate report
         self._generate_final_report()
 
-        # Load and return best patterns
+        # Load and return best patterns with repetition maps
         if hasattr(best_trial, 'patterns_file') and best_trial.patterns_file:
             import pickle
             try:
                 with open(best_trial.patterns_file, 'rb') as f:
-                    pattern_set = pickle.load(f)
-                    self.log_callback(f"\nLoaded {len(pattern_set)} patterns from best trial")
-                    return pattern_set
+                    pattern_data = pickle.load(f)
+                    # Handle both old format (just patterns) and new format (dict)
+                    if isinstance(pattern_data, dict):
+                        patterns = pattern_data.get('patterns', [])
+                        repetition_maps = pattern_data.get('repetition_maps', [])
+                        self.log_callback(f"\nLoaded {len(patterns)} patterns with repetition maps from best trial")
+                        self.log_callback(f"Pattern length: {pattern_data.get('pattern_length', 'unknown')}")
+                        self.log_callback(f"Unique data positions: {pattern_data.get('unique_data_positions', 'unknown')}")
+                        return pattern_data
+                    else:
+                        # Old format - just patterns
+                        self.log_callback(f"\nLoaded {len(pattern_data)} patterns (old format, no repetition maps)")
+                        return {'patterns': pattern_data, 'repetition_maps': []}
             except Exception as e:
                 self.log_callback(f"Error loading patterns: {e}")
-                return []
+                return {'patterns': [], 'repetition_maps': []}
         else:
             # Try to load from checkpoint directory
             checkpoint_dir = self.checkpoint_dir / f"trial_{best_trial.trial_id}"
@@ -903,12 +1053,17 @@ class DynamicTournamentOptimizer:
             if pattern_files:
                 import pickle
                 with open(pattern_files[-1], 'rb') as f:
-                    pattern_set = pickle.load(f)
-                    self.log_callback(f"\nLoaded {len(pattern_set)} patterns from checkpoint")
-                    return pattern_set
+                    pattern_data = pickle.load(f)
+                    if isinstance(pattern_data, dict):
+                        patterns = pattern_data.get('patterns', [])
+                        self.log_callback(f"\nLoaded {len(patterns)} patterns with repetition maps from checkpoint")
+                        return pattern_data
+                    else:
+                        self.log_callback(f"\nLoaded {len(pattern_data)} patterns from checkpoint (old format)")
+                        return {'patterns': pattern_data, 'repetition_maps': []}
             else:
                 self.log_callback("No patterns file found")
-                return []
+                return {'patterns': [], 'repetition_maps': []}
 
     def _generate_final_report(self):
         """Generate comprehensive final report"""

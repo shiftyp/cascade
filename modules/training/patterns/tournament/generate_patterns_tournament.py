@@ -182,17 +182,32 @@ class TournamentRunner:
         finally:
             self.running = False
 
-    def save_patterns(self, patterns):
+    def save_patterns(self, pattern_data):
         """Save generated patterns to file"""
         checkpoint_dir = self.config.get('tournament', {}).get('checkpoint_dir', './checkpoints')
         output_dir = Path(checkpoint_dir) / 'output'
         output_dir.mkdir(exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = output_dir / f"patterns_{timestamp}.bin"
 
-        # In real implementation, use binary_format.save_pattern_file
-        self.log_message(f"Patterns saved to: {output_file}", "SUCCESS")
+        # Save pickle file with all data
+        pickle_file = output_dir / f"patterns_{timestamp}.pkl"
+        import pickle
+        with open(pickle_file, 'wb') as f:
+            pickle.dump(pattern_data, f)
+
+        self.log_message(f"Patterns saved to: {pickle_file}", "SUCCESS")
+
+        # Log summary of what was saved
+        if isinstance(pattern_data, dict):
+            patterns = pattern_data.get('patterns', [])
+            repetition_maps = pattern_data.get('repetition_maps', [])
+            self.log_message(f"  {len(patterns)} patterns", "INFO")
+            self.log_message(f"  Pattern length: {pattern_data.get('pattern_length', 'unknown')}", "INFO")
+            self.log_message(f"  Unique data positions: {pattern_data.get('unique_data_positions', 'unknown')}", "INFO")
+            self.log_message(f"  Redundancy factor: {pattern_data.get('redundancy_factor', 'unknown')}x", "INFO")
+
+        # TODO: In real implementation, also convert to binary_format for CASCADE modem
 
     def run(self):
         """Main execution method"""
