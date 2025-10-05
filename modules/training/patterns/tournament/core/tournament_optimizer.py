@@ -34,45 +34,44 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
     import pickle
     import sys
 
-    # Import pattern modules within the worker
-    # Suppress ALL output to avoid corrupting Rich UI
-    import io
-    import contextlib
-
-    # Create null streams for complete suppression
-    null_out = io.StringIO()
-    null_err = io.StringIO()
-
-    # Redirect both stdout AND stderr for the entire worker process
-    # This prevents any output from corrupting the Rich UI
-    sys.stdout = null_out
-    sys.stderr = null_err
-
-    # Add path to patterns directory for imports
-    # tournament_optimizer.py is in .../patterns/tournament/core/
-    # We need to import from .../patterns/
-    patterns_dir = Path(__file__).parent.parent.parent  # Up to patterns/
-    if str(patterns_dir) not in sys.path:
-        sys.path.insert(0, str(patterns_dir))
-
-    from zadoff_chu import generate_zadoff_chu_pattern
-
-    # This runs in a separate process
-    # Set CPU affinity if on Windows/Linux
     try:
-        p = psutil.Process()
-        if p_cores:
-            p.cpu_affinity(p_cores)
-            p.nice(psutil.HIGH_PRIORITY_CLASS if os.name == 'nt' else -10)
-    except:
-        pass  # Affinity setting failed, continue anyway
+        # Add path to patterns directory for imports
+        # tournament_optimizer.py is in .../patterns/tournament/core/
+        # We need to import from .../patterns/
+        patterns_dir = Path(__file__).parent.parent.parent  # Up to patterns/
+        if str(patterns_dir) not in sys.path:
+            sys.path.insert(0, str(patterns_dir))
 
-    # Set random seed for reproducibility
-    np.random.seed(seed)
+        # Suppress output only during import
+        import io
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        sys.stdout = io.StringIO()
+        sys.stderr = io.StringIO()
 
-    # Create checkpoint directory for this trial
-    trial_checkpoint_dir = Path(checkpoint_dir) / f"trial_{trial_id}"
-    trial_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            from zadoff_chu import generate_zadoff_chu_pattern
+        finally:
+            # Restore stdout/stderr after import
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+
+        # This runs in a separate process
+        # Set CPU affinity if on Windows/Linux
+        try:
+            p = psutil.Process()
+            if p_cores:
+                p.cpu_affinity(p_cores)
+                p.nice(psutil.HIGH_PRIORITY_CLASS if os.name == 'nt' else -10)
+        except:
+            pass  # Affinity setting failed, continue anyway
+
+        # Set random seed for reproducibility
+        np.random.seed(seed)
+
+        # Create checkpoint directory for this trial
+        trial_checkpoint_dir = Path(checkpoint_dir) / f"trial_{trial_id}"
+        trial_checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     # Check for existing checkpoint
     checkpoint_file = trial_checkpoint_dir / "latest_checkpoint.pkl"
@@ -224,16 +223,37 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
     with open(final_patterns_file, 'wb') as f:
         pickle.dump(pattern_set, f)
 
-    # Return results
-    return {
-        'trial_id': trial_id,
-        'iterations_run': current_iteration - start_iteration,
-        'best_score': best_score,
-        'final_iteration': current_iteration,
-        'convergence_rate': convergence_rate,
-        'score_history': score_history[-100:],  # Last 100 scores
-        'patterns_file': str(final_patterns_file)
-    }
+        # Return results
+        return {
+            'trial_id': trial_id,
+            'iterations_run': current_iteration - start_iteration,
+            'best_score': best_score,
+            'final_iteration': current_iteration,
+            'convergence_rate': convergence_rate,
+            'score_history': score_history[-100:],  # Last 100 scores
+            'patterns_file': str(final_patterns_file)
+        }
+
+    except Exception as e:
+        # Log error to file for debugging
+        error_file = Path(checkpoint_dir).parent / 'logs' / f'error_trial_{trial_id}.txt'
+        error_file.parent.mkdir(exist_ok=True, parents=True)
+        with open(error_file, 'w') as f:
+            import traceback
+            f.write(f"Error in trial {trial_id}:\n")
+            f.write(str(e) + "\n\n")
+            f.write(traceback.format_exc())
+
+        # Return error result so tournament doesn't hang
+        return {
+            'trial_id': trial_id,
+            'iterations_run': 0,
+            'best_score': 0.0,
+            'final_iteration': 0,
+            'convergence_rate': 0.001,
+            'score_history': [],
+            'error': str(e)
+        }
 
 
 class DynamicTournamentOptimizer:
@@ -446,6 +466,12 @@ class DynamicTournamentOptimizer:
     def _process_trial_result(self, trial_id: int, result: Dict[str, Any]):
         """Process results from a trial run"""
         trial = self.trials[trial_id]
+
+        # Check for errors
+        if 'error' in result:
+            self.log_callback(f"ERROR in trial {trial_id}: {result['error']}")
+            self.log_callback(f"Check logs/error_trial_{trial_id}.txt for details")
+            return
 
         # Update trial state
         trial.iterations = result['final_iteration']
