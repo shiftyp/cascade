@@ -123,7 +123,8 @@ class TournamentRunner:
             min_iterations=tournament_config.get('min_iterations_before_elimination', 50_000),
             eval_interval=tournament_config.get('evaluation_interval', 10_000),
             checkpoint_dir=checkpoint_dir,
-            log_callback=self.log_message
+            log_callback=self.log_message,
+            execution_mode=hardware_config.get('execution_mode', 'auto')
         )
 
         # Initialize dashboard
@@ -328,6 +329,13 @@ def main():
     )
 
     parser.add_argument(
+        '--execution-mode',
+        choices=['auto', 'process', 'thread', 'sequential'],
+        default='auto',
+        help='Execution mode: auto (default), process (multiprocessing), thread (threading), or sequential'
+    )
+
+    parser.add_argument(
         '--rotate-cores',
         action='store_true',
         default=True,
@@ -415,7 +423,8 @@ def main():
             },
             'hardware': {
                 'num_p_cores': num_p_cores,
-                'rotate_cores': args.rotate_cores
+                'rotate_cores': args.rotate_cores,
+                'execution_mode': args.execution_mode
             },
             'ui': {
                 'type': args.ui,

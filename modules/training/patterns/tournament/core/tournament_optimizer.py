@@ -10,7 +10,8 @@ import pickle
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+import multiprocessing
 from datetime import datetime
 
 from .trial_manager import Trial
@@ -95,7 +96,8 @@ class DynamicTournamentOptimizer:
         min_iterations: int = 50_000,
         eval_interval: int = 10_000,
         checkpoint_dir: str = "./checkpoints",
-        log_callback: Optional[Callable] = None
+        log_callback: Optional[Callable] = None,
+        execution_mode: str = "auto"  # "process", "thread", "sequential", or "auto"
     ):
         self.total_budget = total_compute_budget
         self.num_initial_trials = num_initial_trials
@@ -103,6 +105,7 @@ class DynamicTournamentOptimizer:
         self.eval_interval = eval_interval
         self.checkpoint_dir = Path(checkpoint_dir)
         self.log_callback = log_callback or print
+        self.execution_mode = execution_mode
 
         # Create checkpoint directory
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -200,10 +203,74 @@ class DynamicTournamentOptimizer:
             return
 
         # Prepare batch execution
-        batch_size = min(len(self.active_trials), 8)  # Max 8 parallel processes
+        batch_size = min(len(self.active_trials), 8)  # Max 8 parallel workers
 
-        with ProcessPoolExecutor(max_workers=batch_size) as executor:
-            futures = {}
+        # Determine execution strategy
+        if self.execution_mode == "sequential":
+            executor_class = None
+        elif self.execution_mode == "thread":
+            executor_class = ThreadPoolExecutor
+        elif self.execution_mode == "process":
+            executor_class = ProcessPoolExecutor
+        else:  # auto mode
+            # Try process first, fall back to thread, then sequential
+            try:
+                # Test if ProcessPoolExecutor works
+                with ProcessPoolExecutor(max_workers=1) as test_executor:
+                    test_future = test_executor.submit(lambda: 42)
+                    test_future.result(timeout=2)
+                executor_class = ProcessPoolExecutor
+                self.log_callback("Using ProcessPoolExecutor for parallel trials")
+            except Exception as e:
+                try:
+                    # Fall back to ThreadPoolExecutor
+                    executor_class = ThreadPoolExecutor
+                    self.log_callback(f"Process pool failed ({type(e).__name__}), using ThreadPoolExecutor")
+                except:
+                    executor_class = None
+                    self.log_callback("Both process and thread pools failed, using sequential execution")
+
+        # Run trials with selected executor
+        if executor_class:
+            try:
+                with executor_class(max_workers=batch_size) as executor:
+                    futures = {}
+
+                    for trial_id in self.active_trials:
+                        trial = self.trials[trial_id]
+
+                        # Check if trial has budget left
+                        if trial.iterations >= trial.compute_budget + trial.bonus_budget:
+                            continue
+
+                        # Submit trial for execution
+                        future = executor.submit(
+                            run_single_trial_worker,
+                            trial_id,
+                            min(self.eval_interval, trial.compute_budget + trial.bonus_budget - trial.iterations),
+                            trial.seed,
+                            str(self.checkpoint_dir),
+                            trial.p_cores
+                        )
+                        futures[future] = trial_id
+
+                    # Collect results
+                    for future in as_completed(futures):
+                        trial_id = futures[future]
+                        try:
+                            result = future.result(timeout=300)  # 5 minute timeout
+                            self._process_trial_result(trial_id, result)
+                        except Exception as e:
+                            self.log_callback(f"Error in trial {trial_id}: {e}")
+
+            except Exception as e:
+                self.log_callback(f"Executor failed during execution: {e}")
+                executor_class = None  # Fall back to sequential
+
+        # Fallback or explicit sequential execution
+        if not executor_class:
+            if self.execution_mode != "sequential":
+                self.log_callback("WARNING: Running trials sequentially (slower)")
 
             for trial_id in self.active_trials:
                 trial = self.trials[trial_id]
@@ -212,23 +279,15 @@ class DynamicTournamentOptimizer:
                 if trial.iterations >= trial.compute_budget + trial.bonus_budget:
                     continue
 
-                # Submit trial for execution
-                # Use standalone function to avoid pickling issues
-                future = executor.submit(
-                    run_single_trial_worker,
-                    trial_id,
-                    min(self.eval_interval, trial.compute_budget + trial.bonus_budget - trial.iterations),
-                    trial.seed,
-                    str(self.checkpoint_dir),  # Convert Path to string for subprocess
-                    trial.p_cores
-                )
-                futures[future] = trial_id
-
-            # Collect results
-            for future in as_completed(futures):
-                trial_id = futures[future]
                 try:
-                    result = future.result(timeout=300)  # 5 minute timeout
+                    # Run the trial directly (no parallelism)
+                    result = run_single_trial_worker(
+                        trial_id,
+                        min(self.eval_interval, trial.compute_budget + trial.bonus_budget - trial.iterations),
+                        trial.seed,
+                        str(self.checkpoint_dir),
+                        trial.p_cores
+                    )
                     self._process_trial_result(trial_id, result)
                 except Exception as e:
                     self.log_callback(f"Error in trial {trial_id}: {e}")
