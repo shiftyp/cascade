@@ -46,10 +46,11 @@ class Trial:
         self.end_time = None
 
         # Performance metrics
-        self.best_score = float('inf')
-        self.current_score = float('inf')
+        # Start with a realistic initial score instead of infinity
+        self.best_score = -25.0  # Start at -25 dB (will be overwritten by actual scores)
+        self.current_score = -25.0
         self.score_history = []
-        self.convergence_rate = 0.0
+        self.convergence_rate = 0.001  # Small non-zero default
         self.improvement_history = []
 
         # Resource allocation
@@ -106,18 +107,33 @@ class Trial:
 
         # Update best score
         if score < self.best_score:
-            improvement = self.best_score - score
+            # Only record improvement if we have a meaningful baseline
+            if np.isfinite(self.best_score) and np.isfinite(score):
+                improvement = self.best_score - score
+                self.improvement_history.append((self.iterations, improvement))
             self.best_score = score
-            self.improvement_history.append((self.iterations, improvement))
 
-        # Calculate convergence rate (improvement over last 10k iterations)
+        # Calculate convergence rate (improvement over last 10 updates)
         if len(self.score_history) >= 10:
             recent_scores = self.score_history[-10:]
             older_scores = self.score_history[-20:-10] if len(self.score_history) >= 20 else self.score_history[:10]
 
-            recent_avg = np.mean(recent_scores)
-            older_avg = np.mean(older_scores)
-            self.convergence_rate = (older_avg - recent_avg) / 10000  # dB per iteration
+            # Check for valid values
+            if all(np.isfinite(recent_scores)) and all(np.isfinite(older_scores)):
+                recent_avg = np.mean(recent_scores)
+                older_avg = np.mean(older_scores)
+
+                # Calculate rate of improvement
+                score_diff = older_avg - recent_avg
+                if np.isfinite(score_diff):
+                    # Rate per update (not per iteration)
+                    self.convergence_rate = abs(score_diff) / 10
+                else:
+                    self.convergence_rate = 0.001
+            else:
+                self.convergence_rate = 0.001
+        else:
+            self.convergence_rate = 0.001  # Default until we have enough history
 
     def calculate_eta(self, remaining_iterations: int):
         """Calculate estimated time to completion"""

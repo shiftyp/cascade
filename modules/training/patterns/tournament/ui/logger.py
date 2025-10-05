@@ -69,8 +69,8 @@ class DualLogger:
         # Remove existing handlers
         self.file_logger.handlers.clear()
 
-        # File handler with detailed formatting
-        file_handler = logging.FileHandler(log_file, mode='a')
+        # File handler with detailed formatting (UTF-8 encoding for Unicode)
+        file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
         file_handler.setLevel(level)
 
         # Detailed formatter
@@ -99,7 +99,7 @@ class DualLogger:
     def _setup_stats_logging(self):
         """Setup statistics logging for analysis"""
         self.stats_file = self.log_dir / f"stats_{self.timestamp}.jsonl"
-        self.stats_handle = open(self.stats_file, 'w')
+        self.stats_handle = open(self.stats_file, 'w', encoding='utf-8')
 
         # Write header
         self.log_stats({
@@ -120,9 +120,9 @@ class DualLogger:
             trial_logger = logging.getLogger(logger_name)
             trial_logger.setLevel(logging.DEBUG)
 
-            # Trial log file
+            # Trial log file with UTF-8 encoding
             trial_log_file = trial_log_dir / f"trial_{trial_id}_{self.timestamp}.log"
-            handler = logging.FileHandler(trial_log_file)
+            handler = logging.FileHandler(trial_log_file, encoding='utf-8')
             handler.setFormatter(
                 logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s')
             )

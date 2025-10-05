@@ -51,29 +51,51 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
     # Simulate optimization (replace with actual pattern generation)
     np.random.seed(seed)
-    best_score = float('inf')
+    # Start with a realistic initial score instead of infinity
+    best_score = -30.0 + np.random.normal(0, 2)  # Start around -30 dB with some variation
     score_history = []
 
-    for i in range(iterations // 100):  # Simplified simulation
+    # Run for the specified number of iterations
+    # Update every 100 iterations or at least once
+    update_interval = min(100, max(1, iterations))
+    num_updates = max(1, iterations // update_interval)
+
+    for i in range(num_updates):
         # In real implementation, this would call optimize_pattern_two_phase
-        score = best_score - np.random.exponential(0.1)  # Simulate improvement
+        # Simulate gradual improvement with diminishing returns
+        improvement = np.random.exponential(0.5) * (1.0 / (i + 1))  # Smaller improvements over time
+        score = best_score - improvement
+
+        # Add some noise to simulate realistic optimization
+        score += np.random.normal(0, 0.1)
+
         if score < best_score:
             best_score = score
 
         score_history.append(best_score)
 
         # Save checkpoint periodically
-        if (i * 100) % 10000 == 0 and checkpoint_dir:
+        current_iteration = (i + 1) * update_interval
+        if current_iteration % 10000 == 0 and checkpoint_dir:
             trial_checkpoint_dir = Path(checkpoint_dir) / f"trial_{trial_id}"
             trial_checkpoint_dir.mkdir(parents=True, exist_ok=True)
             # In real implementation, save actual checkpoint
 
-    # Calculate convergence rate
+    # Calculate convergence rate (avoid NaN)
     if len(score_history) > 10:
         recent_scores = score_history[-10:]
-        convergence_rate = abs(recent_scores[-1] - recent_scores[0]) / 10
+        score_diff = abs(recent_scores[-1] - recent_scores[0])
+        # Avoid division by zero and NaN
+        if np.isfinite(score_diff) and np.isfinite(recent_scores[-1]):
+            convergence_rate = score_diff / 10
+        else:
+            convergence_rate = 0.001
     else:
-        convergence_rate = 0.01
+        convergence_rate = 0.001  # Small but non-zero
+
+    # Ensure convergence_rate is finite
+    if not np.isfinite(convergence_rate):
+        convergence_rate = 0.001
 
     # Return results
     return {
