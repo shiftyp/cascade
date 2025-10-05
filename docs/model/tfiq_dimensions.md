@@ -1,16 +1,49 @@
-# Time-Frequency-IQ Dimensions (4D)
+# Time-Frequency-IQ Dimensions (Dual-Layer Architecture)
 
-CASCADE achieves multi-user support through four dimensions of separation: Time, adaptive Tone Selection (4 from 78), and continuous IQ modulation. This 4D orthogonal space enables **1,024 total users** (via frequency + time reuse), **45 active simultaneously** in 2.5 kHz bandwidth (128-pattern kernel-coordinated chaos architecture).
+**UPDATED 2025-10-04**: Dual-layer encoding separates pattern orthogonality from data encoding
 
-## Overview
+CASCADE achieves multi-user support through **dual-layer encoding**: Time×Frequency patterns (all λ=0) provide robust skeletons for pattern identification, while adaptive IQ modulation (BPSK→16-QAM) encodes user data. This architecture enables **1,024 total users** via pattern reuse, **45 active simultaneously**, with throughput **94-1,950 bps** (adaptive).
 
-Traditional radio systems use rigid time and frequency slots to separate users (TDMA, FDMA). CASCADE uses a 4-dimensional approach: 128 orthogonal patterns (48 beacon + 80 message) provide structure through discrete frequency-hopping sequences (Time × Frequency dimensions) while the model continuously optimizes IQ trajectories (I × Q dimensions) for maximum efficiency.
+## Overview - Dual-Layer Architecture
 
-This hybrid approach combines:
-- **Discrete frequency hopping** (FHSS - patent safe, like Bluetooth)
-- **Continuous IQ modulation** (standard QAM/PSK)
-- **4D orthogonality** (Time × Discrete Freq × Continuous I × Continuous Q)
-- **Neural network optimization** (within discrete frequency grid)
+**Revolutionary separation of concerns**:
+
+**Layer 1 (Pattern Orthogonality)**: Time × Frequency dimensions ONLY
+- 128 patterns separated via tone hopping sequences
+- All λ=0 (BPSK baseline skeleton, no complex IQ)
+- Orthogonality: -37.5 dB in 2D space (not 4D!)
+- Robust: All patterns decode at -10 dB SNR
+
+**Layer 2 (Data Encoding)**: IQ dimension for payload
+- Adaptive modulation: BPSK/QPSK/8-PSK/16-QAM (kernel-selected)
+- Differential encoding: Immune to frequency drift
+- Natural redundancy: Tone revisits (4× typical)
+- Throughput: 8-32 bits per pattern (SNR-dependent)
+
+**Why this separation works**:
+```
+Traditional (CASCADE V1): IQ used for pattern orthogonality
+- Limited: Can't use IQ for data (already committed to pattern)
+- Throughput: 7 bits per pattern (pattern selection only)
+
+Dual-layer (CASCADE Final): IQ reserved for data
+- Pattern orthogonality: Time×Frequency sufficient (2-FSK provides enough diversity)
+- IQ freed up: Available for adaptive modulation
+- Throughput: 15-39 bits per pattern (2-5× improvement!)
+```
+
+**Multi-user capacity** (unchanged):
+- Patterns still orthogonal: Can transmit 20-60 simultaneously
+- Separated by: Different tone hopping sequences AND different data modulation constellations
+- Kernel coordinates: Assigns non-conflicting pattern+frequency+modulation combinations
+
+---
+
+## Legacy Sections (Reference)
+
+**NOTE**: Sections below describe earlier architectural iterations and detailed mathematics. For current implementation, see dual-layer architecture above and [Kernel Architecture](kernel_architecture.md).
+
+Traditional radio systems use rigid time and frequency slots to separate users (TDMA, FDMA). The sections below explore the evolution toward CASCADE's final dual-layer approach.
 
 ## Four Dimensions of Separation
 
@@ -22,41 +55,41 @@ Each pattern consists of 32 time slots (symbols):
 - Asynchronous transmission (no time-slot coordination needed)
 - Natural collision avoidance through pattern diversity
 
-### 2. Tone Selection Dimension (4 from 78)
+### 2. Tone Selection Dimension (2-FSK from 150-tone grid)
 
-**Adaptive tone selection** - Each pattern picks 4 from 78-tone grid:
+**2-FSK modulation** - Each pattern uses 2 adjacent tones from 150-tone grid:
 
 ```python
-# 78 reference tones in grid
-REFERENCE_TONES = [300 + i*32 for i in range(78)]
-# [300, 332, 364, ..., 2732, 2764] Hz
+# 150 reference tones in grid
+REFERENCE_TONES = [300 + i*20 for i in range(150)]
+# [300, 320, 340, ..., 3260, 3280, 3300] Hz
 
-# Each pattern selects 4 tones from 78 (adaptive)
-# Pattern hops among its selected 4 discrete tones
+# Each pattern uses 2 adjacent tones (2-FSK)
+# Pattern hops between its 2 tones based on pattern sequence
 # Each symbol at EXACT reference frequency
 # No interpolation or continuous sweeps
 
-def pattern_frequency_hop(pattern_id, t, selected_tones):
+def pattern_2fsk_modulation(pattern_id, t, tone_pair_base):
     """
-    Pattern hops among its selected 4 tones (from 78-tone grid)
-    Discrete frequency-hopping (FHSS)
-    Multiple patterns can select overlapping tones
+    Pattern uses 2-FSK between adjacent tones (from 150-tone grid)
+    Discrete frequency-shift keying (2-FSK)
+    Multiple patterns use different tone pairs
     """
-    tone_idx = pattern.freq_sequence[t]  # Integer: 0-3 (which of pattern's 4 tones)
-    grid_tone = selected_tones[tone_idx]  # Integer: 0-77 (which of 78 grid tones)
-    frequency_hz = REFERENCE_TONES[grid_tone]  # Exact discrete frequency
+    pattern_bit = pattern.freq_sequence[t]  # Binary: 0 or 1 (2-FSK selection)
+    tone_idx = tone_pair_base + pattern_bit  # Adjacent tones
+    frequency_hz = REFERENCE_TONES[tone_idx]  # Exact discrete frequency
 
-    # Pattern's selected 4 tones from 78-tone grid
-    # Example: selected_tones = [12, 34, 51, 65]
-    # Maps to: [684, 1388, 1932, 2380] Hz
+    # Pattern's 2 adjacent tones from 150-tone grid
+    # Example: tone_pair_base = 34 → [34, 35]
+    # Maps to: [980, 1000] Hz (2-FSK pair)
 
-    # Multiple patterns can select same tones (separation via Time × IQ)
-    # Frequency provides diversity against selective fading
+    # Multiple patterns use different tone pairs (separation via Pattern × Time × IQ)
+    # 2-FSK provides simple, robust modulation
 
-    return REFERENCE_TONES[grid_tone]  # Discrete: one of 78 tones
+    return REFERENCE_TONES[tone_idx]  # Discrete: one of 150 tones
 
-# This is frequency-hopping (FHSS), not chirping (CSS)
-# 78 tones provide C(78,4) = 1.4M tone selection combinations
+# This is 2-FSK, not 4-FSK or chirping
+# 75 possible tone pairs (150 tones / 2)
 # Patent safe ✓
 ```
 
@@ -158,7 +191,7 @@ CASCADE combines discrete and continuous dimensions:
 | Dimension | Type | Values | Adaptation | Neural Network |
 |-----------|------|--------|------------|----------------|
 | Time | Discrete | 32 symbols | Fixed structure | N/A |
-| Tone Selection | Discrete | 4 from 78 tones | Adaptive ±3 from base | Classification (Gumbel-softmax) |
+| Tone Selection | Discrete | 2-FSK (2 adjacent tones from 150) | Adaptive tone pair selection | Classification (Gumbel-softmax) |
 | I (in-phase) | Continuous | [-1.5, +1.5] | Smooth trajectory | Regression |
 | Q (quadrature) | Continuous | [-1.5, +1.5] | Smooth trajectory | Regression |
 
@@ -213,7 +246,7 @@ Operating characteristics:
 - **IQ Directions**: 4-6 directions (QPSK to 64-QAM level)
 - **User Capacity**: 1,024 total (frequency + time reuse), 45 active users (chaos mode)
 - **Throughput per User**: 218 bps info (1 pattern), 872 bps (4 patterns)
-- **Spectral Efficiency**: 96.7% utilization (78 tones × 31 Hz ≈ 2418 Hz / 2500 Hz)
+- **Spectral Efficiency**: 100% utilization (150 tones × 20 Hz = 3000 Hz / 3000 Hz)
 - **Shannon Efficiency**: 78% (chaos with ±2 Hz micro-tuning)
 - **Note**: IQ limited by propagation (5ms multipath), not SNR. NVIS (λ=0.7-0.9) is exception.
 

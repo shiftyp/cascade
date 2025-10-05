@@ -48,8 +48,8 @@ def transmit_whenever_ready(message, pattern_id):
     # No timing coordination
     current_time = now()  # Microsecond precision
 
-    # Select 4 tones from 78-tone grid
-    selected_tones = select_tones_adaptive(pattern_id, channel_state)
+    # Select 2 adjacent tones from 150-tone grid (2-FSK)
+    tone_pair = select_tone_pair_adaptive(pattern_id, channel_state)
 
     # Generate RS pattern with data
     rs_transmission = generate_rs_pattern(
@@ -371,8 +371,8 @@ SYMBOL_DURATION_MS = 50
 # KEEP: Pattern structure (RS encoding)
 PATTERN_STRUCTURE = 'RS(32,20)'
 
-# KEEP: 78-tone grid
-REFERENCE_TONES = [300 + i*32 for i in range(78)]
+# KEEP: 150-tone grid
+REFERENCE_TONES = [300 + i*20 for i in range(150)]
 ```
 
 ### Model Layer Changes

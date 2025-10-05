@@ -6,7 +6,7 @@ CASCADE (Cognitive Adaptive Spectrum Coordination And Distributed Efficiency) is
 
 You're working on the **Data Module**, which collects 24,000-36,000 hours of real-world HF radio data for training the neural network model. This data captures real atmospheric noise (QRN) and ionospheric propagation characteristics that synthetic models cannot replicate.
 
-**Architecture Status (Oct 2025):** ✅ Complete - 128 patterns, 78-tone grid, RS(32,20) structure, kernel lifecycle protocol finalized. See [docs/architecture.md](docs/architecture.md) for executive summary.
+**Architecture Status (Oct 2025):** ✅ Complete - 128 patterns, 135-tone grid (300-3000 Hz), RS(32,20) structure, kernel lifecycle protocol finalized. See [docs/architecture.md](docs/architecture.md) for executive summary.
 
 ## Current Feature: KiwiSDR Data Collector
 - **Branch**: 001-kiwi-data-collector
@@ -245,28 +245,68 @@ See `/specs/001-kiwi-data-collector/tasks.md` for detailed implementation tasks.
 - **Storage overflow**: Auto-prune old processed files
 - **CPU bottleneck**: Distribute processing across cores
 
-## CASCADE Architecture (Current)
+## CASCADE Architecture (Final - Dual-Layer)
 
-**Pattern System:**
-- 128 patterns (48 beacon + 80 message, 7-bit encoding)
-- 78-tone reference grid (300-2764 Hz, 32 Hz spacing)
-- Each pattern selects 4 tones from 78 (adaptive)
-- RS(32,20) aligned structure (pattern IS the FEC)
-- Storage: 38 KB, Generation: 18-24 hours (one-time)
+**Pattern System (2-FSK, All λ=0):**
+- 128 patterns (48 beacon + 80 message, 7-bit pattern ID)
+- 2-FSK architecture: Each pattern uses 2 adjacent tones (tone indices 0-1)
+- 135-tone reference grid (300-3000 Hz, 20 Hz spacing, standard 2.7 kHz SSB channel)
+- Symbol rate: 200 symbols/second (5ms per symbol)
+- Pattern duration: 160ms (32 symbols × 5ms)
+- All patterns λ=0 (BPSK baseline for pattern skeleton)
+- RS(32,20) equivalent: Pattern recognition with 37.5% erasure tolerance (QR code-like)
+- Storage: 38 KB, Generation: 48-60 hours (simplified, frequency-only optimization)
 
-**Performance Targets:**
-- Shannon efficiency: 78-85% (kernel-coordinated chaos)
-- Capacity: 1,024 total users, 45 active simultaneously
-- Throughput: 218 bps/user (1 pattern), 872 bps (4 patterns)
-- Hardware: Raspberry Pi 4 compatible (8.5ms inference)
+**Dual-Layer Encoding:**
+- **Layer 1 (Pattern ID)**: Time×Frequency hopping sequence identifies pattern (7 bits)
+  - Orthogonality: -37.5 dB in Time×Frequency space (no IQ needed for separation)
+  - All λ=0: BPSK skeleton, maximum robustness
+- **Layer 2 (Data Payload)**: Adaptive IQ modulation encodes user data (8-32 bits)
+  - BPSK (SNR<0): 8 bits, 94 bps per pattern
+  - QPSK (SNR 0-10): 16 bits, 144 bps per pattern
+  - 8-PSK (SNR 10-20): 24 bits, 194 bps per pattern
+  - 16-APSK (SNR>20): 32 bits, 244 bps per pattern (4+12 constellation, better PA efficiency)
+  - Differential encoding: Immune to ±0.1-10 Hz frequency drift (no GPS required)
+  - Tone revisit redundancy: 4× average (natural error correction)
+
+**Kernel Architecture (4 kernels × 28 bytes = 112 bytes per beacon):**
+- Three RX kernels: Best ways for others to reach this station (decoder-generated from IQ)
+- One TX kernel: Current transmission state for collision avoidance (protocol-generated)
+- Each kernel (28 bytes):
+  - Pattern range: Start ID (7b) + Count (3b) for 1-8 consecutive patterns
+  - Channel: Frequency pair (7b) + Modulation (3b)
+  - Version: Protocol (2b) + Model (2b)
+  - Embedding: 48 dims × 4-bit quantization (learned optimization hints)
+- Multi-pattern support: Stations transmit 1-8 patterns based on RX capability and conditions
+- Distributed coordination: TX kernels provide anti-collision, RX kernels guide optimization
+
+**Performance (Equipment-Adaptive):**
+- Shannon efficiency: 55-70% channel (adaptive modulation) × 78-85% coordination = 45-60% system
+- Active users: 40-45 simultaneous (adaptive pattern allocation)
+  - QRP stations: 20-30 users × 1 pattern each = 20-30 patterns
+  - Medium stations: 8-10 users × 4 patterns each = 32-40 patterns
+  - Premium stations: 2-3 users × 8 patterns each = 16-24 patterns
+  - Total: ~80 message patterns efficiently shared
+- Total network capacity: 1,024 users (via frequency/time/geographic reuse)
+- Throughput per user:
+  - QRP/QMX (5W, 200 sym/s): 94 bps (1 pattern, BPSK)
+  - Modern (50W, 200 sym/s): 575 bps (4 patterns, QPSK)
+  - Premium (100W, 300 sym/s): 975-1,950 bps (4-8 patterns, 8-PSK/16-APSK)
+- Hardware: Raspberry Pi 4 + Coral Edge TPU ($110, 15W, portable)
 
 **Training Data Needs:**
-- 150K-300K hours of real HF recordings (QRN + propagation)
-- Synthetic CASCADE signals applied to real channel models
-- No synthetic propagation (real physics only)
+- 24-36K hours real HF recordings (QRN + propagation)
+- Multi-modulation training: BPSK through 16-APSK
+- Encoder mutations: Continuous signal optimization
+- Decoder dual-role: Pattern recognition + kernel generation
 
 ## Recent Changes
-- **Oct 2025**: Architecture finalized - 128-pattern chaos with kernel coordination
+- **Oct 2025**: Architecture finalized - Dual-layer 2-FSK with adaptive modulation and kernel coordination
+  - Pattern generation: 2-FSK (tone indices 0-1), all λ=0, 135-tone grid @ 20 Hz
+  - Dual-layer: Pattern ID (7b) + Adaptive data (8-32b) = 15-39 bits/pattern total
+  - Kernel: 28 bytes (17b discrete + 8b version + 24B embedding), top-3 candidates
+  - Throughput: 75-450 bps/pattern @ 200 sym/s (BPSK to 16-APSK), equipment-adaptive
+  - Hardware: RPi4 + Coral TPU ($110, 15W) for full 45-user network decode
 - **V1 MVP Strategy**: 24-36K hours KiwiSDR data for initial model training
 - Target: 133 cooperating KiwiSDR owners @ 60 min/day
 - Storage: 4-7TB for V1 data collection

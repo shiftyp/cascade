@@ -529,8 +529,8 @@ training_scenario = {
         {'pattern': 12, 'tones': [0, 312, 625, ...], 'symbols': 50ms, 'mod': 'QPSK'},
     ],
     'beacons': [
-        {'tones': [78, 234, 1718, 1953], 'symbols': 160ms, 'mod': '4-FSK'},  # Normal beacons
-        {'tones': [78, 234, 1718, 1953], 'symbols': 160ms, 'mod': '4-FSK'},
+        {'pattern': 16, 'tone_pair': [34, 35], 'symbols': 50ms, 'mod': '2-FSK'},  # Normal beacon
+        {'pattern': 17, 'tone_pair': [56, 57], 'symbols': 50ms, 'mod': '2-FSK'},
     ],
     'interference': qrm_sample
 }
@@ -648,10 +648,10 @@ decoded_items = signal_expert.separate_all(full_spectrum)
 
 # Returns mixed list:
 [
-    {'type': 'message', 'pattern': 5, 'tones': [0,312,...], 'symbols': 50ms},
-    {'type': 'beacon', 'pattern': 12, 'tones': [78,234,1718,1953], 'symbols': 160ms},
-    {'type': 'message', 'pattern': 18, 'tones': [0,312,...], 'symbols': 50ms},
-    {'type': 'emergency', 'tones': [156,468,781,1093], 'symbols': 800ms, 'mod': '4-FSK'},
+    {'type': 'message', 'pattern': 50, 'tone_pair': [24, 25], 'symbols': 50ms},
+    {'type': 'beacon', 'pattern': 20, 'tone_pair': [67, 68], 'symbols': 50ms},
+    {'type': 'message', 'pattern': 55, 'tone_pair': [89, 90], 'symbols': 50ms},
+    {'type': 'emergency', 'pattern': 0, 'tone_pair': [45, 46], 'symbols': 50ms, 'mod': '2-FSK'},
 ]
 
 # Different frequencies, different symbol rates, all decoded together

@@ -4,23 +4,25 @@ UPDATED 2025-10-04: Lambda minimization approach
 All patterns start with λ=0.0 and optimizer increases only if needed for orthogonality.
 """
 
-from typing import List
+from typing import List, Dict
 import numpy as np
 from .models import Pattern
 from .zadoff_chu import generate_zadoff_chu_pattern, generate_random_pattern
 from .iq_trajectories import generate_iq_trajectory
 from .optimizer import optimize_pattern_two_phase
 from .validator import validate_orthogonality
+from .correlation import compute_all_correlations, compute_flip_correlation
 
 
-def generate_pattern_set(count: int, seed: int) -> List[Pattern]:
-    """Generate 64 or 128 patterns with -37.5 dB orthogonality
+def generate_pattern_set(count: int, seed: int, flip_weight: float = 0.5) -> List[Pattern]:
+    """Generate 64 or 128 patterns with -37.5 dB orthogonality and flip-orthogonality
 
     New optimization strategy (2025-10-04):
     - All patterns start with λ=0.0 (BPSK, maximum robustness)
     - Simulated annealing optimizes BOTH tone sequence AND λ
     - Primary objective: Achieve -37.5 dB orthogonality
-    - Secondary objective: Minimize λ (prefer simpler IQ)
+    - Secondary objective: Flip-orthogonality (<-30 dB when FSK-inverted)
+    - Tertiary objective: Minimize λ (prefer simpler IQ)
 
     Pattern structure:
     - First 48 patterns (0-47): Beacon patterns
@@ -31,9 +33,11 @@ def generate_pattern_set(count: int, seed: int) -> List[Pattern]:
     Args:
         count: Number of patterns (64 or 128)
         seed: Random seed for reproducibility
+        flip_weight: Weight for flip-orthogonality constraint (0.0 to 1.0)
 
     Returns:
-        List of Pattern objects, all meeting -37.5 dB orthogonality
+        List of Pattern objects, all meeting -37.5 dB orthogonality and
+        -30 dB flip-orthogonality for adjacent-channel safety
 
     Raises:
         ValueError: If count not in {64, 128}
@@ -73,6 +77,7 @@ def generate_pattern_set(count: int, seed: int) -> List[Pattern]:
             freq_iterations=freq_iter,
             iq_iterations=iq_iter,
             phase_aware=True,
+            flip_weight=flip_weight,
             seed=seed + i
         )
 
@@ -107,6 +112,7 @@ def generate_pattern_set(count: int, seed: int) -> List[Pattern]:
             freq_iterations=freq_iter,
             iq_iterations=iq_iter,
             phase_aware=True,
+            flip_weight=flip_weight,
             seed=seed + i
         )
 
@@ -129,6 +135,14 @@ def generate_pattern_set(count: int, seed: int) -> List[Pattern]:
     print(f"Max correlation: {stats['max_correlation_db']:.2f} dB")
     print(f"Mean correlation: {stats['mean_correlation_db']:.2f} dB")
 
+    # Flip-orthogonality validation
+    print("\n=== Flip-orthogonality validation ===")
+    flip_stats = validate_flip_orthogonality(patterns, target_db=-30.0)
+    print(f"Min flip correlation: {flip_stats['min_flip_corr']:.2f} dB")
+    print(f"Max flip correlation: {flip_stats['max_flip_corr']:.2f} dB")
+    print(f"Mean flip correlation: {flip_stats['mean_flip_corr']:.2f} dB")
+    print(f"Adjacent-channel safe patterns: {flip_stats['adjacent_safe_count']}/{len(patterns)} ({100*flip_stats['adjacent_safe_count']/len(patterns):.1f}%)")
+
     # Lambda statistics
     lambdas = [p.iq_complexity_lambda for p in patterns]
     bpsk_count = sum(1 for lam in lambdas if lam < 0.05)
@@ -147,3 +161,65 @@ def generate_pattern_set(count: int, seed: int) -> List[Pattern]:
         raise ValueError("Pattern generation failed orthogonality validation")
 
     return patterns
+
+
+def validate_flip_orthogonality(patterns: List[Pattern], target_db: float = -30.0) -> Dict:
+    """Validate flip-orthogonality of pattern set
+
+    Checks that all patterns maintain sufficient orthogonality when FSK-inverted,
+    which is critical for adjacent-channel operation when patterns share tones.
+
+    Args:
+        patterns: List of patterns to validate
+        target_db: Target correlation threshold for flip-orthogonality (typically -30 dB)
+
+    Returns:
+        Dictionary with flip-orthogonality statistics
+    """
+    n = len(patterns)
+    flip_correlations = []
+    adjacent_safe_patterns = []
+
+    # Check all pattern pairs for flip-orthogonality
+    for i in range(n):
+        pattern_i = patterns[i]
+        max_flip_corr = -float('inf')
+
+        for j in range(n):
+            if i == j:
+                continue
+
+            pattern_j = patterns[j]
+
+            # Compute all flip correlations
+            flip_j = compute_flip_correlation(pattern_i, pattern_j)
+            flip_i = compute_flip_correlation(pattern_j, pattern_i)
+
+            # Track worst case
+            max_flip_corr = max(max_flip_corr, flip_j, flip_i)
+            flip_correlations.extend([flip_j, flip_i])
+
+        # Check if this pattern is adjacent-channel safe
+        if max_flip_corr < target_db:
+            adjacent_safe_patterns.append(i)
+
+        # Store flip stats for this pattern
+        pattern_i.flip_orthogonality_stats['max_flip_correlation_db'] = max_flip_corr
+        pattern_i.flip_orthogonality_stats['adjacent_channel_safe'] = max_flip_corr < target_db
+
+    # Compute statistics
+    flip_stats = {
+        'min_flip_corr': min(flip_correlations) if flip_correlations else -100.0,
+        'max_flip_corr': max(flip_correlations) if flip_correlations else -100.0,
+        'mean_flip_corr': np.mean(flip_correlations) if flip_correlations else -100.0,
+        'adjacent_safe_count': len(adjacent_safe_patterns),
+        'adjacent_safe_patterns': adjacent_safe_patterns,
+        'target_db': target_db
+    }
+
+    # Store average flip correlation for each pattern
+    for pattern in patterns:
+        if pattern.flip_orthogonality_stats['max_flip_correlation_db'] is not None:
+            pattern.flip_orthogonality_stats['avg_flip_correlation_db'] = flip_stats['mean_flip_corr']
+
+    return flip_stats

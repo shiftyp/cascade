@@ -1,17 +1,21 @@
 # CASCADE Emergency Relay Network Protocol
 
+> **NOTE: This document needs updating for 2-FSK/150-tone architecture**
+> Many references to 4-FSK and 1550 Hz emergency tone are outdated.
+> Emergency detection now uses Pattern 0-15 correlation, not fixed frequency monitoring.
+
 CASCADE implements a self-organizing ad-hoc relay network for emergency communications. When an emergency is declared, the network automatically forms relay tiers based on signal strength and geographic distribution, enabling worldwide emergency traffic coordination without infrastructure.
 
 ## Emergency Protocol Overview
 
 ### Six-Phase Emergency Protocol
 
-1. **Emergency Alert** (1550 Hz BPSK, ~24s): Single-tone alert with callsign and grid (exact center of spectrum)
+1. **Emergency Alert** (Pattern 0-15, ~1.6s): Pattern-based alert detected via correlation
 2. **Network Clearing** (immediate): All stations stop beacon transmissions, transmit "CLEARING"
-3. **Emergency Negotiation** (4-FSK, ~37s): Full details, location, kernel on beacon channel
-4. **Prokernel Responses** (4-FSK, staggered): Stations announce relay capabilities
-5. **Final Kernel** (4-FSK, ~26s): Emergency station sends relay network map
-6. **Emergency Traffic** (message tones): Actual emergency data relayed via ad-hoc net
+3. **Emergency Negotiation** (2-FSK patterns, ~37s): Full details, location, kernel on beacon patterns
+4. **Prokernel Responses** (2-FSK, staggered): Stations announce relay capabilities
+5. **Final Kernel** (2-FSK, ~26s): Emergency station sends relay network map
+6. **Emergency Traffic** (Pattern 48-63): Actual emergency data relayed via ad-hoc net
 
 ---
 
@@ -21,7 +25,7 @@ CASCADE can handle **up to 4 simultaneous emergencies** using 4D pattern orthogo
 
 ### Emergency Pattern Allocation
 
-**8 emergency patterns (0-7) divided among emergencies:**
+**32 emergency patterns (0-15 beacon + 48-63 message) for emergencies:**
 
 ```python
 EMERGENCY_PATTERN_ALLOCATION = {
@@ -30,11 +34,11 @@ EMERGENCY_PATTERN_ALLOCATION = {
 
     'allocation': {
         'emergency_1': {
-            'beacon_patterns': [0, 1, 2, 3],  # 4 beacon patterns (4-FSK)
-            'message_patterns': [64, 65, 66, 67],  # 4 message patterns (4 tones)
-            'alert_tone': 1550,  # Hz (shared with all)
+            'beacon_patterns': [0, 1, 2, 3],  # 4 beacon patterns (2-FSK)
+            'message_patterns': [48, 49, 50, 51],  # 4 message patterns (2-FSK)
+            'detection': 'pattern_correlation',  # No fixed tone monitoring
             'alert_offset': 0,  # seconds (first to alert)
-            'freq_preference': range(0, 25),  # Lower frequency bias (message tones)
+            'tone_pair_preference': 'adaptive',  # Model selects best tone pair
             'example': 'Hurricane Maria (Puerto Rico)',
             'benefit': '4× beacon throughput for negotiation'
         },
