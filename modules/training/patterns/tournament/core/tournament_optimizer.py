@@ -48,11 +48,14 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
     sys.stdout = null_out
     sys.stderr = null_err
 
-    patterns_parent_dir = Path(__file__).parent.parent.parent
-    if str(patterns_parent_dir) not in sys.path:
-        sys.path.insert(0, str(patterns_parent_dir))
+    # Add path to patterns directory for imports
+    # tournament_optimizer.py is in .../patterns/tournament/core/
+    # We need to import from .../patterns/
+    patterns_dir = Path(__file__).parent.parent.parent  # Up to patterns/
+    if str(patterns_dir) not in sys.path:
+        sys.path.insert(0, str(patterns_dir))
 
-    from patterns.zadoff_chu import generate_zadoff_chu_pattern
+    from zadoff_chu import generate_zadoff_chu_pattern
 
     # This runs in a separate process
     # Set CPU affinity if on Windows/Linux
