@@ -1,6 +1,10 @@
-"""4D Cross-Correlation Calculation (Time × Freq × IQ)"""
+"""4D Cross-Correlation Calculation (Time × Freq × IQ)
+
+Includes flip-orthogonality support for adjacent-channel robustness.
+"""
 
 import numpy as np
+from typing import Tuple, Dict
 from .models import Pattern
 
 
@@ -137,3 +141,119 @@ def compute_robust_correlation(
         worst_case_corr = max(worst_case_corr, corr_db)
 
     return worst_case_corr
+
+
+def compute_flip_correlation(pattern_i: Pattern, pattern_j: Pattern) -> float:
+    """Compute correlation with pattern_j's frequency sequence inverted (FSK flip)
+
+    This checks orthogonality when pattern_j experiences FSK inversion,
+    which can happen due to phase inversions in multipath or adjacent-channel
+    interference when patterns share tones.
+
+    Args:
+        pattern_i: First pattern (normal)
+        pattern_j: Second pattern (will be FSK-inverted)
+
+    Returns:
+        Correlation in dB with pattern_j FSK-inverted
+    """
+    # Create a temporary pattern with inverted frequency sequence
+    # We can use pattern_j's pre-computed inverse if available
+    if hasattr(pattern_j, 'freq_sequence_inv'):
+        freq_inv = pattern_j.freq_sequence_inv
+    else:
+        freq_inv = 1 - pattern_j.freq_sequence  # Invert 0↔1 for 2-FSK
+
+    # Create temporary inverted pattern
+    pattern_j_inv = Pattern(
+        pattern_id=pattern_j.pattern_id,
+        freq_sequence=freq_inv,
+        iq_trajectory=pattern_j.iq_trajectory,
+        iq_complexity_lambda=pattern_j.iq_complexity_lambda
+    )
+
+    # Compute correlation with inverted pattern
+    return compute_4d_correlation(pattern_i, pattern_j_inv)
+
+
+def compute_all_correlations(pattern_i: Pattern, pattern_j: Pattern) -> Dict[str, float]:
+    """Compute all correlation metrics between two patterns
+
+    Computes:
+    - Normal correlation
+    - Flip correlation (pattern_j inverted)
+    - Reverse flip correlation (pattern_i inverted)
+    - Mutual flip (both inverted)
+
+    Args:
+        pattern_i: First pattern
+        pattern_j: Second pattern
+
+    Returns:
+        Dictionary with all correlation values in dB
+    """
+    results = {}
+
+    # Normal correlation
+    results['normal'] = compute_4d_correlation(pattern_i, pattern_j)
+
+    # Pattern j flipped
+    results['j_flipped'] = compute_flip_correlation(pattern_i, pattern_j)
+
+    # Pattern i flipped
+    results['i_flipped'] = compute_flip_correlation(pattern_j, pattern_i)
+
+    # Both flipped (useful for symmetric validation)
+    pattern_i_inv = Pattern(
+        pattern_id=pattern_i.pattern_id,
+        freq_sequence=1 - pattern_i.freq_sequence,
+        iq_trajectory=pattern_i.iq_trajectory,
+        iq_complexity_lambda=pattern_i.iq_complexity_lambda
+    )
+    pattern_j_inv = Pattern(
+        pattern_id=pattern_j.pattern_id,
+        freq_sequence=1 - pattern_j.freq_sequence,
+        iq_trajectory=pattern_j.iq_trajectory,
+        iq_complexity_lambda=pattern_j.iq_complexity_lambda
+    )
+    results['both_flipped'] = compute_4d_correlation(pattern_i_inv, pattern_j_inv)
+
+    # Maximum (worst-case) correlation
+    results['max_correlation'] = max(results.values())
+
+    # Check if adjacent-channel safe (all correlations < -30 dB)
+    results['adjacent_safe'] = all(corr < -30.0 for corr in results.values())
+
+    return results
+
+
+def check_adjacent_channel_safety(pattern_i: Pattern, pattern_j: Pattern,
+                                   tone_pair_i: Tuple[int, int],
+                                   tone_pair_j: Tuple[int, int]) -> bool:
+    """Check if two patterns are safe to use on adjacent tone pairs
+
+    Args:
+        pattern_i: First pattern
+        pattern_j: Second pattern
+        tone_pair_i: Tone indices used by pattern_i (e.g., (34, 35))
+        tone_pair_j: Tone indices used by pattern_j (e.g., (35, 36))
+
+    Returns:
+        True if patterns maintain sufficient orthogonality even when sharing a tone
+    """
+    # Check if tone pairs are adjacent (share a tone)
+    shared_tones = set(tone_pair_i) & set(tone_pair_j)
+
+    if not shared_tones:
+        # No shared tones, automatically safe
+        return True
+
+    # If they share tones, check all correlations
+    correlations = compute_all_correlations(pattern_i, pattern_j)
+
+    # For adjacent channels with shared tones, require stricter orthogonality
+    # Normal correlation should still be < -37.5 dB
+    # Flip correlations should be < -30 dB
+    return (correlations['normal'] < -37.5 and
+            correlations['j_flipped'] < -30.0 and
+            correlations['i_flipped'] < -30.0)

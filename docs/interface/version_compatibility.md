@@ -1,201 +1,186 @@
 # CASCADE Version Compatibility System
 
-CASCADE ensures long-term interoperability through a version-based compatibility system where newer models are supersets of older ones, allowing mixed-version networks to communicate seamlessly.
+CASCADE v1 ensures interoperability through carefully designed frozen protocol elements while allowing model evolution.
 
 ## Design Philosophy
 
 **Key principle**: Frozen protocol elements + evolvable model behavior
 
 **Frozen forever** (ensures interoperability):
-- 128 patterns (48 beacon + 80 message) (generated once, never changed)
-- Base symbol duration (50ms for messages, 160ms/500ms for beacons)
-- Emergency frequencies [468, 1093 Hz]
-- Normal beacon frequencies [78, 234, 1718, 1953 Hz]
-- Message tone frequencies [0, 312, 625, 937, 1250, 1562, 1875, 2187 Hz]
+- 128 patterns (48 beacon + 80 message) with 2-FSK structure
+- Pattern duration: 32 symbols @ 200 sym/s = 0.16s
+- 135-tone reference grid (300-3000 Hz, 20 Hz spacing)
+- 28-byte kernel structure (3 bytes discrete + 24 bytes embedding)
+- Dual-layer encoding (pattern ID + adaptive data payload)
 
 **Can evolve** (negotiated via kernel version):
 - Model weights and architectures
-- Kernel formats and compression
-- Constellation adaptation strategies
-- FEC schemes
-- Advanced features (mesh routing, etc.)
+- Encoder mutation strategies
+- Decoder improvements
+- Kernel embedding semantics
+- Pro/anti-kernel weighting algorithms
 
 ## Version Number in Kernel
 
-All kernels include a 4-bit version field (16 possible versions):
+The 28-byte kernel includes version information in the discrete portion:
 
 ```python
-# Standard 64-bit kernel
-kernel_with_version = {
-    'version': 4 bits,             # 0-15 (current version)
-    'modulation_pref': 3 bits,
-    'hardware_tier': 2 bits,
-    'capacity_users': 5 bits,
-    'snr_floor': 5 bits,
-    'interference_map': 8 bits,
-    'frequency_pref': 8 bits,
-    'timing_offset': 4 bits,
-    'noise_floor': 5 bits,
-    'power_request': 4 bits,
-    'features': 4 bits,
-    'reserved': 12 bits
-}
-# Total: 64 bits
+# 28-byte kernel structure
+class KernelStructure:
+    # Discrete component (3 bytes = 24 bits)
+    pattern_id: int       # 7 bits  - Which of 128 patterns
+    frequency_pair: int   # 7 bits  - Which tone pair (0-74)
+    modulation: int       # 3 bits  - BPSK/QPSK/8-PSK/16-APSK
+    protocol_version: int # 4 bits  - Protocol compatibility (0-15)
+    model_version: int    # 3 bits  - NN model generation (0-7)
 
-# Extended 256-bit kernel
-extended_kernel_with_version = {
-    'version': 4 bits,             # Same version field
-    'extended_fields': 252 bits     # Additional capabilities
-}
+    # Continuous embedding (24 bytes)
+    embedding: np.array   # 48 dims × 4-bit quantization
 ```
 
-## Version Evolution Strategy
+## CASCADE v1.0 Specification
 
-### v1.0 (Initial Release - 2026)
-
-**Capabilities:**
 ```python
 v1_0 = {
-    'patterns': 'walsh_hadamard_64',        # Fixed
-    'modulation': '8-QAM → BPSK collapse',
-    'kernel_sizes': [64],                   # Only standard kernel
-    'fec': 'LDPC rate 0.3-0.8',
-    'constellation': 'parametric_collapse',
-    'relay': 'basic (3 hops max)',
-    'sync': 'blind_pattern_correlation',
-    'max_users': 50
+    'patterns': '128 patterns (48 beacon + 80 message)',  # 2-FSK architecture
+    'modulation': 'BPSK/QPSK/8-PSK/16-APSK',             # Adaptive based on SNR
+    'kernel_size': 28,                                    # 3 bytes discrete + 24 bytes embedding
+    'error_tolerance': 'Pattern recognition (37.5%)',     # QR code-like, no separate FEC
+    'encoding': 'Dual-layer (pattern ID + data)',        # 15-39 bits total
+    'constellation': 'differential_encoding',             # Drift-immune
+    'sync': 'pattern_correlation',                        # No explicit sync needed
+    'max_simultaneous': 45,                              # Active users at once
+    'total_capacity': 1024                               # Via TDMA/FDMA reuse
 }
 ```
 
-### v2.0 (Enhanced - 2027+)
+## Model Evolution Within v1
 
-**New capabilities** (backward compatible):
-```python
-v2_0 = {
-    'patterns': 'walsh_hadamard_64',        # SAME (frozen)
-    'modulation': '16-QAM → BPSK collapse', # Enhanced! Can still do 8-QAM
-    'kernel_sizes': [16, 64, 256],          # Extended kernels added
-    'fec': 'Polar + LDPC',                  # Additional FEC, still supports LDPC
-    'constellation': 'neural_learned',      # Improved, but can fall back
-    'relay': 'mesh-aware (5 hops)',         # Enhanced, compatible with basic
-    'sync': 'improved_blind_sync',          # Better, backward compatible
-    'max_users': 80,                        # Improved Signal Expert
-
-    # v2.0 model contains v1.0 mode
-    'v1_compatibility_mode': True           # Can operate as v1.0 when needed
-}
-```
-
-## Backward Compatibility Training
-
-v2.0 models are trained to operate in both v2.0 and v1.0 modes:
+While the protocol is frozen, models can evolve:
 
 ```python
-def train_v2_with_v1_compatibility():
-    """Train v2.0 to be superset of v1.0"""
+def model_evolution_compatibility():
+    """
+    Newer models within v1 protocol can have improved:
+    - Pattern recognition accuracy
+    - Kernel generation quality
+    - Noise resistance
+    - Decoder performance
 
-    for batch in training_data:
-        # 50% train with v2.0 features
-        if random.random() < 0.5:
-            mode = 'v2_full'
-            constraints = {
-                'allow_16qam': True,
-                'use_extended_kernels': True,
-                'use_polar_codes': True,
-                'advanced_relay': True
-            }
+    But must maintain:
+    - Same 128 patterns
+    - Same 28-byte kernel format
+    - Same dual-layer encoding
+    - Same modulation options
+    """
 
-        # 50% train with v1.0 constraints (compatibility mode)
-        else:
-            mode = 'v1_compatibility'
-            constraints = {
-                'allow_16qam': False,       # Limit to 8-QAM
-                'use_extended_kernels': False,  # Only 64-bit kernels
-                'use_polar_codes': False,   # Only LDPC
-                'advanced_relay': False     # Basic relay only
-            }
+    # Model v1.0.0: Initial release
+    model_v1_0_0 = {
+        'decoder_accuracy': 0.85,
+        'kernel_optimization': 'basic',
+        'training_hours': 24000
+    }
 
-        # Train model to work under both constraint sets
-        output = model(signal, mode=mode, constraints=constraints)
-        loss = compute_loss(output, ground_truth)
-        optimizer.step(loss)
-```
-
-**Result**: v2.0 model can seamlessly operate as v1.0 when communicating with v1.0 peers.
-
-## Version Negotiation Protocol
-
-**When two stations exchange kernels:**
-
-```python
-def negotiate_version(my_kernel, their_kernel):
-    """Determine protocol level for communication"""
-
-    my_version = my_kernel.version      # e.g., 2
-    their_version = their_kernel.version  # e.g., 1
-
-    # Use lowest common version
-    protocol_version = min(my_version, their_version)
-
-    if protocol_version < my_version:
-        # I'm newer - activate compatibility mode
-        model.set_mode(f'v{protocol_version}_compatibility')
-        log(f"Using v{protocol_version} mode for compatibility with peer")
-
-    return {
-        'protocol_version': protocol_version,
-        'my_mode': 'compatibility' if protocol_version < my_version else 'full',
-        'features_available': get_features_for_version(protocol_version)
+    # Model v1.0.1: Improved training
+    model_v1_0_1 = {
+        'decoder_accuracy': 0.90,  # Better
+        'kernel_optimization': 'advanced',  # Better
+        'training_hours': 36000,
+        # But same protocol, same patterns, same kernel format
     }
 ```
 
-**Example exchange:**
+## Kernel Version Negotiation
 
-```markdown
-**Alice (v1.0) beacons** → No version in beacon (beacons minimal)
-**Bob (v2.0) ACKs** with kernel containing version=2
-**Alice sends kernel** with version=1
+When stations exchange kernels:
 
-**Bob sees**: Alice is v1.0
-**Bob activates**: v1.0 compatibility mode
-  - Limits to 8-QAM (no 16-QAM)
-  - Uses 64-bit kernels only (not 256-bit)
-  - Uses LDPC FEC only (not Polar codes)
-  - All communication at v1.0 level
+```python
+def negotiate_compatibility(my_kernel, their_kernel):
+    """Ensure protocol compatibility"""
 
-**Alice sees**: Bob is v2.0 (but doesn't matter, Alice can only do v1.0)
-**Alice operates**: Normal v1.0 behavior
+    my_protocol = my_kernel.protocol_version      # e.g., 0 (v1.0)
+    their_protocol = their_kernel.protocol_version  # e.g., 0 (v1.0)
 
-**Result**: Perfect communication at v1.0 level
+    if my_protocol != their_protocol:
+        # Future: Handle protocol mismatch
+        # For v1.0, this shouldn't happen
+        log_warning(f"Protocol mismatch: {my_protocol} vs {their_protocol}")
+        return None
+
+    # Model versions can differ - that's fine
+    my_model = my_kernel.model_version       # e.g., 0
+    their_model = their_kernel.model_version  # e.g., 1
+
+    # Both use same protocol, can communicate
+    return {
+        'compatible': True,
+        'protocol': my_protocol,
+        'my_model': my_model,
+        'their_model': their_model
+    }
 ```
 
-## Version Compatibility Matrix
+## Hardware Tier Compatibility
 
-| Your Version | Their Version | Result | Mode |
-|--------------|---------------|--------|------|
-| 1.0 | 1.0 | v1.0 protocol | Full features (for v1.0) |
-| 1.0 | 2.0 | v1.0 protocol | v1.0 full / v2.0 compatibility |
-| 2.0 | 1.0 | v1.0 protocol | v2.0 compatibility / v1.0 full |
-| 2.0 | 2.0 | v2.0 protocol | Full features (for v2.0) |
-| 2.0 | 3.0 | v2.0 protocol | v2.0 full / v3.0 compatibility |
-| 1.0 | 3.0 | v1.0 protocol | v1.0 full / v3.0 compatibility |
+Different hardware capabilities work within same protocol:
 
-**Rule**: Always use minimum version, newer model activates compatibility mode.
+```python
+def hardware_compatibility():
+    """
+    All hardware tiers use same v1 protocol
+    Differences are in capability, not compatibility
+    """
 
-## Future Version Planning
+    # QRP station (Raspberry Pi + QMX)
+    qrp_station = {
+        'transmit_patterns': 1,      # 1 pattern at a time
+        'modulation': 'BPSK',       # Low SNR
+        'throughput': '94 bps'
+    }
 
-**v3.0 (Hypothetical - 2028+):**
-- Must train on v1.0 AND v2.0 modes
-- Can communicate with both
-- Adds new features only when both stations are v3.0
+    # Modern station (PC + IC-7300)
+    modern_station = {
+        'transmit_patterns': 4,      # 4 patterns simultaneously
+        'modulation': 'QPSK',       # Medium SNR
+        'throughput': '575 bps'
+    }
 
-**Long-term (v10+):**
-- May drop v1.0 compatibility (after 5+ years, most network upgraded)
-- Document breaking changes clearly
-- Provide upgrade path
+    # Premium station (Server + Flex 6600)
+    premium_station = {
+        'transmit_patterns': 8,      # 8 patterns simultaneously
+        'modulation': '16-APSK',    # High SNR
+        'throughput': '1950 bps'
+    }
 
-## See Also
+    # All three can communicate using v1 protocol
+    # Throughput adapts to weakest link
+```
 
-- **[Signal Specification](../protocol/signal_specification.md)** - Frozen protocol elements
-- **[Model Updates](../deployment/updates.md)** - How updates are deployed
-- **[Training Strategy](../training/README.md)** - How compatibility modes are trained
+## Future Protocol Evolution
+
+When CASCADE eventually needs v2 (years from now):
+
+```python
+def future_v2_considerations():
+    """
+    IF a v2 is ever needed, it would:
+    - Be trained to also operate in v1 mode
+    - Detect v1 stations via protocol_version field
+    - Fall back to v1 behavior when needed
+    - Allow v1 and v2 stations to coexist
+
+    But v1 is designed to last many years without changes.
+    """
+    pass
+```
+
+## Summary
+
+CASCADE v1 achieves compatibility through:
+1. **Frozen protocol**: 128 patterns, 28-byte kernels, dual-layer encoding
+2. **Version fields**: 4-bit protocol + 3-bit model versions
+3. **Adaptive operation**: Modulation and throughput adapt to conditions
+4. **No traditional FEC**: Pattern recognition provides error tolerance
+5. **Hardware agnostic**: All tiers use same protocol, different capabilities
+
+The system is designed to operate for years without protocol changes, with improvements coming from better trained models rather than protocol modifications.

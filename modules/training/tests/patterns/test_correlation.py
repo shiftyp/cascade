@@ -34,8 +34,8 @@ def test_correlation_returns_float_db():
 
 def test_identical_patterns_high_correlation():
     """T006: Test with identical patterns → expect ~0 dB"""
-    # Create identical patterns
-    freq_seq = np.random.randint(0, 4, size=32, dtype='uint8')
+    # Create identical patterns (2-FSK)
+    freq_seq = np.random.randint(0, 2, size=32, dtype='uint8')
     iq_traj = np.random.randn(32).astype('complex64')
 
     pattern_i = Pattern(

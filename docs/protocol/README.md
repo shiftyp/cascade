@@ -601,15 +601,14 @@ Graceful degradation ensures entry-level hardware remains useful while creating 
 ## See Also
 
 ### Core Protocol Specifications
-- **[Signal Specification](signal_specification.md)** - Physical layer parameters (78-tone grid, RS structure)
-- **[Adaptive Tone Grid](adaptive_tone_grid.md)** - 78 reference tones and spectrum allocation
+- **[Signal Specification](signal_specification.md)** - Physical layer parameters (135-tone grid, RS structure)
+- **[Tone Grid](tone_grid.md)** - 135 reference tones (300-3000 Hz, 20 Hz spacing)
 - **[Kernel Lifecycle](kernel_lifecycle.md)** - 3-round kernel exchange (prokernel → antikernel → adaptation)
 - **[Message Format](message_format.md)** - Binary message structure
 - **[Message Validation](message_validation.md)** - Dual-layer validation (CRC + xxHash)
 
 ### Specialized Protocols
 - **[Emergency Relay Network](emergency_relay_network.md)** - Ad-hoc relay and 6-phase emergency protocol
-- **[Adaptive 4-FSK](adaptive_4fsk.md)** - Beacon channel modulation
 - **[Chaos Transmission](chaos_transmission.md)** - Uncoordinated operation mode
 - **[QSO Protocol](qso_protocol.md)** - Pairwise communication patterns
 

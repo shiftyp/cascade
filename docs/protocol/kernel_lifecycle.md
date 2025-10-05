@@ -92,7 +92,7 @@ b_rx_kernel = {
 
 # When A transmits to B:
 # - A uses b_rx_kernel as hints
-# - Encodes with 16-QAM, FEC 0.5
+# - Encodes with 16-APSK, FEC 0.5
 # - Uses 4 patterns (B can decode 4)
 # - Can use all 78 tones (B has excellent propagation)
 # - B decodes easily with powerful hardware
@@ -1046,7 +1046,6 @@ See [telemetry_research.md](../../telemetry_research.md) for comprehensive telem
 
 ## See Also
 
-- **[Adaptive 4-FSK](adaptive_4fsk.md)** - 4-FSK channel capacity and multi-user separation
 - **[Message Validation](message_validation.md)** - CRC32 + xxHash32 dual validation
 - **[Message Format](message_format.md)** - Binary wire format specification
 - **[Net Operations](net_operations.md)** - Detailed net protocol and coordination

@@ -61,10 +61,10 @@ def test_pattern_structure():
     patterns = generate_pattern_set(count=64, seed=42)
 
     for pattern in patterns:
-        # Verify freq_sequence is 32 × uint8
+        # Verify freq_sequence is 32 × uint8 with 2-FSK tone indices
         assert pattern.freq_sequence.shape == (32,)
         assert pattern.freq_sequence.dtype == 'uint8'
-        assert all(0 <= tone <= 3 for tone in pattern.freq_sequence)
+        assert all(0 <= tone <= 1 for tone in pattern.freq_sequence), "2-FSK: tone indices must be 0 or 1"
 
         # Verify iq_trajectory is 32 × complex64
         assert pattern.iq_trajectory.shape == (32,)

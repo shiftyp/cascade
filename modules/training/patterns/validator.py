@@ -1,9 +1,15 @@
 """Pattern Validation and Orthogonality Checking"""
 
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 import numpy as np
 from .models import Pattern
-from .correlation import compute_4d_correlation, compute_robust_correlation
+from .correlation import (
+    compute_4d_correlation,
+    compute_robust_correlation,
+    compute_flip_correlation,
+    compute_all_correlations,
+    check_adjacent_channel_safety
+)
 from .binary_format import load_pattern_file
 
 
@@ -177,3 +183,188 @@ def test_phase_robustness(
     }
 
     return results
+
+
+def validate_flip_orthogonality(patterns: List[Pattern], target_db: float = -30.0) -> Tuple[bool, Dict]:
+    """Validate flip-orthogonality for all pattern pairs
+
+    Ensures patterns maintain sufficient separation when FSK-inverted,
+    critical for adjacent-channel operation.
+
+    Args:
+        patterns: List of patterns to validate
+        target_db: Target threshold for flip correlation (default -30 dB)
+
+    Returns:
+        (pass/fail, statistics dict with flip correlation metrics)
+    """
+    n = len(patterns)
+    flip_correlations = []
+    failed_flip_pairs = []
+
+    # Check all pairs for flip-orthogonality
+    for i in range(n):
+        for j in range(i + 1, n):
+            # Get all correlation types
+            all_corrs = compute_all_correlations(patterns[i], patterns[j])
+
+            # Check flip correlations
+            flip_j = all_corrs['j_flipped']
+            flip_i = all_corrs['i_flipped']
+            both_flip = all_corrs['both_flipped']
+
+            flip_correlations.extend([flip_j, flip_i, both_flip])
+
+            # Track failures
+            if flip_j > target_db:
+                failed_flip_pairs.append((i, j, 'j_flipped', flip_j))
+            if flip_i > target_db:
+                failed_flip_pairs.append((i, j, 'i_flipped', flip_i))
+            if both_flip > target_db:
+                failed_flip_pairs.append((i, j, 'both_flipped', both_flip))
+
+    # Compute statistics
+    stats = {
+        'pairs_checked': n * (n - 1) // 2,
+        'min_flip_corr_db': float(np.min(flip_correlations)) if flip_correlations else -100.0,
+        'max_flip_corr_db': float(np.max(flip_correlations)) if flip_correlations else -100.0,
+        'mean_flip_corr_db': float(np.mean(flip_correlations)) if flip_correlations else -100.0,
+        'failed_flip_pairs': failed_flip_pairs,
+        'target_db': target_db
+    }
+
+    passes = len(failed_flip_pairs) == 0
+
+    return passes, stats
+
+
+def validate_adjacent_channel_safety(
+    patterns: List[Pattern],
+    tone_assignments: Dict[int, Tuple[int, int]]
+) -> Dict:
+    """Validate patterns for adjacent-channel operation
+
+    Tests if patterns that might use adjacent tone pairs maintain
+    sufficient orthogonality including flip-orthogonality.
+
+    Args:
+        patterns: List of patterns to validate
+        tone_assignments: Mapping of pattern_id to (tone1, tone2) indices
+
+    Returns:
+        Dictionary with adjacent-channel safety metrics
+    """
+    results = {
+        'adjacent_pairs': [],
+        'safe_pairs': [],
+        'unsafe_pairs': [],
+        'safety_rate': 0.0
+    }
+
+    # Find patterns with adjacent tone pairs
+    for i in range(len(patterns)):
+        for j in range(i + 1, len(patterns)):
+            pattern_i = patterns[i]
+            pattern_j = patterns[j]
+
+            # Get tone assignments
+            if pattern_i.pattern_id not in tone_assignments:
+                continue
+            if pattern_j.pattern_id not in tone_assignments:
+                continue
+
+            tones_i = tone_assignments[pattern_i.pattern_id]
+            tones_j = tone_assignments[pattern_j.pattern_id]
+
+            # Check if adjacent (share a tone)
+            if set(tones_i) & set(tones_j):
+                results['adjacent_pairs'].append((i, j))
+
+                # Check safety
+                is_safe = check_adjacent_channel_safety(
+                    pattern_i, pattern_j,
+                    tones_i, tones_j
+                )
+
+                if is_safe:
+                    results['safe_pairs'].append((i, j))
+                else:
+                    results['unsafe_pairs'].append((i, j))
+
+    # Calculate safety rate
+    if results['adjacent_pairs']:
+        results['safety_rate'] = len(results['safe_pairs']) / len(results['adjacent_pairs'])
+
+    return results
+
+
+def generate_flip_validation_report(patterns: List[Pattern]) -> str:
+    """Generate detailed flip-orthogonality validation report
+
+    Args:
+        patterns: List of patterns to validate
+
+    Returns:
+        Markdown-formatted report with flip-orthogonality analysis
+    """
+    # Run flip validation
+    passes_flip, stats_flip = validate_flip_orthogonality(patterns, target_db=-30.0)
+
+    # Run normal validation for comparison
+    passes_normal, stats_normal = validate_orthogonality(patterns, target_db=-37.5)
+
+    report = f"""# Flip-Orthogonality Validation Report
+
+## Summary
+
+**Pattern Count**: {len(patterns)}
+**Normal Orthogonality**: {'✓ PASS' if passes_normal else '✗ FAIL'} (target: -37.5 dB)
+**Flip Orthogonality**: {'✓ PASS' if passes_flip else '✗ FAIL'} (target: -30.0 dB)
+
+## Normal Correlation Statistics
+
+- Min: {stats_normal['min_correlation_db']:.2f} dB
+- Max: {stats_normal['max_correlation_db']:.2f} dB
+- Mean: {stats_normal['mean_correlation_db']:.2f} dB
+- Failed pairs: {len(stats_normal['failed_pairs'])}
+
+## Flip Correlation Statistics
+
+- Min: {stats_flip['min_flip_corr_db']:.2f} dB
+- Max: {stats_flip['max_flip_corr_db']:.2f} dB
+- Mean: {stats_flip['mean_flip_corr_db']:.2f} dB
+- Failed pairs: {len(stats_flip['failed_flip_pairs'])}
+
+"""
+
+    if stats_flip['failed_flip_pairs']:
+        report += f"""## Failed Flip Pairs (First 20)
+
+| Pattern A | Pattern B | Flip Type | Correlation (dB) |
+|-----------|-----------|-----------|------------------|
+"""
+        for pid_i, pid_j, flip_type, corr in stats_flip['failed_flip_pairs'][:20]:
+            report += f"| {pid_i} | {pid_j} | {flip_type} | {corr:.2f} |\n"
+
+        if len(stats_flip['failed_flip_pairs']) > 20:
+            report += f"\n... and {len(stats_flip['failed_flip_pairs']) - 20} more failures\n"
+    else:
+        report += "## All pairs pass flip-orthogonality threshold ✓\n"
+
+    # Pattern-specific flip stats
+    report += "\n## Per-Pattern Flip Statistics\n\n"
+    report += "| Pattern | Max Flip Corr (dB) | Adjacent Safe |\n"
+    report += "|---------|-------------------|---------------|\n"
+
+    for p in patterns[:10]:  # Show first 10
+        max_flip = p.flip_orthogonality_stats.get('max_flip_correlation_db', 'N/A')
+        safe = p.flip_orthogonality_stats.get('adjacent_channel_safe', False)
+
+        if isinstance(max_flip, float):
+            report += f"| {p.pattern_id} | {max_flip:.2f} | {'✓' if safe else '✗'} |\n"
+        else:
+            report += f"| {p.pattern_id} | N/A | N/A |\n"
+
+    report += "\n*Note: Flip-orthogonality ensures patterns remain separated when FSK-inverted due to adjacent-channel interference.*\n"
+
+    return report

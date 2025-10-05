@@ -1,6 +1,6 @@
 # Pattern-Based Beacons
 
-CASCADE uses pattern-based beacons that share the 78-tone grid with message traffic. There is NO frequency reservation—all patterns (beacons, messages, emergency) select their 4 tones from the same 78-tone grid: 300-2764 Hz, 32 Hz spacing.
+CASCADE uses pattern-based beacons that share the 135-tone grid with message traffic. There is NO frequency reservation—all patterns (beacons and messages) use 2-FSK modulation with 2 adjacent tones from the same 135-tone grid: 300-3000 Hz, 20 Hz spacing.
 
 ## Architecture Change
 
@@ -10,38 +10,45 @@ CASCADE uses pattern-based beacons that share the 78-tone grid with message traf
 - 4-FSK beacons: [1490, 1520, 1580, 1610] Hz
 - Spectrum efficiency: 84.5%
 
-**Current (Pattern-Based):**
-- 78-tone grid: 300-2764 Hz (32 Hz spacing)
-- Each pattern selects 4 tones from 78 (adaptive)
-- Emergency: Patterns 0-15 (detected via correlation)
-- Normal beacons: Patterns 16-63
-- Spectrum efficiency: 96.7%
+**Current (2-FSK Pattern-Based):**
+- 135-tone grid: 300-3000 Hz (20 Hz spacing, standard SSB)
+- Each pattern uses 2 adjacent tones (2-FSK)
+- Emergency: Patterns 0-15 (beacon) + 48-63 (message)
+- Normal beacons: Patterns 16-47
+- Spectrum efficiency: 100% (full channel utilization)
 
 ## Frequency Allocation
 
-### 4-Tone Shared Grid
+### 2-FSK Tone Pair Allocation
 
 ```
-Total CASCADE channel: 2500 Hz (300-2800 Hz)
+Total CASCADE channel: 2700 Hz (300-3000 Hz, standard SSB)
 
-78-tone reference grid (all patterns share):
-├─ 78 tones: 300-2764 Hz (32 Hz spacing)
-└─ Each pattern selects 4 tones from this grid (adaptive)
+135-tone reference grid (all patterns share):
+├─ 135 tones: 300-3000 Hz (20 Hz spacing)
+└─ 67 tone pairs available for 2-FSK patterns
 
-Tone selection method: Adaptive based on channel conditions
-- Each pattern picks best 4 from 78 (can shift ±3 from base)
-- Multiple patterns can select overlapping tones
-- Separation when overlapping: Time × IQ orthogonality
+Pattern assignment:
+- Each pattern assigned specific tone pair (2 adjacent tones)
+- Patterns use different tone pairs for frequency separation
+- Time and IQ separation enable frequency reuse when needed
 
 Traffic types:
-- Beacons: Patterns 0-47 (4 tones each from 78-tone grid, simple IQ λ ≤ 0.3)
-- Messages: Patterns 48-127 (4 tones each from 78-tone grid, hierarchical IQ pools)
-- Emergency: Patterns 0-15 (beacon) + 48-63 (message) - correlation detection
+- Beacons: Patterns 0-47 (48 patterns, each uses 2-FSK)
+- Messages: Patterns 48-127 (80 patterns, each uses 2-FSK)
+- Emergency: Patterns 0-15 (beacon) + 48-63 (message)
 ```
 
 ## Beacon Pattern Allocation
 
-### 64 Beacon Patterns (IDs 0-63)
+### Bandwidth Restriction
+
+**All beacons restricted to 300-2400 Hz (lower 2.1 kHz)** for compatibility with older radios:
+- Tone pairs 0-105 only (of 150 total tones)
+- Ensures all stations can receive beacons regardless of equipment bandwidth
+- Messages can use full 3 kHz based on negotiated capability
+
+### 48 Beacon Patterns (IDs 0-47)
 
 ```python
 BEACON_PATTERNS = {

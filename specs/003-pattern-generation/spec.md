@@ -59,57 +59,94 @@ As a **CASCADE implementer**, I need to generate two orthogonal pattern sets (64
 
 ## Revised Architecture (2025-10-04)
 
-### Adaptive λ Minimization Approach
+### 2-FSK Architecture (FINAL)
 
-**Key Change**: Instead of pre-assigning IQ complexity (λ) hierarchically by pattern ID, the optimizer now **empirically discovers minimum λ needed for orthogonality**.
+**Key Decision**: Use 2-FSK (2 adjacent tones per pattern) instead of 4-FSK for optimal λ minimization
 
-**Optimization Strategy**:
-1. **Primary objective**: Achieve -37.5 dB orthogonality (hard constraint)
-2. **Secondary objective**: Minimize average λ (prefer simpler IQ trajectories)
-3. **Direct IQ optimization**: Optimizer mutates IQ points directly, not through predefined shapes
-4. **Adaptive search**: Each pattern finds its own minimum λ for orthogonality
+**Architecture**:
+- Each pattern allocated 2 adjacent tones from 150-tone grid (3 kHz SSB channel)
+- Pattern span: 2 tones × 32 Hz spacing = 64 Hz per pattern
+- Pattern hopping: Selects 1 of 2 tones per symbol (frequency hopping within 64 Hz band)
+- Total capacity: 75 non-overlapping patterns + 53 IQ-overlapping = 128 patterns
 
-**Rationale**:
-- Simpler IQ = better robustness under HF phase distortion
-- Let optimization discover true minimum complexity needed
-- Empirical approach replaces assumption-based complexity pools
+**Why 2-FSK is optimal**:
+```
+150-tone grid ÷ 2 tones/pattern = 75 frequency-orthogonal patterns (λ=0 BPSK!)
+Remaining 53 patterns: Reuse tone positions via IQ orthogonality
 
-### Two-Phase Optimization
+Expected λ distribution:
+- 75 patterns (59%): λ = 0.00-0.05 (BPSK/near-BPSK)
+- 40 patterns (31%): λ = 0.05-0.15 (simple circles)
+- 13 patterns (10%): λ = 0.15-0.25 (moderate complexity)
+- Average λ: 0.08-0.10 (vs 0.17 with 4-FSK - 47% reduction!)
+```
 
-**Enhancement**: Separate frequency and IQ optimization for maximum λ=0 patterns
+**Equipment Scalability** (modular 2-FSK transmissions):
+- Budget (5W): 1×2-FSK = 44 bps @ 200 sym/s
+- Modern (50W): 4×2-FSK = 175 bps @ 200 sym/s
+- Premium (100W): 8×2-FSK = 350 bps @ 200 sym/s
+- Same patterns, variable transmission count based on power
 
-**Approach**:
-- **Phase 1** (80% of iterations): Frequency-only optimization with BPSK (λ=0)
-  - Try to achieve -37.5 dB using only tone sequence
-  - If successful, pattern stays at λ=0 (maximum robustness)
-  - Default: 320K iterations for 400K total budget
-- **Phase 2** (20% of iterations): IQ refinement if Phase 1 insufficient
-  - Add minimum IQ complexity to achieve orthogonality
-  - Adaptive λ discovery through direct IQ mutation
-  - Default: 80K iterations for refinement
+**Cognitive Spectrum Sharing**:
+- Legacy radios (40 Hz resolution): See pattern as "one wide tone", use 2 tone positions
+- Modern SDRs (20 Hz resolution): See full 150-tone grid, fit patterns in gaps
+- Automatic coexistence: Kernel coordinates to avoid collisions
+- Capacity scales: Network throughput improves as SDR adoption grows (30% today → 60% by 2030)
 
-**Benefits**:
-- Maximizes patterns that can use BPSK (λ=0)
-- Lower average λ across pattern set (better HF robustness)
-- Focused search: frequency first, complexity only if needed
-- Expected: 20-30% of patterns achieve λ=0 (vs 10-15% single-phase)
+### Time×Frequency Orthogonality Only (Simplified Optimization)
 
-### Phase-Aware Optimization
+**Key Decision**: Patterns are orthogonal in Time×Frequency space ONLY - ALL patterns λ=0
 
-**Enhancement**: Include phase distortion robustness IN optimization cost function
+**Why This Works with 2-FSK**:
+```
+150-tone grid, 2-FSK (2 tones per pattern):
+- Frequency-orthogonal: 75 patterns use non-overlapping tone pairs
+- Time-orthogonal: 53 patterns use same tone pairs but different hopping sequences
+- Total: 128 patterns, all orthogonal in Time×Frequency space
+- NO IQ complexity needed for pattern separation!
+```
 
-**Approach**:
-- During optimization, test each candidate against random phase scenarios
-- Monte Carlo sampling: 3-5 phase scenarios per correlation check
-- Random phase per tone (±π radians) models frequency-dependent distortion
-- Random phase per symbol (±0.2 radians) models time-varying channel
-- Cost function uses **worst-case** correlation across scenarios
+**IQ Dimension Purpose** (dual-layer architecture):
+- Pattern skeleton: Always BPSK (λ=0, IQ = 1+0j)
+- Data encoding: Adaptive modulation (BPSK/QPSK/8-PSK/16-QAM)
+- Separation: IQ not used for pattern orthogonality
+- Free: Available for maximum data throughput
 
-**Benefits**:
-- Patterns optimized for HF robustness from the start (not just validated after)
-- Naturally guides optimizer toward phase-robust solutions
-- May favor lower λ (simpler IQ less sensitive to phase rotation)
-- Expected: Phase-robust separation within 5-6 dB of ideal (vs 7-8 dB without)
+**Optimization becomes simpler**:
+- Frequency-only search (2D, not 3D)
+- Force λ=0 (no IQ optimization needed)
+- Optimize: Tone revisit distribution for data capacity
+- Iterations: 200K (vs 400K with IQ search)
+- Time: 48-60 hours (vs 72-96 hours)
+
+### Dual-Layer Information Encoding
+
+**Layer 1: Pattern Identification** (Time×Frequency, 7 bits):
+```
+Purpose: Identify which of 128 patterns
+Method: Tone hopping sequence recognition
+Robustness: -37.5 dB orthogonality, 37.5% erasure tolerance (QR code-like)
+All λ=0: Maximum robustness (-10 dB SNR threshold)
+```
+
+**Layer 2: Data Payload** (Adaptive IQ, 8-32 bits):
+```
+Purpose: Encode user data
+Method: Differential BPSK/QPSK/8-PSK/16-QAM
+Modulation: Selected based on SNR (kernel parameter)
+Redundancy: Tone revisits (avg 16 per tone) provide natural FEC
+
+Throughput:
+- BPSK: 8 bits @ 4× redundancy = 94 bps per pattern
+- QPSK: 16 bits @ 4× redundancy = 144 bps
+- 8-PSK: 24 bits @ 4× redundancy = 194 bps
+- 16-QAM: 32 bits @ 4× redundancy = 244 bps
+
+Adaptive: Kernel selects modulation based on channel quality
+```
+
+**Total information**: 7 (pattern) + 8-32 (data) = **15-39 bits per pattern**
+**Improvement**: 2.14-5.57× vs single-layer (7 bits)
 
 ### Multi-Trial Generation
 
@@ -198,36 +235,161 @@ As a **CASCADE implementer**, I need to generate two orthogonal pattern sets (64
 
 **Use case**: One-time infrastructure generation where $6-12 investment yields permanently better patterns for all CASCADE deployments
 
+### Shannon Efficiency and Capacity Model (Clarification)
+
+**The "78-85% Shannon efficiency" claim refers to COORDINATION efficiency, not physical channel capacity.**
+
+**Coordination Efficiency** (78-85%):
+```
+Theoretical capacity: 128 patterns × time_slots × frequency_bands
+Example: 128 × 2 time slots × 4 bands = 1,024 user slots
+
+Kernel-coordinated capacity: 800-870 active users (due to propagation, collisions, control overhead)
+Efficiency = 800-870 / 1,024 = 78-85%
+
+This measures: How well kernel packs users into available pattern/time/frequency slots
+```
+
+**Physical Shannon Capacity** (55-70% with dual-layer):
+```
+Per 3 kHz SSB channel at SNR = +5 dB:
+Shannon limit: C = 2500 × log2(1 + 3.16) = 5,213 bps
+
+CASCADE with dual-layer encoding (20 patterns @ 200 sym/s, mixed modulation):
+- 5 patterns @ BPSK (SNR 0 dB): 5 × 15 bits / 0.16s = 469 bps
+- 10 patterns @ QPSK (SNR +5 dB): 10 × 23 bits / 0.16s = 1,438 bps
+- 5 patterns @ 8-PSK (SNR +15 dB): 5 × 31 bits / 0.16s = 969 bps
+Total: 2,876 bps
+
+Channel efficiency: 2,876 / 5,213 = 55%
+
+At higher pattern density (30 patterns):
+30 × avg 25 bits / 0.16s = 4,688 bps
+Efficiency: 4,688 / 5,213 = 90% (but limited by SNR, not achievable at +5 dB avg)
+
+Realistic range: 55-70% channel efficiency (adaptive modulation optimizes for conditions)
+```
+
+**Pattern Reuse Mechanism**:
+```
+128 patterns support 1,024 users via time/frequency multiplexing:
+- Pattern 42 reused by: User A (slot 1, 20m), User B (slot 2, 20m), User C (slot 1, 40m)
+- No collision: Different time OR different frequency
+- Kernel coordinates: Assigns unique (pattern, time, freq) tuple per user
+```
+
+**Capacity Scaling with Multi-Pattern Transmission**:
+```
+Single tone pair (2 adjacent tones):
+- Can carry 4-8 patterns simultaneously via IQ orthogonality
+- Patterns separated by: Different data modulation constellations
+- All patterns λ=0 skeleton, but different QPSK/8-PSK/16-QAM data overlays
+
+Full 3 kHz channel (75 tone pairs):
+- 20-30 patterns simultaneously (typical HF SNR, +5 dB)
+- 40-60 patterns (good propagation, +15 dB)
+- Kernel adapts: Pattern count AND modulation order to channel conditions
+```
+
+### Kernel Architecture and Signal Flow
+
+**28-Byte Kernel Structure**:
+```
+Discrete portion (3 bytes):
+- Pattern ID: 7 bits (which of 128 patterns)
+- Frequency pair: 7 bits (which tone pair from 75 available)
+- Modulation order: 3 bits (BPSK/QPSK/8-PSK/16-QAM + future)
+- Protocol version: 4 bits (compatibility)
+- Model version: 4 bits (NN version tracking)
+
+Continuous embedding (24 bytes):
+- 48 dimensions × 4-bit quantization = 192 bits
+- Purpose: Encoder NN mutation guidance
+- Content: Learned signal optimization parameters
+```
+
+**Top-3 Kernel Candidates**:
+```
+Decoder generates: 3 kernel options (not 1)
+Each: 28 bytes (discrete + embedding + score)
+Protocol selects: Best candidate based on pro/anti-kernel coordination
+Flexibility: Can choose 2nd or 3rd option for better network fit
+```
+
+**Pro-Kernel and Anti-Kernel Coordination**:
+```
+Pro-kernel (from target station beacon):
+- "To reach ME, use these parameters"
+- Weight: α = 0.7 (primary optimization target)
+
+Anti-kernels (from all other stations):
+- "I'm currently receiving on these parameters, avoid interference"
+- Weights: β = [0.01-0.05] (minimize collisions)
+
+TX kernel generation:
+kernel_tx = α × pro_kernel_embedding - Σ(β_i × anti_kernel_i)
+Result: Optimized for target, avoids interfering with others
+```
+
+**Signal Generation Flow**:
+```
+1. Protocol generates baseline IQ (using discrete params):
+   - Pattern 67's frequency sequence
+   - QPSK constellation (from modulation param)
+   - Standard rotation/scaling
+
+2. Encoder NN mutates baseline (using continuous embedding):
+   - Per-symbol frequency micro-adjustments (±0.1-2 Hz)
+   - Constellation rotation/scaling (continuous)
+   - Power shaping (per-symbol optimization)
+   - Pre-equalization (channel-specific)
+
+3. Transmission: Mutated signal (optimized beyond protocol's 17-bit granularity)
+
+Note: Beacons skip step 2 (protocol-only, no encoder mutations)
+      Simplifies beacon decode (critical for fast coordination)
+```
+
+**Decoder Dual Role**:
+```
+Role 1 - Demodulation:
+- Separate 20-60 overlapping patterns (batch processing)
+- Equalize multipath ISI (30-50%)
+- Extract data using kernel parameters
+- Output: Decoded messages
+
+Role 2 - Kernel Generation:
+- Analyze: Own channel conditions
+- Generate: 3 optimal kernel candidates for own reception
+- Output: Pro-kernels for beacon transmission
+```
+
 ---
 
 ## Requirements
 
 ### Functional Requirements
 
-#### 64-Pattern Set Generation
-- **FR-001**: System MUST generate 64 patterns total: 48 beacon (IDs 0-47) + 16 message (IDs 48-63)
-- **FR-002**: Beacon patterns (0-47) MUST have simple IQ complexity (λ max 0.3) optimized for robustness
-- **FR-003**: Message patterns (48-63) MUST have minimal IQ complexity (λ=0.0-0.1) for emergency/disturbed conditions
-- **FR-004**: All 64 pattern pairs MUST achieve <-37.5 dB cross-correlation in 4D space
-- **FR-005**: System MUST output cascade_patterns_64.bin (approximately 19 KB) in CASCADE binary format
+#### 128-Pattern Set Generation (Primary)
+- **FR-001**: System MUST generate 128 patterns total: 48 beacon (IDs 0-47) + 80 message (IDs 48-127)
+- **FR-002**: ALL patterns MUST have λ=0 (BPSK baseline for pattern skeleton)
+- **FR-003**: Patterns MUST be orthogonal in Time×Frequency space ONLY (not IQ)
+- **FR-004**: All 128 pattern pairs MUST achieve <-37.5 dB cross-correlation in Time×Frequency correlation
+- **FR-005**: System MUST output cascade_patterns_128.bin (approximately 38 KB) in CASCADE binary format
 
-#### 128-Pattern Set Generation
-- **FR-006**: System MUST generate 128 patterns total: 48 beacon (IDs 0-47) + 80 message (IDs 48-127)
-- **FR-007**: Beacon patterns (0-47) MUST match 64-pattern set exactly (same patterns for consistency)
-- **FR-008**: Message patterns MUST be organized in 4 hierarchical IQ pools:
-  - 48-63: Emergency (16 patterns, λ=0.0-0.1)
-  - 64-95: Typical DX (32 patterns, λ=0.3-0.5) - most common pool
-  - 96-111: Good propagation (16 patterns, λ=0.5-0.7)
-  - 112-127: NVIS exceptional (16 patterns, λ=0.7-0.9)
-- **FR-009**: All 128 pattern pairs MUST achieve <-37.5 dB cross-correlation in 4D space
-- **FR-010**: System MUST output cascade_patterns_128.bin (approximately 38 KB) in CASCADE binary format
+#### Pattern Structure (2-FSK, Dual-Layer)
+- **FR-006**: Each pattern MUST use 2-FSK (tone indices 0-1, 2 adjacent tones per allocation)
+- **FR-007**: Each pattern MUST have 32-symbol tone index sequence (uint8, values in {0, 1})
+- **FR-008**: Each pattern MUST have BPSK IQ trajectory (all values 1+0j, λ=0)
+- **FR-009**: Patterns MUST use Zadoff-Chu sequences as base (mapped to 2-FSK)
+- **FR-010**: System MUST optimize frequency sequences only (no IQ search)
+- **FR-011**: Pattern storage MUST follow CASCADE binary format v2 (includes version byte)
 
-#### Pattern Structure
-- **FR-011**: Each pattern MUST have 32-symbol tone index sequence (indices 0-3 for 4-tone selection)
-- **FR-012**: Each pattern MUST have single IQ trajectory (complex64, 32 values) with baked-in complexity
-- **FR-013**: Patterns MUST use Zadoff-Chu sequences as base for initial orthogonality
-- **FR-014**: System MUST apply simulated annealing optimization to achieve -37.5 dB target
-- **FR-015**: Pattern storage MUST follow CASCADE binary format (metadata + freq_sequence + iq_trajectory + checksum)
+#### Tone Revisit Optimization
+- **FR-012**: Each pattern MUST visit each tone ≥8 times (minimum for data capacity)
+- **FR-013**: Tone visits SHOULD be balanced (tone 0 count ≈ tone 1 count, within 20%)
+- **FR-014**: Tone visits SHOULD be distributed (no runs >8 consecutive symbols on same tone)
+- **FR-015**: System MUST report tone revisit statistics (avg, min, max per tone)
 
 #### Validation
 - **FR-016**: System MUST validate each pattern pair computes <-37.5 dB cross-correlation

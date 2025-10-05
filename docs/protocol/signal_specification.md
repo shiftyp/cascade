@@ -10,21 +10,21 @@ CASCADE uses fixed orthogonal patterns with adaptive modulation to achieve near-
 
 ### Symbol Timing
 
-**Base symbol duration**: 50ms (20 symbols/second)
+**Base symbol duration**: 5ms (200 symbols/second)
 
 **Rationale**:
-- Exceeds HF multipath delay spread (1-5ms) by 10× margin
-- Allows filter settling time (5-10ms)
-- Provides margin for Doppler spread (±2 Hz = 10% of 20 Hz symbol rate)
+- Matches HF multipath delay spread (1-5ms)
+- Higher data rate for improved throughput
+- Symbol rate of 200 Hz creates ~200 Hz bandwidth per tone
 - Compatible with standard amateur radio sound cards (48 kHz sample rate)
-- Sufficient samples per symbol: 48000 × 0.05 = 2,400 samples
+- Sufficient samples per symbol: 48000 × 0.005 = 240 samples
 
-**Model adaptation**: The model may stretch or compress symbols within ±20% (40-60ms) based on channel conditions, but 50ms is the nominal baseline.
+**Model adaptation**: The model may stretch or compress symbols within ±20% (4-6ms) based on channel conditions, but 5ms is the nominal baseline.
 
 ### Pattern Structure
 
 **Symbols per pattern**: 32 symbols
-**Pattern duration**: 32 × 50ms = 1.6 seconds
+**Pattern duration**: 32 × 5ms = 160ms
 
 **Pattern definition**:
 Each of CASCADE's 128 patterns (48 beacon + 80 message) is defined as a sequence of tone indices over time:
@@ -32,13 +32,13 @@ Each of CASCADE's 128 patterns (48 beacon + 80 message) is defined as a sequence
 ```python
 pattern_structure = {
     'pattern_id': int,           # 0-127 (48 beacon + 80 message)
-    'sequence': [int] * 32,      # 32 symbols, each 0-3 (4-tone selection from 78-tone grid)
+    'sequence': [int] * 32,      # 32 symbols, each 0-1 (2-FSK, selects between 2 adjacent tones)
     'orthogonality': float       # <-37.5 dB vs all other patterns (achieved)
 }
 
 # Example:
-pattern_0 = [0, 1, 2, 3, 4, 5, 6, 7, 0, 1, ...]  # 32 tone indices
-pattern_1 = [7, 6, 5, 4, 3, 2, 1, 0, 7, 6, ...]  # Different sequence
+pattern_0 = [0, 1, 0, 0, 1, 1, 0, 1, 0, 1, ...]  # 32 tone selections (0 or 1)
+pattern_1 = [1, 0, 1, 1, 0, 0, 1, 0, 1, 0, ...]  # Different sequence
 ```
 
 **Orthogonality requirement**: <-30 dB cross-correlation target, achieves <-37.5 dB (128-pattern chaos architecture).
@@ -82,21 +82,30 @@ RS_PATTERN_STRUCTURE = {
 **8-Bit RS Symbol → 4D Mapping:**
 ```python
 # Each RS symbol (8 bits) maps to Time-Frequency-IQ point:
-# - 2 bits → tone selection (which of 4 selected tones)
-# - 6 bits → IQ constellation point (64-QAM)
+# Dual-layer encoding:
+# Layer 1: Pattern ID via 2-FSK tone selection (0 or 1)
+# Layer 2: Data payload via adaptive IQ modulation
 
-def map_rs_symbol_to_4d(rs_symbol, selected_tones):
-    """Map 8-bit RS symbol to 4D transmission point"""
+def encode_cascade_symbol(pattern_bit, data_bits, modulation):
+    """Encode symbol with dual-layer architecture"""
 
-    tone_bits = (rs_symbol >> 6) & 0x3  # Top 2 bits
-    iq_bits = rs_symbol & 0x3F           # Bottom 6 bits
+    # Layer 1: Tone selection (2-FSK)
+    if pattern_bit == 0:
+        tone_idx = 0  # First tone of the pair
+    else:
+        tone_idx = 1  # Second tone of the pair
 
-    # Tone: 0-3 (which of pattern's 4 selected tones)
-    grid_tone_idx = selected_tones[tone_bits]  # 0-77 from 78-tone grid
-    frequency_hz = REFERENCE_TONES[grid_tone_idx]
+    frequency_hz = base_freq + (tone_idx * 20)  # 20 Hz spacing
 
-    # IQ: 0-63 (64-QAM constellation)
-    iq_point = CONSTELLATION_64QAM[iq_bits]
+    # Layer 2: Data modulation (adaptive)
+    if modulation == 'BPSK':
+        iq_point = BPSK_CONSTELLATION[data_bits & 0x1]
+    elif modulation == 'QPSK':
+        iq_point = QPSK_CONSTELLATION[data_bits & 0x3]
+    elif modulation == '8PSK':
+        iq_point = PSK8_CONSTELLATION[data_bits & 0x7]
+    elif modulation == '16APSK':
+        iq_point = APSK16_CONSTELLATION[data_bits & 0xF]
 
     return (frequency_hz, iq_point)
 ```
@@ -109,7 +118,7 @@ def map_rs_symbol_to_4d(rs_symbol, selected_tones):
 # Total: 64 unique points
 
 # High SNR: Full 64-QAM (6 bits/symbol)
-# Medium SNR: Collapse to 16-QAM (4 bits/symbol)
+# Medium SNR: Collapse to 16-APSK (4 bits/symbol)
 # Low SNR: Collapse to QPSK (2 bits/symbol)
 # Very low SNR: Collapse to BPSK (1 bit/symbol)
 ```
@@ -118,18 +127,18 @@ def map_rs_symbol_to_4d(rs_symbol, selected_tones):
 
 ### Frequency Allocation
 
-**Channel bandwidth**: 2.5 kHz per CASCADE channel (300-2800 Hz)
-**Reference tone grid**: 78 discrete tones spanning 300-2764 Hz
-**Tone spacing**: 32 Hz (optimized for HF multipath and drift)
-**Pattern tone usage**: Each pattern uses 4 tones selected from the 78-tone grid (adaptive)
+**Channel bandwidth**: 2.7 kHz per CASCADE channel (300-3000 Hz, standard SSB)
+**Reference tone grid**: 135 discrete tones spanning 300-3000 Hz
+**Tone spacing**: 20 Hz (optimized for SDR equipment precision)
+**Pattern tone usage**: Each pattern uses 2 adjacent tones (2-FSK architecture)
 
-**78-Tone Reference Grid with Micro-Tuning:**
+**135-Tone Reference Grid:**
 ```python
-REFERENCE_TONES = [300 + i*32 for i in range(78)]
-# [300, 332, 364, ..., 2700, 2732, 2764] Hz
-# 78 discrete tones, 32 Hz spacing
+REFERENCE_TONES = [300 + i*20 for i in range(135)]
+# [300, 320, 340, ..., 2960, 2980, 3000] Hz
+# 135 discrete tones, 20 Hz spacing
 
-# Micro-tuning: Model adds ±2 Hz continuous offset
+# Micro-tuning: Model can add ±2 Hz continuous offset for optimization
 MICRO_TUNING = {
     'offset_range': (-2.0, +2.0),  # Hz per tone
     'granularity': 0.1,  # Hz
@@ -140,28 +149,50 @@ MICRO_TUNING = {
 # Example: 1388 Hz + 1.3 Hz = 1389.3 Hz
 ```
 
-**4-Tone Pattern Selection with Micro-Tuning:**
-- Each of 128 patterns selects 4 base tones from 78-tone grid
-- Model adds ±2 Hz continuous offset per symbol (interference avoidance)
-- Multiple patterns can use the same base tones (overlap allowed)
-- Separation via Time × IQ × Micro-offset × Pattern orthogonality
+**2-FSK Pattern Architecture:**
+- Each of 128 patterns uses 2 adjacent tones from 135-tone grid
+- 2-FSK modulation: Pattern hops between tone 0 and tone 1
+- Model can add ±2 Hz continuous offset for optimization
+- Multiple patterns use different tone pairs for separation
+- Separation via Pattern orthogonality × Frequency diversity × IQ modulation
 
-**Frequency-hopping spread spectrum**: Each pattern hops among its selected 4 tones during transmission (FHSS), NOT continuous frequency modulation (not CSS). The 4 tones are selected from the 78-tone grid based on propagation conditions. This is fundamentally different from LoRa's chirp spread spectrum (patent safe).
+### Bandwidth Considerations with 200 Symbols/Second
 
-**Frequency allocation rationale**: 32 Hz spacing accommodates HF multipath spreading (5 Hz typical) plus ionospheric drift (0.8 Hz/s over 1.6s pattern = 1.3 Hz) with guard band. The 78 tones provide excellent frequency diversity while each pattern's 4-tone subset keeps symbol rate manageable.
+**Spectral occupancy per tone:**
+- Symbol rate: 200 Hz creates ~200 Hz main lobe bandwidth
+- 2-FSK with 20 Hz spacing: Significant spectral overlap (low modulation index β = 0.1)
+- Carson's rule bandwidth: ~440 Hz per 2-FSK signal
+- Neural network decoder designed to handle overlapping spectra
 
-**Multi-user access**: All users transmit simultaneously within the same 2.5 kHz, separated by pattern orthogonality, tone selection diversity, and IQ modulation.
+**Full 2.7 kHz usage:**
+- **YES**, modern SDR stations can use full 2.7 kHz (300-3000 Hz)
+- Highest tone pairs (133-134) centered at 2970 Hz
+- With 200 Hz bandwidth, energy extends to ~3070 Hz (slight filter rolloff)
+- Edge tones may have reduced power due to SSB filter
+
+**Bandwidth compatibility:**
+- Older radios (2.1 kHz): Can receive tones 0-90 (300-2100 Hz)
+- Modern radios (2.4 kHz): Can receive tones 0-105 (300-2400 Hz)
+- SDR (2.7 kHz): Can receive all 135 tones (300-3000 Hz)
+- **Beacons restricted to 2.1 kHz** ensures all stations can coordinate
+- Messages use bandwidth negotiated via kernels
+
+**Frequency-shift keying (2-FSK)**: Each pattern uses simple 2-FSK modulation between its assigned tone pair. This is standard FSK, fundamentally different from LoRa's chirp spread spectrum (patent safe).
+
+**Frequency allocation rationale**: 20 Hz spacing provides adequate separation for HF conditions while maximizing spectral efficiency. The 135 tones fill the standard 2.7 kHz SSB channel, with 67 possible tone pairs supporting multi-user operation.
+
+**Multi-user access**: All users transmit simultaneously within the same 2.7 kHz, separated by pattern orthogonality, tone selection diversity, and IQ modulation.
 
 ```python
-# 45 active users share the same 2.5 kHz (300-2800 Hz):
-User 1: Pattern 5, selected tones [12, 34, 51, 65] → [684, 1388, 1932, 2380] Hz
-User 2: Pattern 12, selected tones [15, 37, 54, 68] → [780, 1484, 2028, 2476] Hz
+# 45 active users share the same 2.7 kHz (300-3000 Hz):
+User 1: Pattern 5, tone pair [24-25] → [780, 800] Hz (2-FSK)
+User 2: Pattern 12, tone pair [37-38] → [1040, 1060] Hz (2-FSK)
 ...
-User 45: Pattern 95, selected tones [8, 29, 47, 63] → [556, 1228, 1804, 2316] Hz
+User 45: Pattern 95, tone pair [63-64] → [1560, 1580] Hz (2-FSK)
 
 # Separated by:
-# - Pattern orthogonality (Time × IQ, <-30 dB)
-# - Tone selection diversity (different 4-tone subsets from 78)
+# - Pattern orthogonality (Time × Frequency, <-37.5 dB)
+# - Tone pair diversity (different 2-tone pairs from 135-tone grid)
 # - IQ trajectories (16 directions at high SNR)
 # - Overlapping tones separated by Time × IQ orthogonality
 ```
@@ -169,46 +200,41 @@ User 45: Pattern 95, selected tones [8, 29, 47, 63] → [556, 1228, 1804, 2316] 
 
 ## Beacon Protocol (Pattern-Based)
 
-CASCADE uses pattern-based beacons sharing the 78-tone grid with message traffic. All patterns (beacons, messages, emergency) select 4 tones from the 78-tone grid: 300-2764 Hz, 32 Hz spacing.
+CASCADE uses pattern-based beacons sharing the 135-tone grid with message traffic. All patterns (beacons and messages) use 2-FSK modulation with 2 adjacent tones from the grid: 300-3000 Hz, 20 Hz spacing.
 
 ### Beacon Pattern Summary
 
 **Tone allocation:**
-- **All patterns:** Select 4 tones from 78-tone grid (300-2764 Hz)
-- **Adaptive selection:** Each pattern picks best 4 based on channel conditions
-- **Overlap allowed:** Multiple patterns can select same tones
-- **Separation:** Time × IQ orthogonality when tones overlap
+- **All patterns:** Use 2 adjacent tones from 135-tone grid (300-3000 Hz)
+- **Pattern assignment:** Each pattern assigned specific tone pair
+- **Frequency reuse:** Multiple patterns can share frequencies via time/IQ separation
+- **Separation:** Pattern orthogonality × Time × IQ modulation
 
 **Key features:**
-- No frequency reservation (96.7% spectrum efficiency)
-- 78 tones provide C(78,4) = 1.4M tone combinations
+- No frequency reservation (full spectrum utilization)
+- 67 tone pairs available for pattern assignment
 - Emergency detected via Pattern 0-15 (beacon) + 48-63 (message) correlation (zero overhead)
 - Simple IQ complexity (λ max 0.3) for beacon robustness
 - Supports 48 simultaneous beacons via pattern separation
 - 32 normal beacon patterns (16-47, anti-kernel resilient)
 
-**See [Adaptive Tone Grid](adaptive_tone_grid.md) for 78-tone grid specification.**
+**See [Tone Grid](tone_grid.md) for 150-tone grid specification.**
 
 **See [Emergency Relay Network](emergency_relay_network.md) for emergency protocol details.**
 
 ## Pattern Storage
 
 ```python
-# Two-tier pattern storage
-beacon_pattern = {
-    'id': int,                    # 0-47
-    'freq_sequence': np.uint8[32],  # 32 bytes (tone indices 0-3, 4-tone selection)
-    'iq_trajectory': complex64[32], # 256 bytes (single complexity level)
+# Pattern storage for 2-FSK architecture
+pattern = {
+    'id': int,                      # 0-127 (48 beacon + 80 message)
+    'freq_sequence': np.uint8[32],  # 32 bytes (tone indices 0-1, 2-FSK selection)
+    'iq_trajectory': complex64[32], # 256 bytes (all patterns λ=0, BPSK baseline)
+    'tone_pair_base': int,          # Base frequency pair index (0-74)
 }
 
-message_pattern = {
-    'id': int,                    # 48-127
-    'freq_sequence': np.uint8[32],  # 32 bytes (tone indices 0-3 from 78-tone grid)
-    'iq_trajectory': complex64[32], # 256 bytes (hierarchical complexity)
-}
-
-# Per pattern: 292 bytes (freq 32 + iq 256 + metadata 4)
-# Total 128 patterns: 38 KB (48 beacon × 292 + 80 message × 292)
+# Per pattern: 295 bytes (freq 32 + iq 256 + metadata 7)
+# Total 128 patterns: 38 KB
 
 # See pattern_architecture.md for complete specification
 ```
@@ -231,7 +257,7 @@ message_pattern = {
 - Sample rate: 48 kHz (standard amateur radio sound card)
 - Bit depth: 16-bit (standard)
 - Frequency stability: ±50 Hz maximum (GPS-locked preferred for >20 users)
-- Processing: Pattern correlation + 8-QAM demodulation per 50ms
+- Processing: Pattern correlation + adaptive demodulation per 5ms symbol
 - Drift tracking: Per-user frequency offset estimation (FT8-style), used as separation feature
 
 **Drift handling**:
@@ -241,16 +267,16 @@ message_pattern = {
 - Tighter ±25 Hz tolerance recommended for >20 simultaneous users
 
 **Sound card compatibility**:
-- Buffer size: 128-2048 samples (supports 50ms symbols)
-- Latency: 10-20ms typical (acceptable for 50ms symbols)
+- Buffer size: 128-2048 samples (supports 5ms symbols)
+- Latency: 10-20ms typical (acceptable for 5ms symbols)
 - Interface: USB, built-in, or SignaLink/Digirig
 
 ## Throughput Calculations
 
 **Shannon capacity (physical limits):**
 ```
-Bandwidth: 2.5 kHz
-SNR @ +15 dB: Shannon = 2500 × log₂(1 + 31.6) = 12,570 bps coded maximum
+Bandwidth: 2.7 kHz
+SNR @ +15 dB: Shannon = 2700 × log₂(1 + 31.6) = 13,576 bps coded maximum
 
 IMPORTANT: Total throughput cannot exceed Shannon capacity regardless of number of users.
 Pattern orthogonality enables efficient SHARING of this capacity, not multiplication.
@@ -258,14 +284,23 @@ Pattern orthogonality enables efficient SHARING of this capacity, not multiplica
 
 **Single user, high SNR (+15 dB):**
 ```
-Shannon limit: 12,570 bps coded (absolute maximum)
+Shannon limit: 11,313 bps coded (absolute maximum)
 CASCADE achieves: ~9,000 bps information (71% of Shannon)
 
-With RS(32,20) pattern structure:
-- 144 bits data per 1.6s pattern = 90 bps per pattern
-- 4 patterns simultaneously = 360 bps
-- Rate: 62.5% information (20 of 32 symbols)
-- No additional FEC needed (RS provides erasure protection)
+With RS(32,20) pattern structure at 200 sym/s:
+- Pattern duration: 160ms (32 symbols × 5ms)
+- Information rate: 62.5% (20 of 32 symbols)
+- Pattern rate: 6.25 patterns/second
+
+Per-pattern throughput (including 8-bit pattern ID overhead):
+- BPSK: 75 bps (12 data bits/pattern)
+- QPSK: 200 bps (32 data bits/pattern)
+- 8-PSK: 325 bps (52 data bits/pattern)
+- 16-APSK: 450 bps (72 data bits/pattern)
+
+Multi-pattern operation:
+- 4 patterns @ 16-APSK: 1,800 bps
+- 8 patterns @ 16-APSK: 3,600 bps
 
 CASCADE achieves 78% Shannon efficiency via:
 - RS-aligned pattern structure (built-in FEC)
@@ -278,34 +313,34 @@ CASCADE achieves 78% Shannon efficiency via:
 
 **Multi-user (1,024 total users, 45 active, +15 dB, kernel-coordinated chaos):**
 ```
-Shannon limit: 12,570 bps (theoretical maximum)
+Shannon limit: 11,313 bps (theoretical maximum)
 Soft chaos capacity: ~8,800 bps (70% efficiency - chaos separation with RS tolerance)
-Average per user: ~17 bps per pattern (90 bps × 70% / shared)
 
 Pattern + Tone + RS Chaos Separation:
-- 78-tone grid provides tone selection diversity
-- Each pattern uses 4 tones (adaptive selection from 78)
+- 135-tone grid (67 tone pairs for 2-FSK)
+- Each pattern uses 2 adjacent tones (2-FSK modulation)
 - RS(32,20) provides 37.5% erasure tolerance (critical for overlaps)
 - No guard intervals or timing coordination
 - Model separates arbitrary overlaps via envelope detection + successive cancellation
 - 45 users active simultaneously (chaos limit)
 - 1,024 total users via frequency + time reuse (kernel-coordinated)
 
-Efficiency improvement:
-- Removed: Guard intervals (5-7%), timing coordination (3-5%)
-- Added: Increased overlap interference (3-5%)
-- Net: 75% Shannon efficiency (chaos-optimized with 128 patterns)
+With 200 symbols/second:
+- 45 active users sharing 8,800 bps
+- Average per user: ~195 bps
+- 1 pattern @ QPSK: 200 bps
+- 2 patterns @ QPSK: 400 bps
+- 4 patterns @ 16-APSK: 1,800 bps (high-priority user)
 
-Example allocation:
-- 45 active users: ~218 bps each (chaos mode, 78% Shannon)
-- 1 pattern: 218 bps
-- 2 patterns: 436 bps
-- 4 patterns (high-priority): 872 bps
+Efficiency improvement:
+- Low modulation index 2-FSK (β = 0.1) creates spectral overlap
+- NN decoder handles overlap via learned separation
+- Net: 70% Shannon efficiency (chaos-optimized with 128 patterns)
 ```
 
 **Hardware-limited scenarios** (e.g., Raspberry Pi 4 decoding 15 of 50 users):
 ```
-Channel capacity: 12,570 bps total (all 50 users transmitting)
+Channel capacity: 11,313 bps total (all 50 users transmitting)
 RPi decodes: 15 users (30% of traffic)
 Throughput to this station: ~3,800 bps (15 users share proportionally)
 Other 35 users: Not decoded (insufficient hardware capacity)
@@ -314,10 +349,10 @@ Note: Hardware limits # users decoded, not total channel capacity
 Shannon efficiency: 90%+ at protocol level, 30% at this receiver (hardware-limited)
 ```
 
-**Shannon capacity at various SNRs (2.5 kHz bandwidth, 128-pattern chaos):**
+**Shannon capacity at various SNRs (2.7 kHz bandwidth, 128-pattern chaos):**
 ```
 SNR    Shannon (coded)   78% Efficient   RS(32,20) Info   Chaos Active   Per-User (1p)   Per-User (4p)
-+15 dB   12,570 bps         9,805 bps       6,128 bps        45 users      218 bps        872 bps
++15 dB   11,313 bps         8,824 bps       5,515 bps        45 users      196 bps        784 bps
 +10 dB    9,150 bps         7,137 bps       4,461 bps        45 users      159 bps        635 bps
  +5 dB    6,500 bps         5,070 bps       3,169 bps        40 users       79 bps        317 bps
   0 dB    4,320 bps         3,370 bps       2,106 bps        35 users       60 bps        241 bps

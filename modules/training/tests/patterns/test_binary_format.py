@@ -15,7 +15,7 @@ def test_save_load_roundtrip():
     # Create test patterns
     patterns = []
     for i in range(5):
-        freq_seq = np.random.randint(0, 4, size=32, dtype='uint8')
+        freq_seq = np.random.randint(0, 2, size=32, dtype='uint8')  # 2-FSK
         iq_traj = (np.random.randn(32) + 1j * np.random.randn(32)).astype('complex64')
         patterns.append(Pattern(
             pattern_id=i,
@@ -52,7 +52,7 @@ def test_file_size_matches_spec():
     # Create patterns
     patterns = []
     for i in range(10):
-        freq_seq = np.random.randint(0, 4, size=32, dtype='uint8')
+        freq_seq = np.random.randint(0, 2, size=32, dtype='uint8')  # 2-FSK
         iq_traj = np.random.randn(32).astype('complex64')
         patterns.append(Pattern(
             pattern_id=i,
@@ -110,7 +110,7 @@ def test_checksums_valid():
     """T008: Verify checksums are computed and validated"""
     patterns = []
     for i in range(3):
-        freq_seq = np.random.randint(0, 4, size=32, dtype='uint8')
+        freq_seq = np.random.randint(0, 2, size=32, dtype='uint8')  # 2-FSK
         iq_traj = np.random.randn(32).astype('complex64')
         patterns.append(Pattern(
             pattern_id=i,

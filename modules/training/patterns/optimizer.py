@@ -11,7 +11,11 @@ Secondary objective: Minimize IQ complexity
 from typing import List, Tuple, Optional
 import numpy as np
 from .models import Pattern
-from .correlation import compute_4d_correlation
+from .correlation import (
+    compute_4d_correlation,
+    compute_flip_correlation,
+    compute_all_correlations
+)
 from .iq_trajectories import generate_iq_trajectory
 
 
@@ -20,10 +24,11 @@ def optimize_pattern(
     base_freq_sequence: np.ndarray,
     existing_patterns: List[Pattern],
     target_db: float = -37.5,
-    max_iterations: int = 100000,
+    max_iterations: int = 150000,  # Increased for flip constraints
+    flip_weight: float = 0.5,
     seed: int = None
 ) -> Tuple[np.ndarray, float]:
-    """Optimize pattern using simulated annealing
+    """Optimize pattern using simulated annealing with flip-orthogonality
 
     Optimizes BOTH:
     1. Tone sequence (freq_sequence)
@@ -31,7 +36,8 @@ def optimize_pattern(
 
     Cost function balances:
     - Primary: Achieve orthogonality (<-37.5 dB vs all existing patterns)
-    - Secondary: Minimize λ (prefer simpler IQ trajectories)
+    - Secondary: Flip-orthogonality (<-30 dB when FSK-inverted)
+    - Tertiary: Minimize λ (prefer simpler IQ trajectories)
 
     Args:
         pattern_id: ID for this pattern
@@ -39,6 +45,7 @@ def optimize_pattern(
         existing_patterns: Already generated patterns to avoid
         target_db: Target correlation threshold in dB
         max_iterations: Maximum optimization iterations
+        flip_weight: Weight for flip-orthogonality constraint (0.0 to 1.0)
         seed: Random seed for reproducibility
 
     Returns:
@@ -62,7 +69,7 @@ def optimize_pattern(
     )
 
     # Compute initial cost
-    current_cost = _compute_cost(current_pattern, existing_patterns, target_db)
+    current_cost = _compute_cost(current_pattern, existing_patterns, target_db, flip_weight)
 
     # Best solution found so far
     best_freq = current_freq.copy()
@@ -79,7 +86,7 @@ def optimize_pattern(
             # Mutate tone sequence (70% of mutations)
             new_freq = current_freq.copy()
             mut_index = rng.randint(0, 32)
-            new_freq[mut_index] = rng.randint(0, 4)
+            new_freq[mut_index] = rng.randint(0, 2)  # 2-FSK: tone indices 0-1
             new_lambda = current_lambda
         else:
             # Mutate λ (30% of mutations)
@@ -100,7 +107,7 @@ def optimize_pattern(
         )
 
         # Compute cost
-        new_cost = _compute_cost(new_pattern, existing_patterns, target_db)
+        new_cost = _compute_cost(new_pattern, existing_patterns, target_db, flip_weight)
 
         # Accept or reject
         delta_cost = new_cost - current_cost
@@ -129,16 +136,18 @@ def optimize_pattern(
 def _compute_cost(
     pattern: Pattern,
     existing_patterns: List[Pattern],
-    target_db: float
+    target_db: float,
+    flip_weight: float = 0.5
 ) -> float:
-    """Compute cost function for optimization
+    """Compute cost function for optimization with flip-orthogonality
 
-    Cost = orthogonality_violation + lambda_penalty
+    Cost = orthogonality_violation + flip_violation + lambda_penalty
 
     Args:
         pattern: Pattern to evaluate
         existing_patterns: Patterns to check against
         target_db: Target correlation threshold
+        flip_weight: Weight for flip-orthogonality (0.0 to 1.0)
 
     Returns:
         Cost value (lower is better, 0 is perfect)
@@ -148,22 +157,35 @@ def _compute_cost(
         # Only penalize λ
         return pattern.iq_complexity_lambda
 
-    # Find worst-case correlation
-    max_correlation_db = -float('inf')
+    # Find worst-case correlation (both normal and flipped)
+    max_normal_corr_db = -float('inf')
+    max_flip_corr_db = -float('inf')
+
     for existing in existing_patterns:
-        corr_db = compute_4d_correlation(pattern, existing)
-        max_correlation_db = max(max_correlation_db, corr_db)
+        # Normal correlation
+        normal_corr_db = compute_4d_correlation(pattern, existing)
+        max_normal_corr_db = max(max_normal_corr_db, normal_corr_db)
+
+        # Flip correlations (pattern flipped vs existing, existing flipped vs pattern)
+        flip_corr_j = compute_flip_correlation(pattern, existing)
+        flip_corr_i = compute_flip_correlation(existing, pattern)
+        max_flip_corr_db = max(max_flip_corr_db, flip_corr_j, flip_corr_i)
 
     # Orthogonality violation (primary objective)
     # Positive if violates target, 0 if meets target
-    orthogonality_violation = max(0, max_correlation_db - target_db)
+    orthogonality_violation = max(0, max_normal_corr_db - target_db)
 
-    # Lambda penalty (secondary objective)
+    # Flip-orthogonality violation (secondary objective for adjacent-channel safety)
+    # Use relaxed threshold for flip (-30 dB instead of -37.5 dB)
+    flip_target_db = max(target_db + 7.5, -30.0)  # Relaxed by 7.5 dB
+    flip_violation = max(0, max_flip_corr_db - flip_target_db) * flip_weight
+
+    # Lambda penalty (tertiary objective)
     # Prefer lower λ (simpler IQ)
     lambda_penalty = pattern.iq_complexity_lambda * 0.1  # Weight λ at 10% of orthogonality
 
     # Total cost
-    cost = orthogonality_violation + lambda_penalty
+    cost = orthogonality_violation + flip_violation + lambda_penalty
 
     return cost
 
@@ -235,10 +257,11 @@ def optimize_pattern_direct_iq(
     base_freq_sequence: np.ndarray,
     existing_patterns: List[Pattern],
     target_db: float = -37.5,
-    max_iterations: int = 100000,
+    max_iterations: int = 150000,  # Increased for flip constraints
+    flip_weight: float = 0.5,
     seed: int = None
 ) -> Tuple[np.ndarray, np.ndarray, float]:
-    """Optimize pattern using direct IQ mutation (not λ-based)
+    """Optimize pattern using direct IQ mutation with flip-orthogonality
 
     This is the new adaptive approach: mutates IQ points directly
     rather than selecting from predefined shapes.
@@ -249,6 +272,7 @@ def optimize_pattern_direct_iq(
         existing_patterns: Already generated patterns
         target_db: Target correlation threshold
         max_iterations: Maximum iterations
+        flip_weight: Weight for flip-orthogonality constraint (0.0 to 1.0)
         seed: Random seed
 
     Returns:
@@ -268,7 +292,7 @@ def optimize_pattern_direct_iq(
         iq_complexity_lambda=0.0
     )
 
-    current_cost = _compute_cost(current_pattern, existing_patterns, target_db)
+    current_cost = _compute_cost(current_pattern, existing_patterns, target_db, flip_weight)
 
     # Best so far
     best_freq = current_freq.copy()
@@ -288,7 +312,7 @@ def optimize_pattern_direct_iq(
             # Mutate frequency sequence (50%)
             new_freq = current_freq.copy()
             mut_index = rng.randint(0, 32)
-            new_freq[mut_index] = rng.randint(0, 4)
+            new_freq[mut_index] = rng.randint(0, 2)  # 2-FSK: tone indices 0-1
             new_iq = current_iq.copy()
 
         else:
@@ -308,7 +332,7 @@ def optimize_pattern_direct_iq(
         )
 
         # Compute cost
-        new_cost = _compute_cost(new_pattern, existing_patterns, target_db)
+        new_cost = _compute_cost(new_pattern, existing_patterns, target_db, flip_weight)
 
         # Accept or reject
         delta_cost = new_cost - current_cost
@@ -404,18 +428,21 @@ def _compute_cost_phase_aware(
     pattern: Pattern,
     existing_patterns: List[Pattern],
     target_db: float,
-    num_phase_samples: int = 5
+    num_phase_samples: int = 5,
+    flip_weight: float = 0.5
 ) -> float:
-    """Compute cost function with phase distortion robustness
+    """Compute cost function with phase distortion robustness and flip-orthogonality
 
     Tests correlation under random phase scenarios during optimization
-    to ensure patterns are robust to HF propagation effects.
+    to ensure patterns are robust to HF propagation effects, including
+    flip-orthogonality for adjacent-channel safety.
 
     Args:
         pattern: Pattern to evaluate
         existing_patterns: Patterns to check against
         target_db: Target correlation threshold
         num_phase_samples: Number of random phase scenarios to test
+        flip_weight: Weight for flip-orthogonality constraint (0.0 to 1.0)
 
     Returns:
         Cost value (worst-case across phase scenarios)
@@ -424,10 +451,11 @@ def _compute_cost_phase_aware(
         return pattern.iq_complexity_lambda
 
     # Find worst-case correlation across phase scenarios
-    worst_correlation_db = -float('inf')
+    worst_normal_corr_db = -float('inf')
+    worst_flip_corr_db = -float('inf')
 
     for existing in existing_patterns:
-        # Sample multiple phase scenarios
+        # Sample multiple phase scenarios for normal correlation
         for _ in range(num_phase_samples):
             # Random phase per tone (models frequency-dependent distortion)
             phase_per_tone = np.random.uniform(-np.pi, np.pi, size=4)
@@ -442,16 +470,25 @@ def _compute_cost_phase_aware(
                 phase_per_symbol
             )
 
-            worst_correlation_db = max(worst_correlation_db, corr_db)
+            worst_normal_corr_db = max(worst_normal_corr_db, corr_db)
+
+        # Also check flip correlations (without phase for simplicity)
+        flip_corr_j = compute_flip_correlation(pattern, existing)
+        flip_corr_i = compute_flip_correlation(existing, pattern)
+        worst_flip_corr_db = max(worst_flip_corr_db, flip_corr_j, flip_corr_i)
 
     # Orthogonality violation (using worst-case)
-    orthogonality_violation = max(0, worst_correlation_db - target_db)
+    orthogonality_violation = max(0, worst_normal_corr_db - target_db)
+
+    # Flip-orthogonality violation
+    flip_target_db = max(target_db + 7.5, -30.0)  # Relaxed by 7.5 dB
+    flip_violation = max(0, worst_flip_corr_db - flip_target_db) * flip_weight
 
     # Lambda penalty
     lambda_penalty = pattern.iq_complexity_lambda * 0.1
 
     # Total cost
-    cost = orthogonality_violation + lambda_penalty
+    cost = orthogonality_violation + flip_violation + lambda_penalty
 
     return cost
 
@@ -464,9 +501,10 @@ def optimize_pattern_two_phase(
     freq_iterations: int = 150000,
     iq_iterations: int = 50000,
     phase_aware: bool = True,
+    flip_weight: float = 0.5,
     seed: int = None
 ) -> Tuple[np.ndarray, np.ndarray, float]:
-    """Two-phase optimization: frequency first (λ=0), then add IQ if needed
+    """Two-phase optimization with flip-orthogonality: frequency first (λ=0), then add IQ if needed
 
     This approach tries to maximize patterns that can use BPSK (λ=0) before
     adding IQ complexity, leading to overall lower average λ.
@@ -479,6 +517,7 @@ def optimize_pattern_two_phase(
         freq_iterations: Iterations for frequency-only phase
         iq_iterations: Iterations for IQ refinement phase
         phase_aware: Use phase-aware cost function
+        flip_weight: Weight for flip-orthogonality constraint (0.0 to 1.0)
         seed: Random seed
 
     Returns:
@@ -501,9 +540,9 @@ def optimize_pattern_two_phase(
 
     # Choose cost function
     if phase_aware:
-        current_cost = _compute_cost_phase_aware(current_pattern, existing_patterns, target_db, num_phase_samples=3)
+        current_cost = _compute_cost_phase_aware(current_pattern, existing_patterns, target_db, num_phase_samples=3, flip_weight=flip_weight)
     else:
-        current_cost = _compute_cost(current_pattern, existing_patterns, target_db)
+        current_cost = _compute_cost(current_pattern, existing_patterns, target_db, flip_weight)
 
     best_freq = current_freq.copy()
     best_cost = current_cost
@@ -516,7 +555,7 @@ def optimize_pattern_two_phase(
         # Mutate frequency only
         new_freq = current_freq.copy()
         mut_index = rng.randint(0, 32)
-        new_freq[mut_index] = rng.randint(0, 4)
+        new_freq[mut_index] = rng.randint(0, 2)  # 2-FSK: tone indices 0-1
 
         new_pattern = Pattern(
             pattern_id=pattern_id,
@@ -527,7 +566,7 @@ def optimize_pattern_two_phase(
 
         # Compute cost
         if phase_aware:
-            new_cost = _compute_cost_phase_aware(new_pattern, existing_patterns, target_db, num_phase_samples=3)
+            new_cost = _compute_cost_phase_aware(new_pattern, existing_patterns, target_db, num_phase_samples=3, flip_weight=flip_weight)
         else:
             new_cost = _compute_cost(new_pattern, existing_patterns, target_db)
 
@@ -570,7 +609,7 @@ def optimize_pattern_two_phase(
     current_lambda = 0.0
 
     current_pattern = Pattern(pattern_id, current_freq, current_iq, current_lambda)
-    current_cost = _compute_cost_phase_aware(current_pattern, existing_patterns, target_db, 3) if phase_aware else _compute_cost(current_pattern, existing_patterns, target_db)
+    current_cost = _compute_cost_phase_aware(current_pattern, existing_patterns, target_db, 3, flip_weight) if phase_aware else _compute_cost(current_pattern, existing_patterns, target_db, flip_weight)
 
     best_iq = current_iq.copy()
     best_lambda = 0.0
@@ -586,7 +625,7 @@ def optimize_pattern_two_phase(
             # Occasional frequency adjustment
             new_freq = current_freq.copy()
             mut_index = rng.randint(0, 32)
-            new_freq[mut_index] = rng.randint(0, 4)
+            new_freq[mut_index] = rng.randint(0, 2)  # 2-FSK: tone indices 0-1
             new_iq = current_iq.copy()
         else:
             # IQ mutation (primary)
@@ -598,7 +637,7 @@ def optimize_pattern_two_phase(
         new_pattern = Pattern(pattern_id, new_freq, new_iq, new_lambda)
 
         if phase_aware:
-            new_cost = _compute_cost_phase_aware(new_pattern, existing_patterns, target_db, 3)
+            new_cost = _compute_cost_phase_aware(new_pattern, existing_patterns, target_db, 3, flip_weight=flip_weight)
         else:
             new_cost = _compute_cost(new_pattern, existing_patterns, target_db)
 

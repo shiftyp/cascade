@@ -1,102 +1,67 @@
 # CASCADE Tone Grid & Spectrum Allocation
 
-**Authoritative specification for CASCADE's 78-tone reference grid**
+**Authoritative specification for CASCADE's 135-tone reference grid**
 
-CASCADE uses 78 discrete reference tones spanning 300-2764 Hz. Each pattern adaptively selects 4 tones from this grid based on channel conditions. Multiple patterns can use the same tones simultaneously, separated by Time × IQ orthogonality.
+CASCADE uses 135 discrete reference tones spanning 300-3000 Hz (standard SSB channel). Each pattern uses 2 adjacent tones (2-FSK architecture). Multiple patterns are assigned different tone pairs for separation, with frequency reuse possible via time and IQ orthogonality.
 
 ## Pattern-Based Spectrum Allocation
 
-**Core principle:** CASCADE uses pattern orthogonality for ALL separation. There are no separate frequency bands—all 78 reference tones are shared by beacons, emergency traffic, and messages.
+**Core principle:** CASCADE uses pattern orthogonality for ALL separation. There are no separate frequency bands—all 135 reference tones are shared by beacons, emergency traffic, and messages.
 
 ### Pattern Count
 - **Total patterns**: 128 (7-bit encoding, 0x00-0x7F)
-- **Beacon patterns** (0-47): 48 patterns, each selects 4 from 78-tone grid
-- **Message patterns** (48-127): 80 patterns, each selects 4 from 78-tone grid
+- **Beacon patterns** (0-47): 48 patterns, each uses 2-FSK on assigned tone pair
+- **Message patterns** (48-127): 80 patterns, each uses 2-FSK on assigned tone pair
 - **Emergency patterns**: 0-15 (beacon) + 48-63 (message) = 32 total
-- **Storage**: 38 KB total (14 KB beacon + 24 KB message)
-- **Generation**: 18-24 hours (one-time)
+- **Storage**: 38 KB total
+- **Generation**: 48-60 hours (simplified, frequency-only optimization)
 
 ## Reference Tone Specification
 
-### 78 Discrete Tones (Baseline Configuration)
+### 135 Discrete Tones (Standard SSB Channel)
 
 ```python
 REFERENCE_TONE_GRID = {
-    'total_tones': 78,
-    'spacing_hz': 32,  # Optimized for HF propagation
-    'total_span': 2464,  # Hz (300-2764)
+    'total_tones': 135,
+    'spacing_hz': 20,  # Optimized for SDR equipment
+    'total_span': 2700,  # Hz (300-3000)
 
-    # All tones available to all patterns
-    'tones': [300 + i*32 for i in range(78)],
-    'indices': range(0, 78),
+    # All tones form 67 possible tone pairs for 2-FSK
+    'tones': [300 + i*20 for i in range(135)],
+    'indices': range(0, 135),
+    'tone_pairs': 67,  # Each pattern uses 2 adjacent tones
 }
 
-# Complete tone list (Hz):
+# Sample tone list (first 20 and last 15):
 REFERENCE_TONES = [
-    300, 332, 364, 396, 428, 460, 492, 524, 556, 588,
-    620, 652, 684, 716, 748, 780, 812, 844, 876, 908,
-    940, 972, 1004, 1036, 1068, 1100, 1132, 1164, 1196, 1228,
-    1260, 1292, 1324, 1356, 1388, 1420, 1452, 1484, 1516, 1548,
-    1580, 1612, 1644, 1676, 1708, 1740, 1772, 1804, 1836, 1868,
-    1900, 1932, 1964, 1996, 2028, 2060, 2092, 2124, 2156, 2188,
-    2220, 2252, 2284, 2316, 2348, 2380, 2412, 2444, 2476, 2508,
-    2540, 2572, 2604, 2636, 2668, 2700, 2732, 2764
+    # First 20 tones
+    300, 320, 340, 360, 380, 400, 420, 440, 460, 480,
+    500, 520, 540, 560, 580, 600, 620, 640, 660, 680,
+    # ... (continuing every 20 Hz) ...
+    # Last 15 tones
+    2700, 2720, 2740, 2760, 2780, 2800, 2820, 2840, 2860, 2880,
+    2900, 2920, 2940, 2960, 2980, 3000
 ]
 
-# Each pattern uses 4 tones from this grid (adaptive selection)
-# Multiple patterns can use the same tones (overlap allowed)
-# Separation via Time × IQ orthogonality
+# Each pattern uses 2 adjacent tones (2-FSK architecture)
+# Patterns assigned different tone pairs for separation
+# Frequency reuse possible via Time × IQ orthogonality
 ```
 
-## HF Propagation Constraints
+## Tone Grid Design Rationale
 
-### Why 32 Hz Spacing?
+### Why 20 Hz Spacing?
 
-```python
-def calculate_minimum_tone_spacing_hf():
-    """
-    Derive 32 Hz spacing from HF propagation physics
-    """
+The 20 Hz spacing is optimized for modern SDR equipment while maintaining adequate separation for HF conditions:
 
-    constraints = {
-        # 1. Symbol bandwidth
-        'symbol_duration': 0.050,  # 50ms
-        'symbol_bandwidth': 1 / 0.050,  # 20 Hz
+- **Symbol rate**: 200 symbols/second with NN-enhanced ISI tolerance
+- **Frequency precision**: Modern SDRs (QMX, IC-7300) can maintain ±0.1 Hz with GPS
+- **Spectral efficiency**: 135 tones × 20 Hz = 2700 Hz fills standard SSB channel
+- **2-FSK separation**: 20 Hz between adjacent tones is sufficient for demodulation
+- **Multipath tolerance**: Decoder NN handles multipath spreading within tone spacing
+- **Drift compensation**: Differential encoding tolerates ±0.1-10 Hz drift
 
-        # 2. Multipath frequency spreading (HF ionosphere)
-        'multipath_spread_typical': 5,  # Hz (90% energy within ±5 Hz)
-        'multipath_spread_disturbed': 20,  # Hz (geomagnetic storms)
-
-        # 3. Frequency drift (TX + RX + ionosphere)
-        'drift_rate_typical': 0.8,  # Hz/second
-        'pattern_duration': 1.6,  # seconds
-        'total_drift': 0.8 * 1.6,  # 1.3 Hz over pattern
-        'drift_margin': 2.5,  # Safety factor
-        'drift_allowance': 1.3 * 2.5,  # 3.25 Hz
-
-        # 4. Guard band between tones
-        'guard_band': 3,  # Hz (prevent overlap)
-    }
-
-    # Minimum spacing calculation:
-    min_spacing = (
-        constraints['symbol_bandwidth'] +  # 20 Hz
-        constraints['multipath_spread_typical'] +  # 5 Hz
-        constraints['drift_allowance'] +  # 3.25 Hz
-        constraints['guard_band']  # 3 Hz
-    )
-    # = 31.25 Hz
-
-    # Round to clean number: 32 Hz ✓
-
-    return {
-        'calculated_minimum': 31.25,
-        'chosen_spacing': 32,
-        'margin': 0.75,  # Hz additional margin
-    }
-
-# Each pattern selects 4 tones from 78-tone grid
-# Adaptive selection based on channel conditions
+All CASCADE stations use the same 135-tone grid. There is no adaptation needed since the NN models handle channel impairments universally.
 ```
 
 ### HF Propagation Characteristics by Band
@@ -132,8 +97,8 @@ HF_BAND_CHARACTERISTICS = {
         'multipath_delay_spread': 5.0,  # ms
         'frequency_spread': 5,  # Hz (typical)
         'ionospheric_drift': 0.8,  # Hz/s
-        'tone_system': '4 tones',  # Baseline
-        'adaptation': 'IQ complexity adapts to conditions',
+        'tone_system': '2-FSK (135-tone grid)',
+        'modulation': 'Adaptive BPSK/QPSK/8-PSK/16-APSK based on SNR',
     },
 
     '17m': {
@@ -170,65 +135,43 @@ HF_BAND_CHARACTERISTICS = {
     },
 }
 
-# All bands use same 78-tone grid: 300-2764 Hz (32 Hz spacing)
-# Each pattern selects 4 tones from this grid (adaptive)
-# Adaptation handled by tone selection + IQ constellation complexity (λ parameter)
+# All bands use same 150-tone grid: 300-3300 Hz (20 Hz spacing)
+# Each pattern uses 2-FSK with assigned tone pair
+# Adaptation handled via modulation selection (BPSK→16-APSK) based on SNR
 ```
 
-## Adaptive Tone Density
+## Fixed Tone Grid for All Conditions
 
-### Per-Band Adaptation
+### Universal 150-Tone Grid
 
-CASCADE adapts the number of active reference tones based on:
-1. HF band in use (80m vs 10m)
-2. Current propagation conditions
-3. Measured frequency spreading
-4. Network consensus on conditions
+CASCADE uses the same 150-tone grid regardless of:
+- HF band in use (80m through 10m)
+- Propagation conditions
+- Equipment type
+- Geographic location
+
+The decoder neural network handles all channel impairments:
 
 ```python
-class AdaptiveToneDensity:
+class UniversalToneGrid:
     """
-    Network collectively adapts tone density
-    Based on propagation measurements
+    Fixed 150-tone grid for all CASCADE operations
     """
 
-    DENSITY_MODES = {
-        'maximum': {
-            'tones': 87,
-            'spacing': 25,  # Hz
-            'conditions': 'Excellent (NVIS, single-hop, stable)',
-            'bands': ['80m', '40m'],
-        },
-        'high': {
-            'tones': 75,
-            'spacing': 29,  # Hz
-            'conditions': 'Good (single/dual-hop, stable)',
-            'bands': ['40m', '20m'],
-        },
-        'normal': {
-            'tones': 70,
-            'spacing': 32,  # Hz (BASELINE)
-            'conditions': 'Typical (multi-hop, normal ionosphere)',
-            'bands': ['20m', '17m'],
-        },
-        'reduced': {
-            'tones': 60,
-            'spacing': 37,  # Hz
-            'conditions': 'Challenging (disturbed ionosphere)',
-            'bands': ['17m', '15m'],
-        },
-        'sparse': {
-            'tones': 50,
-            'spacing': 44,  # Hz
-            'conditions': 'Poor (high multipath, fading)',
-            'bands': ['15m', '10m'],
-        },
-        'minimal': {
-            'tones': 40,
-            'spacing': 55,  # Hz
-            'conditions': 'Severe (storm, aurora, extreme multipath)',
-            'bands': ['10m', 'disturbed conditions all bands'],
-        },
+    GRID_SPECIFICATION = {
+        'total_tones': 150,
+        'spacing': 20,  # Hz (fixed)
+        'bandwidth': 3000,  # Hz (300-3300)
+        'tone_pairs': 75,  # For 2-FSK patterns
+
+        # Works on all HF bands
+        'bands': ['80m', '40m', '30m', '20m', '17m', '15m', '12m', '10m'],
+
+        # NN handles all conditions
+        'conditions': 'All (excellent to severe)',
+
+        # Modulation adapts, not tone grid
+        'adaptation': 'Via modulation (BPSK/QPSK/8-PSK/16-APSK)',
     }
 
     def measure_propagation_quality(self):

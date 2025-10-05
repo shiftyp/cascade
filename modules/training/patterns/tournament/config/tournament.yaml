@@ -1,0 +1,74 @@
+# CASCADE Pattern Tournament Configuration
+# Optimized for Intel Core Ultra 7 265K with 8 P-cores
+
+tournament:
+  initial_trials: 8              # Start with 8 scout trials
+  total_compute_budget: 2000000  # Total iterations across all trials
+  min_iterations_before_elimination: 50000  # Give trials fair chance
+  evaluation_interval: 10000     # Check every 10k iterations
+  checkpoint_dir: ./checkpoints  # Where to save checkpoints
+
+elimination:
+  score_gap_threshold: 3.0       # Eliminate if >3 dB behind leader
+  stagnation_window: 30000       # Iterations without improvement
+  convergence_threshold: 0.001   # Minimum convergence rate
+  protect_top_n: 2               # Always keep top 2 trials
+  minimum_diversity: 3           # Keep at least 3 trials
+  aggressive_mode: false         # Set true for faster elimination
+
+pattern:
+  count: 128                     # Number of patterns to generate
+  flip_weight: 0.6               # Weight for flip-orthogonality (0.0-1.0)
+  target_db: -37.5               # Normal orthogonality target
+  flip_target_db: -30.0          # Flip orthogonality target
+
+hardware:
+  num_p_cores: 8                 # Number of P-cores (265K has 8)
+  rotate_cores: true             # Rotate for thermal management
+  rotation_interval_minutes: 30  # Rotate every 30 minutes
+  process_priority: high         # Process priority
+
+ui:
+  type: rich                     # UI type: rich, simple, or none
+  refresh_rate: 1.0              # Refresh every 1 second
+  log_level: INFO                # UI log level
+
+logging:
+  file_level: DEBUG              # File log level (everything)
+  ui_level: INFO                 # UI log level (important only)
+  log_dir: ./logs                # Log directory
+  save_stats: true               # Save statistics for analysis
+
+# Phase-specific overrides
+phases:
+  exploration:
+    elimination:
+      score_gap_threshold: 5.0
+      stagnation_window: 50000
+      protect_top_n: 3
+
+  evaluation:
+    elimination:
+      score_gap_threshold: 3.0
+      stagnation_window: 30000
+      protect_top_n: 2
+
+  exploitation:
+    elimination:
+      score_gap_threshold: 2.0
+      stagnation_window: 20000
+      protect_top_n: 1
+
+  refinement:
+    elimination:
+      score_gap_threshold: 1.0
+      stagnation_window: 10000
+      protect_top_n: 1
+
+# Scout-and-deepen specific settings
+scout_deepen:
+  scout_iterations: 100000       # Iterations for scout phase
+  finalist_count: 4              # Number of finalists to deepen
+  deepen_iterations: 300000      # Additional iterations for finalists
+  champion_count: 2              # Optional champion phase
+  champion_iterations: 400000    # Additional for champions

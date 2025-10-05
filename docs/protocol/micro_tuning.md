@@ -7,9 +7,9 @@
 
 ## Overview
 
-Micro-tuning adds **model-optimized continuous frequency offsets** to CASCADE's discrete 78-tone grid. While maintaining discrete FHSS (patent safety + interoperability), the model can shift each tone by ±2 Hz to optimally avoid interference and maximize channel efficiency.
+Micro-tuning adds **model-optimized continuous frequency offsets** to CASCADE's discrete 150-tone grid. While maintaining discrete FHSS (patent safety + interoperability), the model can shift each tone by ±2 Hz to optimally avoid interference and maximize channel efficiency.
 
-**Key principle:** 78 discrete tones provide coarse frequency selection (patent-safe FHSS), ±2 Hz continuous offset provides fine optimization (interference notching).
+**Key principle:** 150 discrete tones provide coarse frequency selection (patent-safe FHSS), ±2 Hz continuous offset provides fine optimization (interference notching).
 
 ---
 
@@ -411,9 +411,9 @@ Reference tone 34: 1388 Hz (discrete)
 With micro-tuning: 1386.0 to 1390.0 Hz (4 Hz range)
 
 Total frequency precision:
-- 78 tones × 4 Hz range = 312 Hz of micro-tuning freedom
-- vs 78 × 32 Hz spacing = 2496 Hz total span
-- Micro-tuning: 12.5% additional frequency flexibility
+- 150 tones × 4 Hz range = 600 Hz of micro-tuning freedom
+- vs 150 × 20 Hz spacing = 3000 Hz total span
+- Micro-tuning: 20% additional frequency flexibility
 ```
 
 **Interference avoidance:**
