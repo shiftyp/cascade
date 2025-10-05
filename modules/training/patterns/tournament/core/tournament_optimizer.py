@@ -514,8 +514,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     f.flush()
                 last_log_time = current_time
 
-            # Save checkpoint periodically
-            if current_iteration % 10000 == 0 or current_iteration >= iterations:
+            # Save checkpoint frequently for live dashboard updates
+            if current_iteration % 1000 == 0 or current_iteration >= iterations:
                 checkpoint = {
                     'pattern_set': pattern_set,
                     'repetition_maps': repetition_maps,
@@ -648,6 +648,8 @@ class DynamicTournamentOptimizer:
         self.global_best_trial_id = None
         self.start_time = None
         self.current_phase = 'exploration'
+        self.running = False
+        self.monitor_thread = None
 
     def initialize_trials(self):
         """Initialize all trials"""
@@ -679,11 +681,28 @@ class DynamicTournamentOptimizer:
         start_core = (trial_id * cores_per_trial) % 8
         return list(range(start_core, min(start_core + cores_per_trial, 8)))
 
+    def _start_checkpoint_monitor(self):
+        """Start background thread to monitor checkpoints for live updates"""
+        import threading
+        import time
+
+        def monitor_checkpoints():
+            while self.running:
+                try:
+                    for trial_id in self.active_trials[:]:  # Copy to avoid modification during iteration
+                        self._update_trial_from_checkpoint(trial_id)
+                except Exception:
+                    pass  # Ignore errors in background thread
+                time.sleep(2)  # Poll every 2 seconds
+
+        self.running = True
+        self.monitor_thread = threading.Thread(target=monitor_checkpoints, daemon=True)
+        self.monitor_thread.start()
+
     def run_tournament(self) -> List[np.ndarray]:
         """Run the tournament optimization"""
         self.start_time = datetime.now()
         self.initialize_trials()
-        self.last_checkpoint_poll = datetime.now()
 
         self.log_callback("=" * 60)
         self.log_callback("Starting CASCADE Pattern Tournament")
@@ -691,14 +710,11 @@ class DynamicTournamentOptimizer:
         self.log_callback(f"Initial trials: {self.num_initial_trials}")
         self.log_callback("=" * 60)
 
+        # Start background checkpoint monitoring for live updates
+        self._start_checkpoint_monitor()
+
         # Main tournament loop
         while self.compute_used < self.total_budget and len(self.active_trials) > 0:
-            # Poll checkpoints for live updates (every 5 seconds)
-            if (datetime.now() - self.last_checkpoint_poll).total_seconds() >= 5:
-                for trial_id in self.active_trials:
-                    self._update_trial_from_checkpoint(trial_id)
-                self.last_checkpoint_poll = datetime.now()
-
             # Update phase
             self._update_phase()
 
@@ -713,6 +729,9 @@ class DynamicTournamentOptimizer:
             if self._check_convergence():
                 self.log_callback("Convergence achieved - stopping early")
                 break
+
+        # Stop monitoring
+        self.running = False
 
         # Finalize and return best patterns
         return self._finalize_tournament()
@@ -784,10 +803,6 @@ class DynamicTournamentOptimizer:
         """Run all active trials for eval_interval iterations"""
         if not self.active_trials:
             return
-
-        # Update live statistics from checkpoints before running new batch
-        for trial_id in self.active_trials:
-            self._update_trial_from_checkpoint(trial_id)
 
         # Prepare batch execution
         batch_size = min(len(self.active_trials), 8)  # Max 8 parallel workers
