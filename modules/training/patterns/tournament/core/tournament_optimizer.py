@@ -174,7 +174,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
             # Generate initial 128 frequency patterns (2-FSK binary sequences)
             pattern_set = []
-            pattern_length = 50  # 50 symbols at 200 symbols/second = 250ms
+            pattern_length = 32  # 32 symbols at 200 symbols/second = 160ms (CASCADE standard)
 
             with open(debug_file_path, 'a') as f:
                 f.write(f"Generating {128} patterns of length {pattern_length}\n")
@@ -195,24 +195,30 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write("Calculating initial correlations...\n")
                 f.flush()
 
-            # Calculate initial score (max cross-correlation)
-            initial_scores = []
-            for i in range(len(pattern_set)):
-                for j in range(i + 1, len(pattern_set)):
+            # Calculate initial score (max cross-correlation across all pairs)
+            max_correlation = -100.0
+            correlation_count = 0
+
+            for i in range(128):
+                for j in range(i + 1, 128):
+                    pattern_i = pattern_set[i].astype(np.float32) - 0.5
+                    pattern_j = pattern_set[j].astype(np.float32) - 0.5
+
                     # Normal correlation
-                    corr = np.correlate(pattern_set[i].astype(np.float32) - 0.5,
-                                       pattern_set[j].astype(np.float32) - 0.5,
-                                       mode='valid')[0]
-                    initial_scores.append(20 * np.log10(abs(corr) / pattern_length + 1e-10))
+                    corr_normal = np.abs(np.dot(pattern_i, pattern_j))
+                    corr_normal_db = 20 * np.log10(corr_normal / pattern_length + 1e-10)
+                    max_correlation = max(max_correlation, corr_normal_db)
 
-                    # Flip correlation (FSK inversion: 0↔1)
-                    freq_inv = 1 - pattern_set[j]
-                    corr_flip = np.correlate(pattern_set[i].astype(np.float32) - 0.5,
-                                            freq_inv.astype(np.float32) - 0.5,
-                                            mode='valid')[0]
-                    initial_scores.append(20 * np.log10(abs(corr_flip) / pattern_length + 1e-10))
+                    # Flip correlation (FSK inversion)
+                    pattern_j_flip = -pattern_j
+                    corr_flip = np.abs(np.dot(pattern_i, pattern_j_flip))
+                    corr_flip_db = 20 * np.log10(corr_flip / pattern_length + 1e-10)
+                    # Weight flip correlation (target -30dB vs -37.5dB)
+                    max_correlation = max(max_correlation, corr_flip_db + 7.5)
 
-            best_score = max(initial_scores) if initial_scores else -30.0
+                    correlation_count += 2
+
+            best_score = max_correlation
             score_history = [best_score]
             start_iteration = 0
             temperature = 1.0
@@ -229,78 +235,109 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         # Run optimization iterations
         iterations_per_update = max(100, iterations // 100)  # Update at most 100 times
         current_iteration = start_iteration
+        mutations_per_iteration = 10  # Test multiple mutations per iteration for better optimization
 
         with open(debug_file_path, 'a') as f:
             f.write(f"Starting optimization loop:\n")
             f.write(f"  Iterations per update: {iterations_per_update}\n")
             f.write(f"  Target iterations: {iterations}\n")
+            f.write(f"  Mutations per iteration: {mutations_per_iteration}\n")
             f.flush()
+
+        import time
+        start_time = time.time()
+        last_log_time = start_time
 
         while current_iteration < iterations:
             batch_iterations = min(iterations_per_update, iterations - current_iteration)
-    
+
             # Optimize each pattern in the set
-            for _ in range(batch_iterations):
+            for iter_count in range(batch_iterations):
                 # Select random pattern to mutate
                 pattern_idx = np.random.randint(0, 128)
-                current_pattern = pattern_set[pattern_idx].copy()
-    
+                original_pattern = pattern_set[pattern_idx].copy()
+
                 # Mutate pattern (flip random bits based on temperature)
-                num_flips = max(1, int(temperature * 5))  # 1-5 bits based on temperature
-                flip_positions = np.random.choice(len(current_pattern), num_flips, replace=False)
-                mutated_pattern = current_pattern.copy()
+                num_flips = max(1, min(5, int(temperature * 10)))  # 1-5 bits based on temperature
+                flip_positions = np.random.choice(len(original_pattern), num_flips, replace=False)
+                mutated_pattern = original_pattern.copy()
                 mutated_pattern[flip_positions] = 1 - mutated_pattern[flip_positions]
-    
-                # Calculate new correlations
-                new_scores = []
-                for j, other_pattern in enumerate(pattern_set):
-                    if j != pattern_idx:
-                        # Normal correlation
-                        corr = np.correlate(mutated_pattern.astype(np.float32) - 0.5,
-                                           other_pattern.astype(np.float32) - 0.5,
-                                           mode='valid')[0]
-                        new_scores.append(20 * np.log10(abs(corr) / len(mutated_pattern) + 1e-10))
-    
-                        # Flip correlation
-                        freq_inv = 1 - other_pattern
-                        corr_flip = np.correlate(mutated_pattern.astype(np.float32) - 0.5,
-                                                freq_inv.astype(np.float32) - 0.5,
-                                                mode='valid')[0]
-                        # Weight flip correlation slightly less (target -30 dB vs -37.5 dB)
-                        flip_score = 20 * np.log10(abs(corr_flip) / len(mutated_pattern) + 1e-10)
-                        new_scores.append(flip_score * 0.8)  # 80% weight for flip correlations
-    
-                # Determine if we accept the mutation
-                if new_scores:
-                    new_max_score = max(new_scores)
-    
-                    # Simulated annealing acceptance
-                    if new_max_score < best_score:
-                        # Always accept improvements
-                        pattern_set[pattern_idx] = mutated_pattern
-                        best_score = new_max_score
-                    elif temperature > min_temperature:
-                        # Sometimes accept worse solutions based on temperature
-                        delta = new_max_score - best_score
-                        probability = np.exp(-delta / temperature)
-                        if np.random.random() < probability:
-                            pattern_set[pattern_idx] = mutated_pattern
-    
+
+                # Temporarily replace pattern to evaluate full set correlation
+                pattern_set[pattern_idx] = mutated_pattern
+
+                # Calculate maximum correlation across all pattern pairs (both normal and flip)
+                # This is the actual metric we're optimizing
+                max_correlation = -100.0  # Start with very low value
+                worst_pair = None
+
+                # Check all unique pattern pairs
+                for i in range(128):
+                    for j in range(i + 1, 128):
+                        pattern_i = pattern_set[i].astype(np.float32) - 0.5  # Center at 0
+                        pattern_j = pattern_set[j].astype(np.float32) - 0.5
+
+                        # Normal cross-correlation (should achieve -37.5 dB)
+                        # Use valid mode for actual correlation at zero lag
+                        corr_normal = np.abs(np.dot(pattern_i, pattern_j))
+                        corr_normal_db = 20 * np.log10(corr_normal / len(pattern_i) + 1e-10)
+
+                        if corr_normal_db > max_correlation:
+                            max_correlation = corr_normal_db
+                            worst_pair = (i, j, 'normal')
+
+                        # Flip correlation (FSK inversion: 0↔1, should achieve -30 dB)
+                        pattern_j_flip = -pattern_j  # Flip is equivalent to negation after centering
+                        corr_flip = np.abs(np.dot(pattern_i, pattern_j_flip))
+                        corr_flip_db = 20 * np.log10(corr_flip / len(pattern_i) + 1e-10)
+
+                        # Apply weighting: flip correlation target is -30dB vs -37.5dB for normal
+                        # So we add 7.5dB penalty to flip correlations
+                        weighted_flip_db = corr_flip_db + 7.5
+
+                        if weighted_flip_db > max_correlation:
+                            max_correlation = weighted_flip_db
+                            worst_pair = (i, j, 'flip')
+
+                # Decide whether to keep mutation using simulated annealing
+                accept = False
+                if max_correlation < best_score:
+                    # Always accept improvements (lower correlation is better)
+                    accept = True
+                    best_score = max_correlation
+                elif temperature > min_temperature:
+                    # Sometimes accept worse solutions based on temperature
+                    delta = max_correlation - best_score
+                    probability = np.exp(-delta / temperature)
+                    if np.random.random() < probability:
+                        accept = True
+
+                if not accept:
+                    # Revert mutation
+                    pattern_set[pattern_idx] = original_pattern
+
                 # Cool down
                 temperature = max(min_temperature, temperature * cooling_rate)
                 current_iteration += 1
-    
+
                 if current_iteration >= iterations:
                     break
     
             # Update score history
             score_history.append(best_score)
 
-            # Log progress periodically
-            if current_iteration % 1000 == 0:
+            # Log progress periodically (every 10 seconds or every 1000 iterations)
+            current_time = time.time()
+            if current_iteration % 1000 == 0 or (current_time - last_log_time) >= 10:
+                elapsed = current_time - start_time
+                iter_per_sec = (current_iteration - start_iteration) / elapsed if elapsed > 0 else 0
                 with open(debug_file_path, 'a') as f:
-                    f.write(f"Progress: iteration {current_iteration}/{iterations}, best_score={best_score:.2f} dB\n")
+                    f.write(f"Progress: iteration {current_iteration}/{iterations}, "
+                           f"best_score={best_score:.2f} dB, "
+                           f"elapsed={elapsed:.1f}s, "
+                           f"speed={iter_per_sec:.1f} iter/s\n")
                     f.flush()
+                last_log_time = current_time
 
             # Save checkpoint periodically
             if current_iteration % 10000 == 0 or current_iteration >= iterations:
@@ -337,11 +374,15 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         with open(final_patterns_file, 'wb') as f:
             pickle.dump(pattern_set, f)
 
+        total_elapsed = time.time() - start_time
         with open(debug_file_path, 'a') as f:
             f.write(f"\n=== WORKER COMPLETE ===\n")
             f.write(f"Final iteration: {current_iteration}\n")
+            f.write(f"Iterations completed: {current_iteration - start_iteration}\n")
             f.write(f"Final best score: {best_score:.2f} dB\n")
             f.write(f"Convergence rate: {convergence_rate:.6f}\n")
+            f.write(f"Total time: {total_elapsed:.1f} seconds\n")
+            f.write(f"Average speed: {(current_iteration - start_iteration)/total_elapsed:.1f} iter/s\n")
             f.write(f"Patterns saved to: {final_patterns_file}\n")
             f.flush()
 
@@ -386,7 +427,7 @@ class DynamicTournamentOptimizer:
         total_compute_budget: int = 2_000_000,
         num_initial_trials: int = 8,
         min_iterations: int = 50_000,
-        eval_interval: int = 10_000,
+        eval_interval: int = 5_000,  # Reduced since iterations are now slower
         checkpoint_dir: str = "./checkpoints",
         log_callback: Optional[Callable] = None,
         execution_mode: str = "auto"  # "process", "thread", "sequential", or "auto"
@@ -423,7 +464,11 @@ class DynamicTournamentOptimizer:
                 seed=1000 * (i + 1),
                 p_cores=self._assign_p_cores(i)
             )
-            trial.compute_budget = self.total_budget // self.num_initial_trials
+            # Ensure each trial gets at least min_iterations (50k)
+            trial.compute_budget = max(
+                self.min_iterations,
+                self.total_budget // self.num_initial_trials
+            )
             self.trials.append(trial)
 
         self.active_trials = list(range(self.num_initial_trials))
