@@ -24,7 +24,8 @@ class PatternGeneratorDashboard:
     """Rich terminal UI for pattern generation monitoring"""
 
     def __init__(self, tournament_optimizer=None):
-        self.console = Console()
+        # Force terminal detection for proper rendering
+        self.console = Console(force_terminal=True, force_interactive=True)
         self.optimizer = tournament_optimizer
         self.layout = Layout()
         self.running = False
@@ -331,22 +332,34 @@ class PatternGeneratorDashboard:
         self.running = True
         self.start_time = datetime.now()
 
-        with Live(
-            self.layout,
-            refresh_per_second=1.0 / refresh_rate,
-            screen=True,
-            console=self.console
-        ) as live:
-            while self.running:
-                # Update all panels
-                self.layout["header"].update(self.generate_header())
-                self.layout["trials"].update(self.generate_trials_table())
-                self.layout["stats"].update(self.generate_stats_panel())
-                self.layout["info"].update(self.generate_info_panel())
-                self.layout["log"].update(self.generate_log_panel())
-                self.layout["footer"].update(self.generate_footer())
+        # Clear screen and hide cursor for clean display
+        self.console.clear()
+        self.console.show_cursor(False)
 
-                time.sleep(refresh_rate)
+        try:
+            with Live(
+                self.layout,
+                refresh_per_second=1.0 / refresh_rate,
+                screen=True,
+                console=self.console,
+                transient=False
+            ) as live:
+                while self.running:
+                    # Update all panels
+                    self.layout["header"].update(self.generate_header())
+                    self.layout["trials"].update(self.generate_trials_table())
+                    self.layout["stats"].update(self.generate_stats_panel())
+                    self.layout["info"].update(self.generate_info_panel())
+                    self.layout["log"].update(self.generate_log_panel())
+                    self.layout["footer"].update(self.generate_footer())
+
+                    # Force Rich to refresh the display
+                    live.refresh()
+
+                    time.sleep(refresh_rate)
+        finally:
+            # Restore cursor on exit
+            self.console.show_cursor(True)
 
     def stop(self):
         """Stop the dashboard"""

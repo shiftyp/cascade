@@ -35,17 +35,24 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
     import sys
 
     # Import pattern modules within the worker
-    # Suppress any print statements during import to avoid corrupting Rich UI
+    # Suppress ALL output to avoid corrupting Rich UI
     import io
     import contextlib
+
+    # Create null streams for complete suppression
+    null_out = io.StringIO()
+    null_err = io.StringIO()
+
+    # Redirect both stdout AND stderr for the entire worker process
+    # This prevents any output from corrupting the Rich UI
+    sys.stdout = null_out
+    sys.stderr = null_err
 
     patterns_parent_dir = Path(__file__).parent.parent.parent
     if str(patterns_parent_dir) not in sys.path:
         sys.path.insert(0, str(patterns_parent_dir))
 
-    # Redirect stdout during import to prevent print statements from corrupting Rich UI
-    with contextlib.redirect_stdout(io.StringIO()):
-        from patterns.zadoff_chu import generate_zadoff_chu_pattern
+    from patterns.zadoff_chu import generate_zadoff_chu_pattern
 
     # This runs in a separate process
     # Set CPU affinity if on Windows/Linux
