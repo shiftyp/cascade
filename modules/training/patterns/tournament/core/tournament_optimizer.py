@@ -195,43 +195,16 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write(f"Target: -30 dB normal, -28 dB flip, -27 dB with erasure\n")
                 f.flush()
 
-            # Generate simple binary patterns and repetition maps
+            # Generate truly random, diverse binary patterns
+            # Random patterns of length 512 should start at -25 to -27 dB
             for i in range(num_patterns):
-                np.random.seed(seed + i * 137)
+                # Use unique seed for each pattern to ensure diversity
+                pattern_seed = seed + i * 7919  # Use large prime for better distribution
+                np.random.seed(pattern_seed)
 
-                # 1. Generate binary pattern (optimized for orthogonality)
-                if i == 0:
-                    # First pattern: balanced random
-                    pattern = np.random.randint(0, 2, pattern_length, dtype=np.uint8)
-                elif i < 4:
-                    # Patterns 1-3: sparse patterns (fewer 1s)
-                    pattern = np.zeros(pattern_length, dtype=np.uint8)
-                    num_ones = pattern_length // 3
-                    indices = np.random.choice(pattern_length, num_ones, replace=False)
-                    pattern[indices] = 1
-                elif i < 8:
-                    # Patterns 4-7: dense patterns (more 1s)
-                    pattern = np.ones(pattern_length, dtype=np.uint8)
-                    num_zeros = pattern_length // 3
-                    indices = np.random.choice(pattern_length, num_zeros, replace=False)
-                    pattern[indices] = 0
-                elif i < 12:
-                    # Patterns 8-11: alternating with different periods
-                    period = 2 + (i - 8)  # periods 2,3,4,5
-                    base = []
-                    for _ in range(period//2):
-                        base.extend([1, 0])
-                    if period % 2:
-                        base.append(1)
-                    pattern = np.tile(base, pattern_length // period + 1)[:pattern_length]
-                    # Add some randomness
-                    flip_indices = np.random.choice(pattern_length, 20, replace=False)
-                    pattern[flip_indices] = 1 - pattern[flip_indices]
-                else:
-                    # Patterns 12-15: pseudorandom with different seeds
-                    pattern = np.zeros(pattern_length, dtype=np.uint8)
-                    state = np.random.RandomState(seed + i * 1000)
-                    pattern = state.randint(0, 2, pattern_length, dtype=np.uint8)
+                # Generate completely random binary pattern
+                # This ensures low initial correlation (expected -25 to -27 dB)
+                pattern = np.random.randint(0, 2, pattern_length, dtype=np.uint8)
 
                 pattern_set.append(pattern)
 
@@ -318,8 +291,9 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
                     correlation_count += 3
 
-            # Combined score (weighted by importance)
-            best_score = max(max_normal_corr, max_flip_corr + 2.0, max_erasure_corr + 3.0)
+            # Combined score: worst-case across all three criteria
+            # Lower (more negative) is better orthogonality
+            best_score = max(max_normal_corr, max_flip_corr, max_erasure_corr)
             score_history = [best_score]
             start_iteration = 0
             temperature = 1.0
@@ -409,8 +383,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                         erasure_db = test_with_erasure(pattern_mut, pattern_j, 0.375)
                         max_erasure_new = max(max_erasure_new, erasure_db)
 
-                # Combined score for mutation
-                max_correlation_new = max(max_normal_new, max_flip_new + 2.0, max_erasure_new + 3.0)
+                # Combined score for mutation: worst-case across all criteria
+                max_correlation_new = max(max_normal_new, max_flip_new, max_erasure_new)
 
                 # For comparison, calculate current pattern's worst correlation
                 max_normal_old = -100.0
@@ -438,8 +412,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                         erasure_db = test_with_erasure(pattern_old, pattern_j, 0.375)
                         max_erasure_old = max(max_erasure_old, erasure_db)
 
-                # Combined score for original
-                max_correlation_old = max(max_normal_old, max_flip_old + 2.0, max_erasure_old + 3.0)
+                # Combined score for original: worst-case across all criteria
+                max_correlation_old = max(max_normal_old, max_flip_old, max_erasure_old)
 
                 # Decide whether to keep mutation
                 # Accept if the mutated pattern has lower worst-case correlation than original
@@ -476,14 +450,21 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                                 erasure_db = test_with_erasure(pi, pj, 0.375)
                                 worst_erasure = max(worst_erasure, erasure_db)
 
-                    # Combined worst-case score (current evaluation)
-                    current_score = max(worst_normal, worst_flip + 2.0, worst_erasure + 3.0)
+                    # Combined worst-case score: worst across all three criteria
+                    current_score = max(worst_normal, worst_flip, worst_erasure)
 
                     # Track the best (lowest) score ever achieved
                     best_score = min(best_score, current_score)
 
                     # Update score history for convergence tracking
                     score_history.append(best_score)
+
+                    # Log detailed scores for debugging
+                    with open(debug_file_path, 'a') as f:
+                        f.write(f"  Eval @ {current_iteration}: Normal={worst_normal:.2f}, "
+                               f"Flip={worst_flip:.2f}, Erasure={worst_erasure:.2f}, "
+                               f"Best={best_score:.2f} dB\n")
+                        f.flush()
 
                 elif temperature > min_temperature:
                     # Sometimes accept worse solutions based on temperature
