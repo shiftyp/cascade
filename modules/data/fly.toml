@@ -1,7 +1,7 @@
 # Fly.io configuration for CASCADE KiwiSDR Data Collector
 # Modern Fly.io v2 format (2025)
 # Single-region deployment - geographic diversity comes from global SDR sources
-app = "cascade-kiwi-collector"
+app = "cascade-collector"
 primary_region = "iad"  # US East - good global connectivity
 kill_signal = "SIGINT"
 kill_timeout = 30
@@ -15,6 +15,14 @@ kill_timeout = 30
 [env]
   PYTHON_VERSION = "3.11"
   MODULE_NAME = "cascade_data"
+
+  # Dashboard API URLs for Fly.io v2 internal networking
+  # Use top.internal which routes to machines with the service
+  NEXT_PUBLIC_API_URL = "https://cascade-collector.fly.dev"
+  INTERNAL_API_URL = "http://top.cascade-collector.internal:8000"
+  
+  # Disable SSL verification for internal requests
+  NODE_TLS_REJECT_UNAUTHORIZED = "0"
 
   # Collection scaling - Start conservative, increase as testing proves stability
   # Target: 50-100 baseline SDRs, 200+ during events (FR-016, FR-018)
@@ -38,11 +46,11 @@ kill_timeout = 30
 
 # Process groups - each runs in its own machine
 [processes]
-  scheduler = "python -m modules.data.src.collectors.scheduler"
-  worker = "python -m modules.data.src.collectors.worker"  # No limit - consume until resources exhausted
-  api = "python -m modules.data.src.dashboard.geographic_api"
-  qa_api = "python -m modules.data.src.dashboard.qa_sample_api"
-  dashboard = "cd modules/data/src/dashboard/geographic-dashboard && npm start"
+  scheduler = "python -m src.collectors.scheduler"
+  worker = "python -m src.collectors.worker"  # No limit - consume until resources exhausted
+  api = "python -m src.dashboard.geographic_api"
+  qa_api = "python -m src.dashboard.qa_sample_api"
+  dashboard = "sh -c 'cd /app/src/dashboard/geographic-dashboard && npm start'"
 
 # Worker scaling configuration
 [[vm]]
@@ -51,8 +59,11 @@ kill_timeout = 30
   cpus = 2
   processes = ["worker"]
 
-[metrics]
-  port = 9091  # Prometheus metrics for custom scaling
+# Volume mount for persistent storage
+[[mounts]]
+  source = "data"
+  destination = "/data"
+  processes = ["worker", "scheduler"]  # Only workers and scheduler need data access
 
 # Scale workers based on resource usage, not HTTP requests
 # FR-041: Auto-scale 2-10 workers based on demand
@@ -70,57 +81,25 @@ kill_timeout = 30
     source = "memory"
     threshold = 80
 
-# Geographic Diversity API Service
-[[services]]
-  processes = ["api"]
-  internal_port = 8000
-  protocol = "tcp"
-  auto_stop_machines = "stop"
-  auto_start_machines = true
-  min_machines_running = 1
-
-  [[services.ports]]
-    port = 8000
-    handlers = ["http"]
-
-  [[services.http_checks]]
-    interval = "30s"
-    timeout = "5s"
-    grace_period = "10s"
-    method = "GET"
-    path = "/api/diversity/metrics"
-
-# QA Sample API Service
-[[services]]
-  processes = ["qa_api"]
-  internal_port = 8001
-  protocol = "tcp"
-  auto_stop_machines = "stop"
-  auto_start_machines = true
-  min_machines_running = 1
-
-  [[services.ports]]
-    port = 8001
-    handlers = ["http"]
-
-  [[services.http_checks]]
-    interval = "30s"
-    timeout = "5s"
-    grace_period = "10s"
-    method = "GET"
-    path = "/health"
-
-# Dashboard Service (Next.js)
+# Dashboard Service (Next.js) - Main web interface with HTTPS for users
+# Fly.io handles TLS termination, forwards HTTP to internal port 3000
 [[services]]
   processes = ["dashboard"]
   internal_port = 3000
   protocol = "tcp"
-  auto_stop_machines = "stop"
+  auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
 
+  # HTTP (redirects to HTTPS)
   [[services.ports]]
-    port = 3000
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  # HTTPS (Fly handles TLS termination)
+  [[services.ports]]
+    port = 443
     handlers = ["http", "tls"]
 
   [[services.http_checks]]
@@ -129,6 +108,35 @@ kill_timeout = 30
     grace_period = "10s"
     method = "GET"
     path = "/"
+
+# Geographic Diversity API Service - HTTP only, no external access needed
+[[services]]
+  processes = ["api"]
+  internal_port = 8000
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+# QA Sample API Service
+[[services]]
+  processes = ["qa_api"]
+  internal_port = 8001
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+# Scheduler Service
+# Note: Scheduler is a background process with no network ports
+# Health is monitored via /tmp/scheduler_health.json file and Redis
+# No [[services]] block needed - Fly monitors via Docker HEALTHCHECK
 
 # Metrics endpoint for monitoring
 [metrics]
@@ -143,3 +151,5 @@ kill_timeout = 30
 #   - TIGRIS_SECRET_KEY
 #   - TIGRIS_BUCKET
 #   - NOAA_API_KEY (optional)
+                                                                                         
+                                                                                         

@@ -5,6 +5,7 @@ from .base import Base, engine, SessionLocal, get_db
 # Import all models to register them - using relative imports
 from .recording_session import RecordingSession
 from .kiwisdr_source import KiwiSDRSource
+from .websdr_source import WebSDRSource
 from .qrn_sample import QRNSample
 from .propagation_record import PropagationRecord
 from .space_weather_data import SpaceWeatherData, SolarCyclePhase, QBOPhase, Season
@@ -23,6 +24,7 @@ __all__ = [
     "get_db",
     "RecordingSession",
     "KiwiSDRSource",
+    "WebSDRSource",
     "QRNSample",
     "PropagationRecord",
     "SpaceWeatherData",

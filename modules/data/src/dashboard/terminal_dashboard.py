@@ -426,7 +426,7 @@ class TerminalDashboard:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="CASCADE Terminal Dashboard")
-    parser.add_argument("--host", default="localhost", help="PostgreSQL host")
+    parser.add_argument("--host", default=os.getenv("DB_HOST", "localhost"), help="PostgreSQL host")
     parser.add_argument("--port", type=int, default=5432, help="PostgreSQL port")
     parser.add_argument("--database", default="cascade", help="Database name")
     parser.add_argument("--user", default="cascade", help="Database user")

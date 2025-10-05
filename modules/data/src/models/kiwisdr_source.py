@@ -53,9 +53,9 @@ class KiwiSDRSource(Base):
 
     # Location (anonymized)
     grid_square = Column(
-        String(6),
+        String(10),
         nullable=True,
-        comment="Maidenhead grid square (anonymized)",
+        comment="Maidenhead grid square (anonymized, up to 10 chars for extended locators)",
     )
 
     latitude = Column(
@@ -107,7 +107,7 @@ class KiwiSDRSource(Base):
     )
 
     antenna_type = Column(
-        String(100),
+        String(255),
         nullable=True,
         comment="Antenna type description",
     )
@@ -139,6 +139,13 @@ class KiwiSDRSource(Base):
     )
 
     # Usage tracking (FR-008, FR-014)
+    daily_limit_minutes = Column(
+        Float,
+        nullable=False,
+        default=90,
+        comment="Daily usage limit in minutes (typically 90 for KiwiSDR)",
+    )
+
     daily_usage_minutes = Column(
         Float,
         nullable=False,
@@ -166,6 +173,12 @@ class KiwiSDRSource(Base):
         comment="Last successful connection time",
     )
 
+    last_seen = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Last time SDR was seen in public directory",
+    )
+
     # Status
     active = Column(
         Boolean,
@@ -185,6 +198,32 @@ class KiwiSDRSource(Base):
         nullable=False,
         default=0,
         comment="Number of connection failures",
+    )
+
+    consecutive_failures = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="Consecutive failures without success (for blacklist detection)",
+    )
+
+    last_failure_type = Column(
+        String(50),
+        nullable=True,
+        comment="Type of last failure: timeout, refused, auth_failed, blacklist",
+    )
+
+    last_failure_time = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Time of last connection failure",
+    )
+
+    potentially_blacklisted = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="Flag indicating possible IP blacklist (10+ consecutive connection refused)",
     )
 
     # Authentication (optional)

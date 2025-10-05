@@ -1,13 +1,14 @@
-"""Redis configuration for distributed coordination."""
+"""Redis configuration for CASCADE Data Collector."""
 
+import os
 from dataclasses import dataclass
 from typing import Optional
 
 
 @dataclass
 class RedisConfig:
-    """Redis configuration."""
-    host: str = "localhost"
+    """Redis connection configuration."""
+    host: str = os.getenv("REDIS_HOST", "cascade-keydb.internal")
     port: int = 6379
     db: int = 0
     password: Optional[str] = None

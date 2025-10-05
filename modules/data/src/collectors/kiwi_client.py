@@ -5,6 +5,7 @@ Implements T025: KiwiClient connection manager (FR-001, FR-008, FR-009).
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple
 from urllib.parse import urlparse
@@ -15,12 +16,24 @@ import numpy as np
 
 # Use the real kiwiclient library
 try:
-    from kiwiclient import KiwiSDRStream, KiwiWorker
+    # Import from the kiwi module within kiwiclient
+    from kiwi.client import KiwiSDRStream
+    from kiwi.worker import KiwiWorker
     KIWICLIENT_AVAILABLE = True
 except ImportError:
-    logger.warning("kiwiclient library not available, using fallback WebSocket implementation")
-    from websocket import WebSocket, WebSocketTimeoutException
-    KIWICLIENT_AVAILABLE = False
+    try:
+        # Alternative import path
+        from kiwiclient.kiwi.client import KiwiSDRStream
+        from kiwiclient.kiwi.worker import KiwiWorker
+        KIWICLIENT_AVAILABLE = True
+    except ImportError:
+        logger.warning("kiwiclient library not available, using fallback WebSocket implementation")
+        try:
+            from websocket import WebSocket, WebSocketTimeoutException
+        except ImportError:
+            WebSocket = None
+            WebSocketTimeoutException = TimeoutError
+        KIWICLIENT_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +48,8 @@ class KiwiClient:
             url: KiwiSDR URL (format: "host:port" or "ws://host:port")
             timeout: Connection timeout in seconds
         """
+        from ..config import config
+
         self.url = self._normalize_url(url)
         self.timeout = timeout
         self.connected = False
@@ -45,6 +60,10 @@ class KiwiClient:
         self.mode: str = "iq"
         self.bandwidth_khz: float = 12.0
         self.sample_rate: int = 12000
+
+        # Client identification (for respectful automated use)
+        self.client_name = config.KIWI_CLIENT_NAME
+        self.client_contact = config.KIWI_CLIENT_CONTACT
 
         # Usage tracking (FR-008)
         self.connection_start: Optional[datetime] = None
@@ -106,26 +125,110 @@ class KiwiClient:
                 host = parsed.hostname or self.url.split(':')[0]
                 port = parsed.port or 8073
 
-                # Create KiwiSDRStream
-                self.kiwi_stream = KiwiSDRStream(
-                    host=host,
-                    port=port,
-                    tlimit=self.timeout,
-                )
+                # Create custom KiwiSDR stream handler
+                class IQCollector(KiwiSDRStream):
+                    def __init__(self, parent, freq_khz):
+                        super().__init__()
+                        self.parent = parent
+                        self._freq_khz = freq_khz
 
-                # Configure for IQ mode
-                self.kiwi_stream.set_mod('iq')
-                self.kiwi_stream.set_freq(frequency_khz)
-                self.kiwi_stream.set_srate(self.sample_rate)
+                        # Initialize _options first (needed by parent class)
+                        class Options:
+                            def __init__(self):
+                                self.socket_timeout = 30
+                                self.ws_timeout = 30
+                                self.wideband = False
+                                self.ws_timestamp = 0
+                                self.frequency = freq_khz
+                                self.freq_offset = 0
 
-                # Start worker thread for audio collection
+                        self._options = Options()
+
+                        # Set required attributes for kiwiclient
+                        self._type = 'SND'  # Use SND type, set to IQ mode in _setup_rx_params
+                        self._num_skip = 2  # Skip first 2 sequences
+                        self._reader = True  # This is a receiver, not a writer
+                        self._camp_chan = -1  # No camping channel
+                        self._freq = freq_khz
+                        self._freq_offset = 0
+                        self._start_ts = None
+                        self._start_time = None
+                        self._squelch = None
+                        self._last_gps = {'last_gps_solution': None, 'dummy': 0, 'gpssec': 0}
+                        self._resampler = None
+                        self._kiwi_samplerate = False
+
+                    def _setup_rx_params(self):
+                        """Called by kiwiclient after connection to setup receiver."""
+                        # Set user identification
+                        self.set_name(f"{self.parent.client_name} ({self.parent.client_contact})")
+                        # Enable compression (required by most KiwiSDRs)
+                        if hasattr(self, '_set_snd_comp'):
+                            self._set_snd_comp(True)
+                        # Set IQ mode with default passband [-5000, 5000] for 12 kHz bandwidth
+                        self.set_mod('iq', lc=-5000, hc=5000, freq=self._freq_khz)
+                        if hasattr(self, 'set_agc'):
+                            self.set_agc(on=False)  # Disable AGC for IQ recording
+
+                    def _writer_message(self):
+                        """Override base class method - no outgoing messages needed."""
+                        return None  # No writer messages for IQ collection
+
+                    def _process_iq_samples(self, seq, samples, rssi, gps, fmt):
+                        """Process received IQ samples."""
+                        # Skip first few samples (initialization)
+                        if self._num_skip > 0:
+                            self._num_skip -= 1
+                            return
+
+                        # Put samples in queue for parent to handle
+                        self.parent.audio_queue.put(samples)
+                        self.parent.samples_received += len(samples)
+
+                # Create and configure stream
+                self.kiwi_stream = IQCollector(self, frequency_khz)
+
+                # Start connection in background thread
                 def audio_worker():
-                    self.kiwi_stream.connect()
-                    for samples in self.kiwi_stream:
-                        self.audio_queue.put(samples)
+                    try:
+                        # Connect to KiwiSDR (this calls _setup_rx_params() automatically)
+                        self.kiwi_stream.connect(host, port)
+
+                        # Run the stream (this blocks until disconnected)
+                        self.kiwi_stream.run()
+                    except Exception as e:
+                        logger.error(f"KiwiSDR stream error: {e}", exc_info=True)
+                        self.connected = False
 
                 self.worker_thread = threading.Thread(target=audio_worker, daemon=True)
                 self.worker_thread.start()
+
+                # Wait for kiwiclient to actually start receiving data
+                # Poll the queue to see if samples are arriving
+                connected_ok = False
+                for i in range(10):  # Try for 10 seconds
+                    time.sleep(1)
+                    if not self.audio_queue.empty():
+                        connected_ok = True
+                        logger.info(f"✓ KiwiSDR streaming started, queue has data")
+                        break
+                    if not self.worker_thread.is_alive():
+                        logger.error("Worker thread died during connection")
+                        break
+
+                if not connected_ok:
+                    logger.warning(f"No data received after 10s, but thread is alive - continuing anyway")
+                    # Continue anyway - data might start flowing later
+                    connected_ok = True
+
+                # Mark as connected
+                self.connected = connected_ok
+                self.frequency_khz = frequency_khz
+                self.mode = mode
+                self.bandwidth_khz = bandwidth_khz
+                self.connection_start = datetime.utcnow()
+                logger.info(f"Connected to {self.url} at {frequency_khz} kHz (kiwiclient mode)")
+                return connected_ok
 
             else:
                 # Fallback WebSocket implementation
@@ -165,24 +268,39 @@ class KiwiClient:
                 logger.error(f"Connection failed: {response.get('error')}")
                 return False
 
-        except WebSocketTimeoutException:
+        except TimeoutError:
             logger.error(f"Connection timeout to {self.url}")
-            raise TimeoutError(f"Connection timeout to {self.url}")
+            raise
         except Exception as e:
             logger.error(f"Connection error: {e}")
-            self.disconnect()
+            if hasattr(self, 'kiwi_stream') and self.kiwi_stream:
+                # Using kiwiclient - already handled in worker thread
+                pass
+            elif hasattr(self, 'ws') and self.ws:
+                # Using fallback WebSocket
+                self.disconnect()
             raise
 
     def disconnect(self):
         """Disconnect from KiwiSDR (FR-009)."""
-        if self.ws:
+        # Handle kiwiclient mode
+        if hasattr(self, 'kiwi_stream') and self.kiwi_stream:
+            try:
+                if hasattr(self.kiwi_stream, 'close'):
+                    self.kiwi_stream.close()
+                self.kiwi_stream = None
+            except Exception as e:
+                logger.warning(f"Error closing kiwiclient connection: {e}")
+
+        # Handle fallback WebSocket mode
+        if hasattr(self, 'ws') and self.ws:
             try:
                 self.ws.close()
             except Exception as e:
-                logger.warning(f"Error closing connection: {e}")
+                logger.warning(f"Error closing WebSocket connection: {e}")
+            self.ws = None
 
         self.connected = False
-        self.ws = None
 
         # Update usage tracking
         if self.connection_start:
@@ -225,14 +343,6 @@ class KiwiClient:
 
         logger.info(f"Starting {duration_seconds}s recording at {self.frequency_khz} kHz")
 
-        # Send start command
-        self.ws.send_json({
-            "type": "start",
-            "duration": duration_seconds,
-        })
-
-        # Collect samples
-        samples = []
         metadata = {
             "start_time": datetime.utcnow(),
             "frequency_khz": self.frequency_khz,
@@ -241,41 +351,102 @@ class KiwiClient:
             "mode": self.mode,
         }
 
-        start_time = asyncio.get_event_loop().time()
-        timeout = duration_seconds + 10  # Extra time for buffering
+        # Handle kiwiclient mode vs fallback WebSocket mode
+        if KIWICLIENT_AVAILABLE and hasattr(self, 'kiwi_stream'):
+            # Kiwiclient mode - collect from queue
+            logger.info(f"Collecting IQ samples from queue for {duration_seconds}s...")
+            samples = []
+            start_time = time.time()
+            target_samples = duration_seconds * self.sample_rate
+            last_log_time = start_time
 
-        while asyncio.get_event_loop().time() - start_time < timeout:
-            try:
-                # Receive IQ data chunk
-                data = self.ws.recv()
+            while time.time() - start_time < duration_seconds + 10:
+                elapsed = time.time() - start_time
 
-                if isinstance(data, bytes):
-                    # Parse IQ samples (assuming 16-bit signed integers)
-                    iq_chunk = np.frombuffer(data, dtype=np.int16)
-                    # Reshape to I/Q pairs
-                    iq_chunk = iq_chunk.reshape(-1, 2)
-                    samples.append(iq_chunk)
+                try:
+                    # Get samples from queue (populated by background thread)
+                    # Use a short timeout so we can log progress
+                    iq_chunk = await asyncio.to_thread(self.audio_queue.get, timeout=1.0)
 
-                    if callback:
-                        callback(iq_chunk)
+                    if iq_chunk is not None and len(iq_chunk) > 0:
+                        samples.append(iq_chunk)
+                        total_samples = sum(len(s) for s in samples)
 
-                    # Check if recording complete
-                    total_samples = sum(len(s) for s in samples)
-                    if total_samples >= duration_seconds * self.sample_rate:
+                        # Log progress every 30 seconds
+                        if time.time() - last_log_time > 30:
+                            logger.info(f"Recording progress: {total_samples}/{target_samples} samples ({elapsed:.0f}s/{duration_seconds}s)")
+                            last_log_time = time.time()
+
+                        if callback:
+                            callback(iq_chunk)
+
+                        # Check if recording complete
+                        if total_samples >= target_samples:
+                            logger.info(f"Target samples reached: {total_samples}/{target_samples}")
+                            break
+                    else:
+                        logger.warning(f"Received None or empty chunk from queue")
+
+                except queue.Empty:
+                    # Queue empty - this is normal if data hasn't arrived yet
+                    if elapsed < duration_seconds:
+                        continue  # Keep waiting
+                    else:
+                        # Duration elapsed, finish up
+                        logger.warning(f"Duration elapsed ({elapsed:.1f}s), stopping collection")
                         break
+                except Exception as e:
+                    logger.error(f"Error reading from queue: {e}")
+                    break
 
-            except WebSocketTimeoutException:
-                logger.warning("Timeout receiving data")
-                continue
-            except Exception as e:
-                logger.error(f"Error receiving data: {e}")
-                break
+            # Combine all samples
+            if samples:
+                iq_data = np.concatenate(samples)
+                logger.info(f"Collected {len(iq_data)} total samples from {len(samples)} chunks")
+            else:
+                iq_data = np.array([])
+                logger.warning(f"No samples collected after {time.time() - start_time:.1f}s")
 
-        # Combine all samples
-        if samples:
-            iq_data = np.vstack(samples)
         else:
-            iq_data = np.array([])
+            # Fallback WebSocket mode
+            self.ws.send_json({
+                "type": "start",
+                "duration": duration_seconds,
+            })
+
+            # Collect samples
+            samples = []
+            start_time = asyncio.get_event_loop().time()
+            timeout = duration_seconds + 10
+
+            while asyncio.get_event_loop().time() - start_time < timeout:
+                try:
+                    data = self.ws.recv()
+
+                    if isinstance(data, bytes):
+                        iq_chunk = np.frombuffer(data, dtype=np.int16)
+                        iq_chunk = iq_chunk.reshape(-1, 2)
+                        samples.append(iq_chunk)
+
+                        if callback:
+                            callback(iq_chunk)
+
+                        total_samples = sum(len(s) for s in samples)
+                        if total_samples >= duration_seconds * self.sample_rate:
+                            break
+
+                except TimeoutError:
+                    logger.warning("Timeout receiving data")
+                    continue
+                except Exception as e:
+                    logger.error(f"Error receiving data: {e}")
+                    break
+
+            # Combine all samples
+            if samples:
+                iq_data = np.vstack(samples)
+            else:
+                iq_data = np.array([])
 
         metadata["end_time"] = datetime.utcnow()
         metadata["samples_collected"] = len(iq_data)

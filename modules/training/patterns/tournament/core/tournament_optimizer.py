@@ -21,40 +21,116 @@ from .elimination_strategy import EliminationStrategy, EliminationConfig
 # print statements during module load that corrupt Rich UI
 
 
+def simple_test_worker(x: int) -> int:
+    """Simple test function to verify process pool works"""
+    import os
+    return x * 2 + os.getpid()
+
+
 def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                            checkpoint_dir: str, p_cores: List[int] = None) -> Dict[str, Any]:
     """
     Standalone function to run a single trial in a subprocess.
     This must be a module-level function to be picklable.
     """
-    import psutil
+    # Immediate debug output - use simple file operations to ensure it works
     import os
-    import numpy as np
-    from pathlib import Path
-    import pickle
     import sys
+    import traceback
+
+    # Create debug file with absolute path and simple operations
+    try:
+        log_dir = os.path.join(os.path.dirname(checkpoint_dir), 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        debug_file_path = os.path.join(log_dir, f'debug_trial_{trial_id}.txt')
+
+        # Write immediately with basic file operations
+        with open(debug_file_path, 'w') as f:
+            f.write(f"=== WORKER START ===\n")
+            f.write(f"Trial ID: {trial_id}\n")
+            f.write(f"Process ID: {os.getpid()}\n")
+            f.write(f"Working Directory: {os.getcwd()}\n")
+            f.write(f"Python Path: {sys.path}\n")
+            f.write(f"Checkpoint dir: {checkpoint_dir}\n")
+            f.write(f"Iterations: {iterations}\n")
+            f.write(f"Seed: {seed}\n")
+            f.write(f"P-cores: {p_cores}\n\n")
+            f.flush()
+    except Exception as e:
+        # If we can't even write debug, return error immediately
+        return {
+            'trial_id': trial_id,
+            'iterations_run': 0,
+            'best_score': 0.0,
+            'final_iteration': 0,
+            'convergence_rate': 0.001,
+            'score_history': [],
+            'error': f"Failed to create debug log: {str(e)}"
+        }
+
+    # Now continue with normal imports
+    try:
+        with open(debug_file_path, 'a') as f:
+            f.write("Importing psutil...\n")
+            f.flush()
+        import psutil
+
+        with open(debug_file_path, 'a') as f:
+            f.write("Importing numpy...\n")
+            f.flush()
+        import numpy as np
+
+        with open(debug_file_path, 'a') as f:
+            f.write("Importing pathlib...\n")
+            f.flush()
+        from pathlib import Path
+
+        with open(debug_file_path, 'a') as f:
+            f.write("Importing pickle...\n")
+            f.flush()
+        import pickle
+
+        with open(debug_file_path, 'a') as f:
+            f.write("All standard imports successful\n\n")
+            f.flush()
+    except Exception as e:
+        with open(debug_file_path, 'a') as f:
+            f.write(f"Import error: {str(e)}\n")
+            f.write(traceback.format_exc())
+            f.flush()
+        return {
+            'trial_id': trial_id,
+            'iterations_run': 0,
+            'best_score': 0.0,
+            'final_iteration': 0,
+            'convergence_rate': 0.001,
+            'score_history': [],
+            'error': f"Import failed: {str(e)}"
+        }
 
     try:
         # Add path to patterns directory for imports
-        # tournament_optimizer.py is in .../patterns/tournament/core/
-        # We need to import from .../patterns/
         patterns_dir = Path(__file__).parent.parent.parent  # Up to patterns/
+
+        with open(debug_file_path, 'a') as f:
+            f.write(f"Patterns dir: {patterns_dir}\n")
+            f.write(f"sys.path before: {sys.path}\n")
+            f.flush()
+
         if str(patterns_dir) not in sys.path:
             sys.path.insert(0, str(patterns_dir))
 
-        # Suppress output only during import
-        import io
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
-        sys.stdout = io.StringIO()
-        sys.stderr = io.StringIO()
+        with open(debug_file_path, 'a') as f:
+            f.write(f"sys.path after: {sys.path}\n")
+            f.write("About to import zadoff_chu...\n")
+            f.flush()
 
-        try:
-            from zadoff_chu import generate_zadoff_chu_pattern
-        finally:
-            # Restore stdout/stderr after import
-            sys.stdout = original_stdout
-            sys.stderr = original_stderr
+        # Import pattern generation
+        from zadoff_chu import generate_zadoff_chu_pattern
+
+        with open(debug_file_path, 'a') as f:
+            f.write("Successfully imported zadoff_chu\n")
+            f.flush()
 
         # This runs in a separate process
         # Set CPU affinity if on Windows/Linux
@@ -69,9 +145,17 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         # Set random seed for reproducibility
         np.random.seed(seed)
 
+        with open(debug_file_path, 'a') as f:
+            f.write(f"Set random seed to {seed}\n")
+            f.flush()
+
         # Create checkpoint directory for this trial
         trial_checkpoint_dir = Path(checkpoint_dir) / f"trial_{trial_id}"
         trial_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(debug_file_path, 'a') as f:
+            f.write(f"Created checkpoint dir: {trial_checkpoint_dir}\n")
+            f.flush()
 
         # Check for existing checkpoint
         checkpoint_file = trial_checkpoint_dir / "latest_checkpoint.pkl"
@@ -84,20 +168,33 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 score_history = checkpoint['score_history']
                 temperature = checkpoint.get('temperature', 1.0)
         else:
+            with open(debug_file_path, 'a') as f:
+                f.write("No checkpoint found, generating initial patterns\n")
+                f.flush()
+
             # Generate initial 128 frequency patterns (2-FSK binary sequences)
             pattern_set = []
             pattern_length = 50  # 50 symbols at 200 symbols/second = 250ms
-    
+
+            with open(debug_file_path, 'a') as f:
+                f.write(f"Generating {128} patterns of length {pattern_length}\n")
+                f.flush()
+
             # Use Zadoff-Chu sequences as base for first 31 patterns
             for i in range(31):
                 freq_seq = generate_zadoff_chu_pattern(u=i, N=pattern_length)
                 pattern_set.append(freq_seq)
-    
+
             # Random patterns for the rest
             for i in range(31, 128):
                 freq_seq = np.random.randint(0, 2, pattern_length, dtype=np.uint8)
                 pattern_set.append(freq_seq)
-    
+
+            with open(debug_file_path, 'a') as f:
+                f.write(f"Generated {len(pattern_set)} patterns\n")
+                f.write("Calculating initial correlations...\n")
+                f.flush()
+
             # Calculate initial score (max cross-correlation)
             initial_scores = []
             for i in range(len(pattern_set)):
@@ -107,18 +204,23 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                                        pattern_set[j].astype(np.float32) - 0.5,
                                        mode='valid')[0]
                     initial_scores.append(20 * np.log10(abs(corr) / pattern_length + 1e-10))
-    
+
                     # Flip correlation (FSK inversion: 0↔1)
                     freq_inv = 1 - pattern_set[j]
                     corr_flip = np.correlate(pattern_set[i].astype(np.float32) - 0.5,
                                             freq_inv.astype(np.float32) - 0.5,
                                             mode='valid')[0]
                     initial_scores.append(20 * np.log10(abs(corr_flip) / pattern_length + 1e-10))
-    
+
             best_score = max(initial_scores) if initial_scores else -30.0
             score_history = [best_score]
             start_iteration = 0
             temperature = 1.0
+
+            with open(debug_file_path, 'a') as f:
+                f.write(f"Initial best score: {best_score:.2f} dB\n")
+                f.write(f"Starting optimization from iteration {start_iteration}\n")
+                f.flush()
     
         # Simulated annealing parameters
         cooling_rate = 0.999
@@ -127,7 +229,13 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         # Run optimization iterations
         iterations_per_update = max(100, iterations // 100)  # Update at most 100 times
         current_iteration = start_iteration
-    
+
+        with open(debug_file_path, 'a') as f:
+            f.write(f"Starting optimization loop:\n")
+            f.write(f"  Iterations per update: {iterations_per_update}\n")
+            f.write(f"  Target iterations: {iterations}\n")
+            f.flush()
+
         while current_iteration < iterations:
             batch_iterations = min(iterations_per_update, iterations - current_iteration)
     
@@ -187,7 +295,13 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
     
             # Update score history
             score_history.append(best_score)
-    
+
+            # Log progress periodically
+            if current_iteration % 1000 == 0:
+                with open(debug_file_path, 'a') as f:
+                    f.write(f"Progress: iteration {current_iteration}/{iterations}, best_score={best_score:.2f} dB\n")
+                    f.flush()
+
             # Save checkpoint periodically
             if current_iteration % 10000 == 0 or current_iteration >= iterations:
                 checkpoint = {
@@ -222,7 +336,15 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         final_patterns_file = trial_checkpoint_dir / f"final_patterns_{current_iteration}.pkl"
         with open(final_patterns_file, 'wb') as f:
             pickle.dump(pattern_set, f)
-    
+
+        with open(debug_file_path, 'a') as f:
+            f.write(f"\n=== WORKER COMPLETE ===\n")
+            f.write(f"Final iteration: {current_iteration}\n")
+            f.write(f"Final best score: {best_score:.2f} dB\n")
+            f.write(f"Convergence rate: {convergence_rate:.6f}\n")
+            f.write(f"Patterns saved to: {final_patterns_file}\n")
+            f.flush()
+
         # Return results
         return {
             'trial_id': trial_id,
@@ -385,17 +507,20 @@ class DynamicTournamentOptimizer:
         else:  # auto mode
             # Try process first, fall back to thread, then sequential
             try:
-                # Test if ProcessPoolExecutor works
+                # Test if ProcessPoolExecutor works with our simple test function
                 with ProcessPoolExecutor(max_workers=1) as test_executor:
-                    test_future = test_executor.submit(lambda: 42)
-                    test_future.result(timeout=2)
-                executor_class = ProcessPoolExecutor
-                self.log_callback("Using ProcessPoolExecutor for parallel trials")
+                    test_future = test_executor.submit(simple_test_worker, 21)
+                    test_result = test_future.result(timeout=2)
+                    if test_result > 42:  # Should be 42 + pid
+                        executor_class = ProcessPoolExecutor
+                        self.log_callback("Using ProcessPoolExecutor for parallel trials")
+                    else:
+                        raise Exception("Test worker failed")
             except Exception as e:
                 try:
                     # Fall back to ThreadPoolExecutor
                     executor_class = ThreadPoolExecutor
-                    self.log_callback(f"Process pool failed ({type(e).__name__}), using ThreadPoolExecutor")
+                    self.log_callback(f"Process pool failed ({type(e).__name__}: {str(e)}), using ThreadPoolExecutor")
                 except:
                     executor_class = None
                     self.log_callback("Both process and thread pools failed, using sequential execution")
@@ -403,6 +528,18 @@ class DynamicTournamentOptimizer:
         # Run trials with selected executor
         if executor_class:
             try:
+                # Create master debug log to track submissions
+                master_debug = self.checkpoint_dir.parent / 'logs' / 'master_debug.txt'
+                master_debug.parent.mkdir(exist_ok=True, parents=True)
+
+                with open(master_debug, 'a') as f:
+                    f.write(f"\n=== BATCH RUN START ===\n")
+                    f.write(f"Time: {datetime.now()}\n")
+                    f.write(f"Executor: {executor_class.__name__}\n")
+                    f.write(f"Batch size: {batch_size}\n")
+                    f.write(f"Active trials: {self.active_trials}\n")
+                    f.flush()
+
                 with executor_class(max_workers=batch_size) as executor:
                     futures = {}
 
@@ -411,26 +548,57 @@ class DynamicTournamentOptimizer:
 
                         # Check if trial has budget left
                         if trial.iterations >= trial.compute_budget + trial.bonus_budget:
+                            with open(master_debug, 'a') as f:
+                                f.write(f"Skipping trial {trial_id} - budget exhausted\n")
+                                f.flush()
                             continue
 
                         # Submit trial for execution
+                        iterations_to_run = min(self.eval_interval, trial.compute_budget + trial.bonus_budget - trial.iterations)
+
+                        with open(master_debug, 'a') as f:
+                            f.write(f"Submitting trial {trial_id}:\n")
+                            f.write(f"  Iterations to run: {iterations_to_run}\n")
+                            f.write(f"  Seed: {trial.seed}\n")
+                            f.write(f"  P-cores: {trial.p_cores}\n")
+                            f.flush()
+
                         future = executor.submit(
                             run_single_trial_worker,
                             trial_id,
-                            min(self.eval_interval, trial.compute_budget + trial.bonus_budget - trial.iterations),
+                            iterations_to_run,
                             trial.seed,
                             str(self.checkpoint_dir),
                             trial.p_cores
                         )
                         futures[future] = trial_id
 
+                        with open(master_debug, 'a') as f:
+                            f.write(f"  Future created for trial {trial_id}\n")
+                            f.flush()
+
                     # Collect results
+                    with open(master_debug, 'a') as f:
+                        f.write(f"Waiting for {len(futures)} futures to complete...\n")
+                        f.flush()
+
                     for future in as_completed(futures):
                         trial_id = futures[future]
+                        with open(master_debug, 'a') as f:
+                            f.write(f"Future completed for trial {trial_id}\n")
+                            f.flush()
                         try:
                             result = future.result(timeout=300)  # 5 minute timeout
+                            with open(master_debug, 'a') as f:
+                                f.write(f"Got result for trial {trial_id}: {result.get('iterations_run', 0)} iterations\n")
+                                f.flush()
                             self._process_trial_result(trial_id, result)
                         except Exception as e:
+                            with open(master_debug, 'a') as f:
+                                f.write(f"ERROR in trial {trial_id}: {e}\n")
+                                import traceback
+                                f.write(traceback.format_exc())
+                                f.flush()
                             self.log_callback(f"Error in trial {trial_id}: {e}")
 
             except Exception as e:

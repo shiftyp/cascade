@@ -107,7 +107,7 @@ class WebSDRClient:
 
             self.websocket = await websockets.connect(
                 ws_url,
-                extra_headers={"User-Agent": "CASCADE-Collector/1.0"},
+                additional_headers={"User-Agent": "CASCADE-Collector/1.0"},
                 ping_interval=30,
                 ping_timeout=10
             )

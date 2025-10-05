@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 def get_db_config():
     """Get database configuration from environment or defaults"""
     return {
-        'host': os.getenv('CASCADE_DB_HOST', 'localhost'),
+        'host': os.getenv('CASCADE_DB_HOST', os.getenv('DB_HOST', 'localhost')),
         'port': int(os.getenv('CASCADE_DB_PORT', '5432')),
         'database': os.getenv('CASCADE_DB_NAME', 'cascade_data'),
         'user': os.getenv('CASCADE_DB_USER', 'postgres'),

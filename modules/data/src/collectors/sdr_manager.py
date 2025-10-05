@@ -130,11 +130,12 @@ class SDRManager:
         if scored_sdrs:
             best = scored_sdrs[0]
             logger.info(
-                f"Best SDR for {propagation_type}: {best.sdr.url} "
-                f"(score: {best.score:.2f})"
+                f"🌟 Best SDR for {propagation_type}: {best.sdr.url} "
+                f"(score: {best.score:.2f}) - returning to caller"
             )
             return best.sdr
 
+        logger.warning(f"⚠️  No SDRs available for {propagation_type}")
         return None
 
     def _calculate_propagation_score(
@@ -264,27 +265,49 @@ class SDRManager:
 
     async def update_usage(
         self,
-        sdr: KiwiSDRSource,
+        sdr,  # Union[KiwiSDRSource, WebSDRSource]
         minutes: float,
     ):
-        """Update SDR usage tracking (FR-008).
+        """Update SDR usage tracking (FR-008, FR-066).
 
         Args:
-            sdr: SDR to update
+            sdr: KiwiSDR or WebSDR source to update
             minutes: Usage in minutes
         """
+        from ..models import WebSDRSource
+
         sdr.daily_usage_minutes += minutes
         sdr.total_usage_minutes += minutes
         sdr.last_connected = datetime.utcnow()
 
+        # Reset consecutive failures on successful connection (only for KiwiSDR)
+        if hasattr(sdr, 'consecutive_failures') and sdr.consecutive_failures > 0:
+            logger.info(
+                f"SDR {sdr.url} connection successful after {sdr.consecutive_failures} failures - resetting"
+            )
+            sdr.consecutive_failures = 0
+            if hasattr(sdr, 'potentially_blacklisted'):
+                sdr.potentially_blacklisted = False
+
         self.db.commit()
 
-        logger.info(
-            f"Updated {sdr.url} usage: {sdr.daily_usage_minutes:.1f}/{config.KIWI_DAILY_LIMIT_MINUTES} min today"
-        )
+        # Different limit reporting based on type
+        if isinstance(sdr, WebSDRSource):
+            if sdr.daily_limit_minutes:
+                logger.info(
+                    f"Updated WebSDR {sdr.url} usage: {sdr.daily_usage_minutes:.1f}/{sdr.daily_limit_minutes} min today"
+                )
+            else:
+                logger.info(
+                    f"Updated WebSDR {sdr.url} usage: {sdr.daily_usage_minutes:.1f} min (unlimited)"
+                )
+        else:
+            logger.info(
+                f"Updated KiwiSDR {sdr.url} usage: {sdr.daily_usage_minutes:.1f}/{config.KIWI_DAILY_LIMIT_MINUTES} min today"
+            )
 
         # Remove from active if limit reached
-        if sdr.remaining_daily_minutes <= 0:
+        if hasattr(sdr, 'remaining_daily_minutes') and sdr.remaining_daily_minutes <= 0:
             logger.warning(f"SDR {sdr.url} reached daily limit")
             if sdr.url in self.active_sdrs:
                 del self.active_sdrs[sdr.url]
@@ -294,18 +317,46 @@ class SDRManager:
         sdr: KiwiSDRSource,
         error: Exception,
     ):
-        """Handle SDR connection failure.
+        """Handle SDR connection failure with error categorization and blacklist detection.
 
         Args:
             sdr: Failed SDR
             error: Exception that occurred
         """
+        # Categorize the error type
+        error_str = str(error).lower()
+        if "refused" in error_str or "econnrefused" in error_str:
+            failure_type = "refused"
+        elif "timeout" in error_str or "timed out" in error_str:
+            failure_type = "timeout"
+        elif "auth" in error_str or "permission" in error_str:
+            failure_type = "auth_failed"
+        elif "blacklist" in error_str or "banned" in error_str:
+            failure_type = "blacklist"
+        else:
+            failure_type = "unknown"
+
+        # Update failure tracking
         sdr.failure_count += 1
+        sdr.consecutive_failures += 1
+        sdr.last_failure_type = failure_type
+        sdr.last_failure_time = datetime.utcnow()
         sdr.reliability_score = max(0, (sdr.reliability_score or 1.0) - 0.1)
+
+        # Blacklist detection: 10+ consecutive "refused" errors
+        if failure_type == "refused" and sdr.consecutive_failures >= 10:
+            sdr.potentially_blacklisted = True
+            logger.warning(
+                f"⚠️  SDR {sdr.url} may have blacklisted us: "
+                f"{sdr.consecutive_failures} consecutive connection refused errors"
+            )
 
         self.db.commit()
 
-        logger.error(f"SDR {sdr.url} failed: {error} (failure #{sdr.failure_count})")
+        logger.error(
+            f"SDR {sdr.url} failed: {error} "
+            f"(total: {sdr.failure_count}, consecutive: {sdr.consecutive_failures}, type: {failure_type})"
+        )
 
         # Mark as inactive if too many failures
         if sdr.failure_count >= 5:
@@ -316,6 +367,24 @@ class SDRManager:
         self.failed_sdrs.append(sdr)
         if sdr.url in self.active_sdrs:
             del self.active_sdrs[sdr.url]
+
+    async def get_potentially_blacklisted(self) -> List[KiwiSDRSource]:
+        """Get SDRs that may have blacklisted us.
+
+        Returns:
+            List of SDRs flagged as potentially blacklisted
+        """
+        blacklisted = self.db.query(KiwiSDRSource).filter(
+            KiwiSDRSource.potentially_blacklisted == True
+        ).all()
+
+        if blacklisted:
+            logger.warning(
+                f"Found {len(blacklisted)} potentially blacklisted SDRs: "
+                f"{', '.join(sdr.url for sdr in blacklisted)}"
+            )
+
+        return blacklisted
 
     async def get_all_available(self) -> List[KiwiSDRSource]:
         """Get all currently available SDRs.

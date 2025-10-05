@@ -7,16 +7,18 @@ import asyncio
 import logging
 import json
 import os
+import signal
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 import redis.asyncio as redis
 
 from ..collectors.sdr_manager import SDRManager
 from ..collectors.recorder import Recorder
+from ..collectors.queue_manager import QueueManager
 from ..collectors.geographic_quotas import GeographicQuotaManager, LatitudeBand
 from ..collectors.southern_priority import SouthernHemispherePriorityCollector
 from ..collectors.hybrid_sdr_selector import HybridSDRSelector
-from ..collectors.intelligent_qa_collector import IntelligentQACollector
 from ..models import SessionLocal, CollectionSchedule, SpaceWeatherData
 from ..config import config
 from ..config.frequencies import BANDS, BAND_CONFIGS
@@ -35,8 +37,13 @@ class CollectionScheduler:
         self.sdr_manager = SDRManager(self.db)
         self.recorder = Recorder(sdr_manager=self.sdr_manager)  # Pass sdr_manager for usage tracking!
         self.redis_client: Optional[redis.Redis] = None
+        self.queue_manager: Optional[QueueManager] = None
         self.running = False
         self.tasks: List[asyncio.Task] = []
+
+        # Register signal handlers for graceful shutdown
+        signal.signal(signal.SIGTERM, self._handle_signal)
+        signal.signal(signal.SIGINT, self._handle_signal)
 
         # Collection parameters (FR-016, FR-018) - Default from env, but dynamically adjustable
         # Start conservative, scale up as testing proves stability
@@ -61,13 +68,12 @@ class CollectionScheduler:
         self.southern_collector = SouthernHemispherePriorityCollector()
         self.hybrid_selector = HybridSDRSelector()
 
-        # Intelligent QA sampling (progressive 3% → 12% over 18 months)
-        self.qa_collector = IntelligentQACollector()
-        self.collection_start_date = datetime.utcnow()  # Track when collection started
-
         # QA reporting (FR-037)
         self.qa_reporter = QAReporter()
         self.last_qa_report_date = None
+
+        # KiwiSDR source sync tracking
+        self.last_kiwisdr_sync = None
 
         # Diversity-aware scheduling parameters (T088a-d)
         self.scarce_region_reserved_slots = 0.2  # 20% reserved for underrepresented
@@ -93,8 +99,18 @@ class CollectionScheduler:
         }
         self.last_alert_time = {}  # Rate limiting for alerts
 
+    def _handle_signal(self, signum, frame):
+        """Handle shutdown signals gracefully."""
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        self.running = False
+
     async def initialize(self):
         """Initialize scheduler connections."""
+        # Initialize Tigris buckets first
+        from ..storage.tigris_init import initialize_tigris_buckets
+        if not initialize_tigris_buckets():
+            logger.warning("Tigris bucket initialization failed - uploads may not work")
+
         try:
             # Connect to Redis for distributed coordination
             self.redis_client = redis.from_url(
@@ -104,14 +120,21 @@ class CollectionScheduler:
             )
             await self.redis_client.ping()
             logger.info("Connected to Redis")
+
+            # Initialize queue manager for job distribution
+            self.queue_manager = QueueManager(config.REDIS_URL)
+            await self.queue_manager.connect()
+            logger.info("Queue manager initialized")
         except Exception as e:
             logger.warning(f"Redis not available: {e}")
             self.redis_client = None
+            self.queue_manager = None
 
     async def start(self):
         """Start the scheduler."""
         await self.initialize()
         self.running = True
+        self.start_time = datetime.utcnow()
 
         logger.info("Starting collection scheduler")
 
@@ -126,6 +149,7 @@ class CollectionScheduler:
             asyncio.create_task(self._diversity_hour_loop()),  # T088b: Daily diversity hour
             asyncio.create_task(self._dynamic_config_updater()),  # Live config updates without restart
             asyncio.create_task(self._daily_qa_report_loop()),  # FR-037: Daily QA reports
+            asyncio.create_task(self._kiwisdr_sync_loop()),  # Daily KiwiSDR source sync
         ]
 
         # Wait for tasks
@@ -165,8 +189,52 @@ class CollectionScheduler:
                 await asyncio.sleep(60)  # Check every minute
 
             except Exception as e:
-                logger.error(f"Error in continuous collection: {e}")
+                error_msg = str(e)
+                if "does not exist" in error_msg or "UndefinedTable" in error_msg:
+                    logger.error(f"Database table missing in continuous collection: {e}")
+                    logger.info("Attempting to create missing tables...")
+                    try:
+                        # Try to create tables
+                        from ..models import Base, engine
+                        Base.metadata.create_all(bind=engine)
+                        logger.info("✅ Database tables created successfully")
+                    except Exception as create_error:
+                        logger.error(f"❌ Failed to create tables: {create_error}")
+                else:
+                    logger.error(f"Error in continuous collection: {e}")
+                
+                try:
+                    self.db.rollback()
+                except Exception:
+                    pass  # Rollback might fail if connection is broken
                 await asyncio.sleep(30)
+
+    async def _get_locked_sdrs(self) -> set:
+        """Get list of currently locked SDR URLs from Redis.
+
+        Returns:
+            Set of locked SDR URLs
+        """
+        if not self.queue_manager:
+            return set()
+
+        try:
+            # Get all lock keys from Redis
+            lock_pattern = "lock:sdr:*"
+            lock_keys = await self.queue_manager.client.keys(lock_pattern)
+
+            # Extract SDR URLs from lock keys
+            locked_urls = set()
+            for key in lock_keys:
+                # Key format: "lock:sdr:http://example.com:8073"
+                sdr_url = key.replace("lock:sdr:", "")
+                locked_urls.add(sdr_url)
+
+            return locked_urls
+
+        except Exception as e:
+            logger.error(f"Error getting locked SDRs: {e}")
+            return set()
 
     async def _start_collection_sessions(self, count: int):
         """Start new collection sessions.
@@ -176,12 +244,46 @@ class CollectionScheduler:
         """
         logger.info(f"Starting {count} new collection sessions")
 
-        # Get available SDRs
-        sdrs = await self.sdr_manager.get_concurrent_sdrs(count)
+        # Get optimal SDRs using hybrid selector for each band
+        logger.info(f"🔍 Selecting {count} optimal SDRs across bands")
+        sdrs = []
+        used_sdr_urls = set()  # Track already-selected SDRs
+
+        # Get currently locked SDRs from Redis to avoid scheduling conflicts
+        locked_sdrs = await self._get_locked_sdrs()
+        logger.info(f"🔒 Found {len(locked_sdrs)} currently locked SDRs")
+
+        bands_to_monitor = BANDS[:count] if count <= len(BANDS) else BANDS * (count // len(BANDS) + 1)
+
+        for i in range(count):
+            band = bands_to_monitor[i % len(bands_to_monitor)]
+            frequency_khz = BAND_CONFIGS[band].center_khz
+
+            logger.debug(f"  🔎 Selecting SDR for {band} ({frequency_khz} kHz)")
+
+            # Select SDR, excluding already-selected AND currently locked SDRs
+            exclude_list = list(used_sdr_urls.union(locked_sdrs))
+            sdr_candidate = self.hybrid_selector.select_optimal_sdr(
+                frequency_khz=frequency_khz,
+                expected_duration_minutes=5,
+                band=band,
+                require_gps=True,
+                exclude_urls=exclude_list
+            )
+
+            if sdr_candidate:
+                logger.debug(f"  ✅ Selected {sdr_candidate.url} for {band}")
+                sdrs.append(sdr_candidate)
+                used_sdr_urls.add(sdr_candidate.url)
+            else:
+                logger.debug(f"  ⚠️  No available SDR for {band} (excluded: {len(used_sdr_urls)})")
 
         if not sdrs:
-            logger.warning("No available SDRs for new sessions")
+            logger.warning("⚠️  No available SDRs for new sessions, sleeping 30s")
+            await asyncio.sleep(30)
             return
+
+        logger.info(f"✅ Selected {len(sdrs)} unique SDRs for collection (target: {count})")
 
         # Distribute across bands
         band_index = 0
@@ -200,35 +302,39 @@ class CollectionScheduler:
                 continue
 
             try:
+                logger.info(f"🎯 Assigning {sdr.url} to band {band} ({config.center_khz} kHz)")
+
                 # Queue collection job
-                if self.redis_client:
+                if self.queue_manager:
                     # Distributed mode - push to queue
                     job = {
                         "sdr_url": sdr.url,
                         "frequency_khz": config.center_khz,
                         "band": band,
-                        "duration_seconds": 300,  # 5 minutes
+                        "duration_seconds": 360,  # 6 minutes
                         "timestamp": datetime.utcnow().isoformat(),
                     }
-                    await self.redis_client.lpush(
-                        "collection_queue",
-                        json.dumps(job),
+                    logger.info(f"📤 Pushing job to Redis queue: {sdr.url} on {band}")
+                    await self.queue_manager.push_job(
+                        self.queue_manager.COLLECTION_QUEUE,
+                        job,
                     )
-                    logger.info(f"Queued job for {sdr.url} on {band}")
+                    logger.info(f"✅ Queued job for {sdr.url} on {band} at {config.center_khz} kHz")
                 else:
                     # Local mode - start directly
+                    logger.info(f"🎬 Starting recording directly (local mode): {sdr.url} on {band}")
                     session_id = await self.recorder.start_recording(
                         kiwisdr_url=sdr.url,
                         frequency_khz=config.center_khz,
-                        duration_seconds=300,
+                        duration_seconds=360,
                         band=band,
                     )
-                    logger.info(f"Started session {session_id} on {band}")
+                    logger.info(f"✅ Started session {session_id} on {band}")
 
                 band_index += 1
 
             except Exception as e:
-                logger.error(f"Failed to start session on {sdr.url}: {e}")
+                logger.error(f"❌ Failed to start session on {sdr.url}: {e}", exc_info=True)
                 await self.sdr_manager.handle_sdr_failure(sdr, e)
 
     async def _event_monitoring_loop(self):
@@ -332,19 +438,16 @@ class CollectionScheduler:
         gray_line_sdrs = []
         current_time = datetime.utcnow()
 
-        # Get all available SDRs
-        sdrs = await self.sdr_manager.get_all_available()
+        # Get best SDR for gray-line ONCE, not in a loop!
+        best_sdr = await self.sdr_manager.get_best_for_propagation(
+            target_time=current_time,
+            propagation_type='gray_line',
+            frequency_mhz=14.0,  # 20m band
+        )
 
-        for sdr in sdrs:
-            if sdr.latitude and sdr.longitude:
-                # Check if near terminator
-                best_sdr = await self.sdr_manager.get_best_for_propagation(
-                    target_time=current_time,
-                    propagation_type='gray_line',
-                    frequency_mhz=14.0,  # 20m band
-                )
-                if best_sdr and best_sdr.url == sdr.url:
-                    gray_line_sdrs.append(sdr.url)
+        if best_sdr:
+            gray_line_sdrs.append(best_sdr.url)
+            logger.info(f"Gray-line opportunity: {best_sdr.url}")
 
         return gray_line_sdrs
 
@@ -381,12 +484,32 @@ class CollectionScheduler:
                 await asyncio.sleep(60)  # Check every minute
 
             except Exception as e:
-                logger.error(f"Error in schedule checker: {e}")
+                error_msg = str(e)
+                if "does not exist" in error_msg or "UndefinedTable" in error_msg:
+                    logger.error(f"Database table missing in schedule checker: {e}")
+                    logger.info("Attempting to create missing tables...")
+                    try:
+                        # Try to create tables
+                        from ..models import Base, engine
+                        Base.metadata.create_all(bind=engine)
+                        logger.info("✅ Database tables created successfully")
+                    except Exception as create_error:
+                        logger.error(f"❌ Failed to create tables: {create_error}")
+                else:
+                    logger.error(f"Error in schedule checker: {e}")
+                
+                try:
+                    self.db.rollback()
+                except Exception:
+                    pass  # Rollback might fail if connection is broken
                 await asyncio.sleep(30)
 
     async def _health_monitor_loop(self):
         """Monitor worker health and send operator alerts (FR-043, FR-034)."""
         consecutive_failures = 0
+
+        # Write scheduler health status for external monitoring
+        await self._write_scheduler_health()
 
         while self.running:
             try:
@@ -446,11 +569,40 @@ class CollectionScheduler:
                         }),
                     )
 
+                # Update scheduler health status
+                await self._write_scheduler_health()
+
                 await asyncio.sleep(30)  # Check every 30 seconds
 
             except Exception as e:
                 logger.error(f"Error in health monitor: {e}")
                 await asyncio.sleep(30)
+
+    async def _write_scheduler_health(self):
+        """Write scheduler health status to file for external monitoring."""
+        try:
+            health_file = Path("/tmp/scheduler_health.json")
+            health_data = {
+                "status": "healthy" if self.running else "stopped",
+                "timestamp": datetime.utcnow().isoformat(),
+                "sdr_target": self.current_sdr_target,
+                "baseline_sdrs": self.baseline_sdr_count,
+                "max_sdrs": self.max_sdr_count,
+                "active_sessions": len(self.recorder.get_active_sessions()),
+                "uptime_seconds": (datetime.utcnow() - self.start_time).total_seconds() if hasattr(self, 'start_time') else 0
+            }
+
+            health_file.write_text(json.dumps(health_data))
+
+            # Also write to Redis if available
+            if self.redis_client:
+                await self.redis_client.setex(
+                    "scheduler:health",
+                    60,  # Expire after 60 seconds
+                    json.dumps(health_data)
+                )
+        except Exception as e:
+            logger.warning(f"Failed to write health status: {e}")
 
     async def _aggressive_event_monitor(self):
         """Aggressive event monitoring for 18-month collection window (FR-055, FR-059)."""
@@ -937,6 +1089,92 @@ Full report saved to: {report_path}
                 logger.error(f"Error updating dynamic config: {e}")
                 await asyncio.sleep(60)
 
+    async def _kiwisdr_sync_loop(self):
+        """Sync KiwiSDR sources from public directory daily.
+
+        Runs at 02:00 UTC daily to update the local kiwisdr_sources database
+        with the latest receivers from kiwisdr.com/public/.
+        """
+        while self.running:
+            try:
+                now = datetime.utcnow()
+
+                # Run sync at 02:00 UTC (low traffic time)
+                if now.hour == 2 and (
+                    self.last_kiwisdr_sync is None or
+                    (now - self.last_kiwisdr_sync).days >= 1
+                ):
+                    logger.info("Starting KiwiSDR source sync from public directory")
+
+                    try:
+                        # Import sync functionality
+                        import sys
+                        from pathlib import Path
+                        scripts_path = Path(__file__).parent.parent.parent / "scripts"
+                        sys.path.insert(0, str(scripts_path))
+
+                        from sync_kiwisdr_sources import fetch_kiwisdr_list, sync_to_database
+
+                        # Fetch current list
+                        receivers = await asyncio.to_thread(fetch_kiwisdr_list)
+
+                        if receivers:
+                            # Sync to database
+                            await asyncio.to_thread(sync_to_database, receivers, False)
+
+                            logger.info(
+                                f"KiwiSDR sync complete: {len(receivers)} receivers processed"
+                            )
+
+                            # Send notification if configured
+                            if self.notifier:
+                                summary = f"""KiwiSDR Source Sync Complete
+
+Timestamp: {now.isoformat()}Z
+Receivers Processed: {len(receivers)}
+
+The local KiwiSDR source database has been updated with the latest
+receivers from the public directory.
+"""
+                                self.notifier.send_notification(
+                                    subject="[CASCADE] KiwiSDR Source Sync Complete",
+                                    body=summary,
+                                    priority="low"
+                                )
+
+                        else:
+                            logger.warning("No KiwiSDR receivers found during sync")
+
+                            # Alert on sync failure
+                            if self.notifier:
+                                self.notifier.send_notification(
+                                    subject="[CASCADE] Warning: KiwiSDR Sync Found No Receivers",
+                                    body=f"The KiwiSDR sync at {now.isoformat()}Z found no receivers. "
+                                         f"This may indicate a parsing issue or connectivity problem.",
+                                    priority="normal"
+                                )
+
+                        self.last_kiwisdr_sync = now
+
+                    except Exception as e:
+                        logger.error(f"Failed to sync KiwiSDR sources: {e}")
+
+                        # Alert on sync error
+                        if self.notifier:
+                            await self._send_operator_alert(
+                                "KiwiSDR Source Sync Failed",
+                                f"Failed to sync KiwiSDR sources from public directory: {e}\n\n"
+                                f"The scheduler will retry tomorrow at 02:00 UTC.",
+                                priority="normal"
+                            )
+
+                # Check every hour
+                await asyncio.sleep(3600)
+
+            except Exception as e:
+                logger.error(f"Error in KiwiSDR sync loop: {e}")
+                await asyncio.sleep(3600)
+
     async def _send_operator_alert(self, subject: str, body: str, priority: str = "normal"):
         """Send operator alert via Gmail (FR-034).
 
@@ -1026,5 +1264,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    from ..config.logging_config import setup_logging
+    setup_logging()
     asyncio.run(main())

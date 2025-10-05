@@ -20,7 +20,7 @@ class RecordingConfig:
     """Configuration for recording session."""
     frequency: float
     sample_rate: int = 12000
-    duration_seconds: int = 300  # 5 minutes default
+    duration_seconds: int = 360  # 6 minutes default
     output_dir: str = "/tmp/recordings"
     format: str = "wav"
     compress: bool = True

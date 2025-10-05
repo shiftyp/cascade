@@ -4,13 +4,15 @@ Implements T028e: Hybrid SDR selection algorithm (FR-067).
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 import math
+import asyncio
+import aiohttp
 
-from ..models import SessionLocal, KiwiSDRSource, WebSDRSource
+from ..models import SessionLocal, KiwiSDRSource  # , WebSDRSource  # TODO: Re-enable WebSDR
 from .geographic_quotas import GeographicQuotaManager, GridSquareClassifier
 
 logger = logging.getLogger(__name__)
@@ -47,10 +49,12 @@ class SDRCandidate:
     url: str
     institution_type: Optional[InstitutionType]
     usage_policy: UsagePolicy
-    daily_limit_minutes: int
+    grid_square: Optional[str]
+    daily_limit_minutes: float
     session_limit_minutes: int
     remaining_daily_minutes: float
     reliability_score: float
+    has_gps: bool
     geographic_score: float
     load_score: float
     relationship_score: float
@@ -82,13 +86,22 @@ class HybridSDRSelector:
         self.sdr_density_cache = {}
         self.density_cache_time = None
 
+        # Initialize empty websdr_registry for backwards compatibility
+        self.websdr_registry = []
+
+        # Registry update tracking
+        self.last_kiwisdr_sync = None
+        self.last_websdr_sync = None
+        self.sync_interval = timedelta(hours=24)  # Sync daily to reduce memory usage
+
     def select_optimal_sdr(
         self,
         frequency_khz: float,
         expected_duration_minutes: int,
         band: str,
         prefer_location: Optional[str] = None,
-        require_gps: bool = True
+        require_gps: bool = True,
+        exclude_urls: Optional[List[str]] = None,
     ) -> Optional[SDRCandidate]:
         """Select optimal SDR for given requirements (FR-067).
 
@@ -107,8 +120,9 @@ class HybridSDRSelector:
         )
 
         # Get available SDRs
-        kiwisdrs = self._get_available_kiwisdrs(frequency_khz, require_gps)
-        websdrs = self._get_available_websdrs(frequency_khz)
+        kiwisdrs = self._get_available_kiwisdrs(frequency_khz, require_gps, exclude_urls or [])
+        # TODO: Re-enable WebSDR
+        # websdrs = self._get_available_websdrs(frequency_khz)
 
         # Score all candidates
         candidates = []
@@ -121,13 +135,14 @@ class HybridSDRSelector:
             if candidate:
                 candidates.append(candidate)
 
-        # Score WebSDRs
-        for websdr in websdrs:
-            candidate = self._score_websdr(
-                websdr, expected_duration_minutes, prefer_location
-            )
-            if candidate:
-                candidates.append(candidate)
+        # TODO: Re-enable WebSDR
+        # # Score WebSDRs
+        # for websdr in websdrs:
+        #     candidate = self._score_websdr(
+        #         websdr, expected_duration_minutes, prefer_location
+        #     )
+        #     if candidate:
+        #         candidates.append(candidate)
 
         if not candidates:
             logger.warning("No suitable SDRs found")
@@ -148,36 +163,62 @@ class HybridSDRSelector:
         return best_candidate
 
     def _get_available_kiwisdrs(
-        self, frequency_khz: float, require_gps: bool
+        self, frequency_khz: float, require_gps: bool, exclude_urls: List[str] = None
     ) -> List[Dict[str, Any]]:
-        """Get available KiwiSDR receivers.
+        """Get available KiwiSDR receivers with auto-sync.
 
         Args:
             frequency_khz: Required frequency
             require_gps: GPS requirement
+            exclude_urls: URLs to exclude from selection
 
         Returns:
             List of available KiwiSDRs
         """
+        # Skip sync on first call to prevent OOM - scheduler handles it in background
+        # Only sync if it's been more than 24 hours and we're not in initial startup
+        if self.last_kiwisdr_sync is None:
+            # Set to now to prevent immediate sync - background task will handle it
+            self.last_kiwisdr_sync = datetime.now(timezone.utc)
+        elif datetime.now(timezone.utc) - self.last_kiwisdr_sync > timedelta(hours=24):
+            # Daily sync only, not during every selection
+            try:
+                self._sync_kiwisdr_registry()
+            except Exception as e:
+                logger.error(f"Background sync failed: {e}")
+
         query = self.db.query(KiwiSDRSource).filter(
             KiwiSDRSource.active == True,
             KiwiSDRSource.failure_count < 5,
-            KiwiSDRSource.frequency_min_khz <= frequency_khz,
-            KiwiSDRSource.frequency_max_khz >= frequency_khz,
+            KiwiSDRSource.min_freq_khz <= frequency_khz,
+            KiwiSDRSource.max_freq_khz >= frequency_khz,
         )
 
         if require_gps:
             query = query.filter(KiwiSDRSource.has_gps == True)
 
+        # Exclude already-selected SDRs
+        if exclude_urls:
+            query = query.filter(~KiwiSDRSource.url.in_(exclude_urls))
+
         sdrs = query.all()
 
-        # Filter by remaining daily usage
+        # Filter by remaining daily usage and update stale records
         available = []
+        stale_sdrs = []  # Track stale SDRs for async health check
+
         for sdr in sdrs:
+            # Update usage if needed
             if sdr.should_reset_usage():
                 sdr.daily_usage_minutes = 0
-                sdr.last_usage_reset = datetime.utcnow()
+                sdr.last_usage_reset = datetime.now(timezone.utc)
                 self.db.commit()
+
+            # Skip stale SDRs (not seen in 6+ hours) to avoid blocking
+            # They'll be checked asynchronously in background
+            if sdr.last_seen and sdr.last_seen < datetime.now(timezone.utc) - timedelta(hours=6):
+                stale_sdrs.append(sdr)
+                continue
 
             if sdr.remaining_daily_minutes > 5:  # At least 5 minutes remaining
                 available.append({
@@ -194,592 +235,516 @@ class HybridSDRSelector:
                     "institution_type": InstitutionType.INDIVIDUAL,
                 })
 
-        return available
-
-    def _get_available_websdrs(self, frequency_khz: float) -> List[Dict[str, Any]]:
-        """Get available WebSDR receivers from database (FR-065, FR-067).
-
-        Args:
-            frequency_khz: Required frequency
-
-        Returns:
-            List of available WebSDRs
-        """
-        # Query WebSDR database
-        websdrs = self.db.query(WebSDRSource).filter(
-            WebSDRSource.active == True,
-            WebSDRSource.failure_count < 5,
-            WebSDRSource.min_freq_khz <= frequency_khz,
-            WebSDRSource.max_freq_khz >= frequency_khz,
-        ).all()
-
-        available = []
-        for websdr in websdrs:
-            # Check daily usage if limited
-            if websdr.daily_limit_minutes:
-                if websdr.daily_usage_minutes >= websdr.daily_limit_minutes:
-                    continue  # Skip if daily limit reached
-
-            available.append({
-                "sdr_id": str(websdr.websdr_id),
-                "sdr_type": SDRType.WEBSDR,
-                "url": websdr.url,
-                "grid_square": websdr.grid_square,
-                "daily_limit_minutes": websdr.daily_limit_minutes or 999999,
-                "session_limit_minutes": websdr.session_limit_minutes or 180,
-                "remaining_daily_minutes": (websdr.daily_limit_minutes - websdr.daily_usage_minutes) if websdr.daily_limit_minutes else 999999,
-                "reliability_score": websdr.reliability_score or 0.8,
-                "has_gps": True,  # Most WebSDRs have accurate timing
-                "usage_policy": UsagePolicy.RESEARCH_AGREEMENT if websdr.has_research_agreement else UsagePolicy.PUBLIC_LIMITED,
-                "institution_type": websdr.institution_type,
-                "preferred_for_long": websdr.preferred_for_long_sessions,
-            })
-
-        # Also check hardcoded registry for backwards compatibility
-        for websdr in self.websdr_registry:
-            capabilities = websdr.get("capabilities", {})
-            policy = websdr.get("usage_policy", {})
-
-            # Check frequency support
-            min_freq = capabilities.get("frequency_min_khz", 0)
-            max_freq = capabilities.get("frequency_max_khz", 30000)
-
-            if min_freq <= frequency_khz <= max_freq:
-                available.append({
-                    "sdr_id": websdr["url"],  # Use URL as ID for WebSDRs
-                    "sdr_type": SDRType.WEBSDR,
-                    "url": websdr["url"],
-                    "grid_square": capabilities.get("grid_square", "XX00"),
-                    "daily_limit_minutes": policy.get("daily_limit_minutes", 0),
-                    "session_limit_minutes": policy.get("session_limit_minutes", 180),
-                    "remaining_daily_minutes": 999999,  # Effectively unlimited
-                    "reliability_score": 0.8,  # Assume good reliability
-                    "has_gps": capabilities.get("has_gps", True),
-                    "usage_policy": UsagePolicy.RESEARCH_AGREEMENT,
-                    "institution_type": InstitutionType.UNIVERSITY,
-                })
+        # Schedule async health checks for stale SDRs (fire and forget)
+        if stale_sdrs:
+            logger.info(f"Skipped {len(stale_sdrs)} stale SDRs (will check async)")
+            asyncio.create_task(self._check_stale_sdrs_async(stale_sdrs))
 
         return available
 
     def _score_kiwisdr(
         self,
-        kiwisdr: Dict[str, Any],
-        duration_minutes: int,
-        prefer_location: Optional[str]
+        sdr_data: Dict[str, Any],
+        expected_duration_minutes: int,
+        prefer_location: Optional[str] = None
     ) -> Optional[SDRCandidate]:
-        """Score KiwiSDR candidate with scarcity bonus (T084).
+        """Score a KiwiSDR candidate.
 
         Args:
-            kiwisdr: KiwiSDR information
-            duration_minutes: Required duration
-            prefer_location: Preferred location
+            sdr_data: KiwiSDR data dictionary
+            expected_duration_minutes: Expected session duration
+            prefer_location: Preferred grid square
 
         Returns:
-            Scored candidate or None
+            Scored SDRCandidate or None if unsuitable
         """
-        # Duration suitability
-        remaining = kiwisdr["remaining_daily_minutes"]
-        session_limit = kiwisdr["session_limit_minutes"]
+        # Check if duration fits within session limit
+        session_limit = sdr_data.get("session_limit_minutes", 90)
+        if expected_duration_minutes > session_limit:
+            return None
 
-        if duration_minutes > remaining or duration_minutes > session_limit:
-            return None  # Can't meet duration requirement
-
-        # Score duration fit (better if we use less of the available time)
-        duration_score = min(1.0, remaining / (duration_minutes * 2))
-
-        # Reliability score
-        reliability_score = kiwisdr["reliability_score"]
-
-        # Geographic score (includes quota priority boost)
-        geographic_score = self._calculate_geographic_score(
-            kiwisdr["grid_square"], prefer_location
+        # Calculate scores
+        availability_score = min(
+            1.0,
+            sdr_data.get("remaining_daily_minutes", 0) / 60.0
         )
+        reliability_score = sdr_data.get("reliability_score", 0.5)
 
-        # Load score (usage-based)
-        usage_ratio = (kiwisdr["daily_limit_minutes"] - remaining) / kiwisdr["daily_limit_minutes"]
-        load_score = 1.0 - usage_ratio
+        # Duration fit score (prefer SDRs where session fits comfortably)
+        remaining = sdr_data.get("remaining_daily_minutes", 0)
+        if remaining > 0:
+            duration_fit = min(1.0, remaining / expected_duration_minutes)
+        else:
+            duration_fit = 0.0
 
-        # Relationship score (public KiwiSDRs have no special relationship)
-        relationship_score = 0.5
+        # Location preference bonus
+        location_bonus = 0.0
+        if prefer_location and sdr_data.get("grid_square") == prefer_location:
+            location_bonus = 0.2
 
-        # Scarcity score (T084a)
-        scarcity_score = self._calculate_scarcity_score(kiwisdr["grid_square"])
+        # Calculate component scores matching dataclass
+        geographic_score = location_bonus  # 0.0 or 0.2 based on location match
+        load_score = availability_score  # How much capacity is available
+        relationship_score = duration_fit  # How well duration fits
 
-        # Calculate total score with scarcity bonus
+        # Calculate total score
         total_score = (
-            duration_score * self.weights["duration_suitability"] +
-            reliability_score * self.weights["reliability"] +
-            geographic_score * self.weights["geographic_diversity"] +
-            load_score * self.weights["load_balance"] +
-            relationship_score * self.weights["relationship_status"] +
-            scarcity_score * self.weights["scarcity_bonus"]
+            load_score * 0.3 +
+            reliability_score * 0.4 +
+            relationship_score * 0.2 +
+            geographic_score * 0.1
         )
 
         return SDRCandidate(
-            sdr_id=kiwisdr["sdr_id"],
+            sdr_id=sdr_data["sdr_id"],
             sdr_type=SDRType.KIWISDR,
-            url=kiwisdr["url"],
-            institution_type=kiwisdr["institution_type"],
-            usage_policy=kiwisdr["usage_policy"],
-            daily_limit_minutes=kiwisdr["daily_limit_minutes"],
+            url=sdr_data["url"],
+            institution_type=sdr_data.get("institution_type"),
+            usage_policy=sdr_data.get("usage_policy", UsagePolicy.PUBLIC_LIMITED),
+            grid_square=sdr_data.get("grid_square"),
+            daily_limit_minutes=sdr_data["daily_limit_minutes"],
             session_limit_minutes=session_limit,
-            remaining_daily_minutes=remaining,
+            remaining_daily_minutes=sdr_data.get("remaining_daily_minutes", 0),
             reliability_score=reliability_score,
+            has_gps=sdr_data.get("has_gps", False),
             geographic_score=geographic_score,
             load_score=load_score,
             relationship_score=relationship_score,
-            total_score=total_score,
-        )
-
-    def _score_websdr(
-        self,
-        websdr: Dict[str, Any],
-        duration_minutes: int,
-        prefer_location: Optional[str]
-    ) -> Optional[SDRCandidate]:
-        """Score WebSDR candidate with scarcity bonus (T084).
-
-        Args:
-            websdr: WebSDR information
-            duration_minutes: Required duration
-            prefer_location: Preferred location
-
-        Returns:
-            Scored candidate or None
-        """
-        session_limit = websdr["session_limit_minutes"]
-
-        if duration_minutes > session_limit:
-            return None  # Can't meet duration requirement
-
-        # Duration suitability (WebSDRs excel at longer sessions)
-        if duration_minutes > 90:
-            duration_score = 1.0  # Perfect for long sessions
-        elif duration_minutes > 30:
-            duration_score = 0.8  # Good for medium sessions
-        else:
-            duration_score = 0.6  # OK for short sessions
-
-        # Reliability score (assume good for institutional receivers)
-        reliability_score = websdr["reliability_score"]
-
-        # Geographic score (includes quota priority boost)
-        geographic_score = self._calculate_geographic_score(
-            websdr["grid_square"], prefer_location
-        )
-
-        # Load score (WebSDRs typically handle load better)
-        load_score = 0.9  # Assume good load handling
-
-        # Relationship score (higher for institutional relationships)
-        if websdr["institution_type"] == InstitutionType.UNIVERSITY:
-            relationship_score = 0.9  # Strong research relationship
-        elif websdr["institution_type"] == InstitutionType.RESEARCH_INSTITUTE:
-            relationship_score = 0.95  # Excellent research relationship
-        else:
-            relationship_score = 0.7  # Good amateur relationship
-
-        # Scarcity score (T084a) - WebSDRs often in scarce locations
-        scarcity_score = self._calculate_scarcity_score(websdr["grid_square"])
-
-        # Calculate total score with scarcity bonus
-        total_score = (
-            duration_score * self.weights["duration_suitability"] +
-            reliability_score * self.weights["reliability"] +
-            geographic_score * self.weights["geographic_diversity"] +
-            load_score * self.weights["load_balance"] +
-            relationship_score * self.weights["relationship_status"] +
-            scarcity_score * self.weights["scarcity_bonus"]
-        )
-
-        return SDRCandidate(
-            sdr_id=websdr["sdr_id"],
-            sdr_type=SDRType.WEBSDR,
-            url=websdr["url"],
-            institution_type=websdr["institution_type"],
-            usage_policy=websdr["usage_policy"],
-            daily_limit_minutes=websdr["daily_limit_minutes"],
-            session_limit_minutes=session_limit,
-            remaining_daily_minutes=websdr["remaining_daily_minutes"],
-            reliability_score=reliability_score,
-            geographic_score=geographic_score,
-            load_score=load_score,
-            relationship_score=relationship_score,
-            total_score=total_score,
+            total_score=total_score
         )
 
     def _apply_hybrid_selection_rules(
-        self, candidates: List[SDRCandidate], duration_minutes: int
+        self,
+        candidates: List[SDRCandidate],
+        expected_duration_minutes: int
     ) -> Optional[SDRCandidate]:
-        """Apply hybrid selection rules with diversity bias (FR-067, T084).
+        """Apply hybrid selection rules to choose best candidate.
 
         Args:
-            candidates: All scored candidates
-            duration_minutes: Required duration
+            candidates: List of scored candidates
+            expected_duration_minutes: Expected session duration
 
         Returns:
-            Best candidate after applying hybrid rules
+            Best candidate or None
         """
         if not candidates:
             return None
 
-        # Apply ocean/land path balancing (T084c)
-        candidates = self._check_ocean_path_balance(candidates)
+        # Sort by total score (highest first)
+        candidates.sort(key=lambda c: c.total_score, reverse=True)
 
-        # FR-067: Prioritize WebSDR for longer sessions (>90 minutes)
-        if duration_minutes > 90:
-            websdr_candidates = [c for c in candidates if c.sdr_type == SDRType.WEBSDR]
-            if websdr_candidates:
-                # Prefer WebSDR for long sessions
-                websdr_candidates.sort(key=lambda c: c.total_score, reverse=True)
-                logger.info(f"Long session ({duration_minutes} min): preferring WebSDR")
-                return websdr_candidates[0]
+        # Return highest scoring candidate
+        return candidates[0]
 
-        # For shorter sessions, consider both types but apply preferences
-        all_candidates = sorted(candidates, key=lambda c: c.total_score, reverse=True)
+    # TODO: Re-enable WebSDR
+    # def _get_available_websdrs(self, frequency_khz: float) -> List[Dict[str, Any]]:
+    #     """Get available WebSDR receivers from database with auto-sync.
+    #
+    #     Args:
+    #         frequency_khz: Required frequency
+    #
+    #     Returns:
+    #         List of available WebSDRs
+    #     """
+    #     # Check if we need to sync WebSDR registry
+    #     if (self.last_websdr_sync is None or
+    #         datetime.now(timezone.utc) - self.last_websdr_sync > self.sync_interval):
+    #         self._sync_websdr_registry()
+    #
+    #     # Query WebSDR database
+    #     websdrs = self.db.query(WebSDRSource).filter(
+    #         WebSDRSource.active == True,
+    #         WebSDRSource.failure_count < 5,
+    #         WebSDRSource.min_freq_khz <= frequency_khz,
+    #         WebSDRSource.max_freq_khz >= frequency_khz,
+    #     ).all()
+    #
+    #     available = []
+    #     for websdr in websdrs:
+    #         # Check if WebSDR is stale (not connected recently)
+    #         if (websdr.last_connected and
+    #             websdr.last_connected < datetime.now(timezone.utc) - timedelta(hours=12)):
+    #             logger.warning(f"WebSDR {websdr.url} not connected for 12+ hours, checking status")
+    #             self._check_websdr_status(websdr)
+    #
+    #         # Check daily usage if limited
+    #         if websdr.daily_limit_minutes:
+    #             if websdr.daily_usage_minutes >= websdr.daily_limit_minutes:
+    #                 continue  # Skip if daily limit reached
+    #
+    #         available.append({
+    #             "sdr_id": str(websdr.websdr_id),
+    #             "sdr_type": SDRType.WEBSDR,
+    #             "url": websdr.url,
+    #             "grid_square": websdr.grid_square,
+    #             "daily_limit_minutes": websdr.daily_limit_minutes or 999999,
+    #             "session_limit_minutes": websdr.session_limit_minutes or 180,
+    #             "remaining_daily_minutes": (websdr.daily_limit_minutes - websdr.daily_usage_minutes) if websdr.daily_limit_minutes else 999999,
+    #             "reliability_score": websdr.reliability_score or 0.8,
+    #             "has_gps": True,  # Most WebSDRs have accurate timing
+    #             "usage_policy": UsagePolicy.RESEARCH_AGREEMENT if websdr.has_research_agreement else UsagePolicy.PUBLIC_LIMITED,
+    #             "institution_type": websdr.institution_type,
+    #             "preferred_for_long": websdr.preferred_for_long_sessions,
+    #         })
+    #
+    #     return available
 
-        # If duration is short (<30 min), prefer KiwiSDR
-        if duration_minutes < 30:
-            kiwisdr_candidates = [c for c in all_candidates if c.sdr_type == SDRType.KIWISDR]
-            if kiwisdr_candidates:
-                logger.info(f"Short session ({duration_minutes} min): preferring KiwiSDR")
-                return kiwisdr_candidates[0]
-
-        # Medium duration (30-90 min): choose best regardless of type
-        logger.info(f"Medium session ({duration_minutes} min): choosing best available")
-
-        # Log if we selected a scarce region SDR (T084 tracking)
-        if all_candidates[0]:
-            selected = all_candidates[0]
-            scarcity = self._calculate_scarcity_score(
-                selected.sdr_id[:4] if len(selected.sdr_id) >= 4 else ""
-            )
-            if scarcity > 0.7:
-                logger.info(f"Selected SDR from scarce region (scarcity score: {scarcity:.2f})")
-
-        return all_candidates[0]
-
-    def _calculate_geographic_score(
-        self, grid_square: str, prefer_location: Optional[str]
-    ) -> float:
-        """Calculate geographic preference score with diversity bias (T084).
-
-        Args:
-            grid_square: SDR grid square
-            prefer_location: Preferred grid square prefix
-
-        Returns:
-            Geographic score (0.0-1.0)
-        """
-        base_score = 0.5  # Neutral
-
-        # Basic geographic preference
-        if prefer_location and grid_square:
-            # Exact grid square match
-            if grid_square == prefer_location:
-                base_score = 1.0
-            # Same grid square prefix (e.g., FN)
-            elif len(prefer_location) >= 2 and grid_square.startswith(prefer_location[:2]):
-                base_score = 0.8
-            else:
-                base_score = 0.3
-
-        # Apply quota-based priority boost (T084)
-        quota_priority = self.quota_manager.should_prioritize(grid_square)
-
-        # Combine base score with quota priority
-        # Higher quota priority increases the geographic score
-        combined_score = base_score * 0.6 + min(1.0, quota_priority / 3.0) * 0.4
-
-        return combined_score
-
-    def _calculate_scarcity_score(self, grid_square: str) -> float:
-        """Calculate scarcity score based on SDR density (T084a).
-
-        Args:
-            grid_square: SDR grid square
-
-        Returns:
-            Scarcity score (0.0-1.0, higher = more scarce)
-        """
-        # Update density cache if stale
-        if (self.density_cache_time is None or
-            datetime.utcnow() - self.density_cache_time > timedelta(hours=1)):
-            self._update_sdr_density_cache()
-
-        # Get grid prefix (first 2 characters)
-        if not grid_square or len(grid_square) < 2:
-            return 0.5
-
-        grid_prefix = grid_square[:2].upper()
-
-        # Get density for this grid square
-        density = self.sdr_density_cache.get(grid_prefix, 5)  # Default to 5 SDRs
-
-        # Calculate scarcity score (T084b)
-        # < 5 SDRs per grid square prefix = scarce
-        if density < 5:
-            # 2x-3x weight multiplier for scarce regions
-            scarcity_score = 1.0 - (density / 10.0)  # 0 SDRs = 1.0, 5 SDRs = 0.5
-        else:
-            # Not scarce
-            scarcity_score = max(0.0, 0.5 - (density - 5) / 20.0)
-
-        return scarcity_score
-
-    def _update_sdr_density_cache(self):
-        """Update SDR density cache for scarcity scoring (T084a)."""
+    def _sync_kiwisdr_registry(self):
+        """Sync KiwiSDR registry from public directory."""
         try:
-            # Count SDRs per grid square prefix
-            all_sdrs = self.db.query(KiwiSDRSource).filter(
+            logger.info("Syncing KiwiSDR registry from public directory")
+
+            # Fetch from KiwiSDR public directory
+            import requests
+            from bs4 import BeautifulSoup
+            import re
+
+            response = requests.get(
+                "http://kiwisdr.com/public/",
+                timeout=30,
+                headers={"User-Agent": "CASCADE Data Collector/1.0"}
+            )
+            response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            # Track which SDRs we've seen in this sync
+            added_count = 0
+            updated_count = 0
+            batch_size = 50
+            current_batch = 0
+
+            # Find all receiver entries
+            # Based on dyatlov parser: look for <div class='cl-info'>
+            all_divs = soup.find_all('div', class_='cl-info')
+
+            # Process in batches to reduce memory usage
+            for batch_start in range(0, len(all_divs), batch_size):
+                batch_divs = all_divs[batch_start:batch_start + batch_size]
+
+                for div in batch_divs:
+                    try:
+                        # Extract data from HTML comments (format: <!-- fieldname=value -->)
+                        comments = div.find_all(string=lambda text: isinstance(text, str) and '<!--' in str(text.parent))
+
+                        data = {}
+                        for comment in comments:
+                            comment_text = str(comment).strip()
+                            if comment_text.startswith('<!--') and comment_text.endswith('-->'):
+                                # Parse <!-- fieldname=value -->
+                                match = re.match(r'<!--\s*(\w+)=(.+?)\s*-->', comment_text)
+                                if match:
+                                    field, value = match.groups()
+                                    data[field] = value.strip()
+
+                        # Extract URL from link
+                        link = div.find('a')
+                        if not link or not link.get('href'):
+                            continue
+
+                        url = link.get('href').strip()
+                        if not url:
+                            continue
+
+                        # Clean up URL (remove protocol if present)
+                        url = re.sub(r'^https?://', '', url)
+                        url = url.rstrip('/')
+
+                        # Extract grid square (usually in 'grid' or 'gridsq' field)
+                        grid_square = data.get('gridsq') or data.get('grid')
+
+                        # Extract name
+                        name = data.get('name') or link.text.strip()
+
+                        # Extract antenna
+                        antenna = data.get('ant') or data.get('antenna')
+
+                        # Check if SDR exists in database
+                        existing = self.db.query(KiwiSDRSource).filter(
+                            KiwiSDRSource.url == url
+                        ).first()
+
+                        if existing:
+                            # Update existing SDR
+                            existing.last_seen = datetime.now(timezone.utc)
+                            existing.active = True  # Mark as active since it's in directory
+                            if grid_square:
+                                existing.grid_square = grid_square[:6]  # Limit to 6 chars
+                            if name and not existing.name:
+                                existing.name = name[:255]
+                            if antenna and not existing.antenna_type:
+                                existing.antenna_type = antenna[:100]
+                            updated_count += 1
+                        else:
+                            # Add new SDR
+                            new_sdr = KiwiSDRSource(
+                                url=url,
+                                name=name[:255] if name else None,
+                                grid_square=grid_square[:6] if grid_square else None,
+                                antenna_type=antenna[:100] if antenna else None,
+                                last_seen=datetime.now(timezone.utc),
+                                active=True,
+                                reliability_score=0.5,  # Start with neutral score
+                                min_freq_khz=10,  # Default KiwiSDR range
+                                max_freq_khz=30000,
+                                has_gps=True,  # Most KiwiSDRs have GPS
+                            )
+                            self.db.add(new_sdr)
+                            added_count += 1
+
+                    except Exception as e:
+                        logger.warning(f"Error parsing KiwiSDR entry: {e}")
+                        continue
+
+                # Commit batch and clear session to free memory
+                self.db.commit()
+                self.db.expire_all()  # Clear SQLAlchemy session cache
+                current_batch += 1
+                logger.debug(f"Processed batch {current_batch}: {len(batch_divs)} SDRs")
+
+            # Mark old SDRs as inactive (use efficient query instead of loading all)
+            # Only check SDRs not seen in this sync that are very stale (7+ days)
+            stale_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+            self.db.query(KiwiSDRSource).filter(
+                KiwiSDRSource.last_seen < stale_cutoff,
                 KiwiSDRSource.active == True
-            ).all()
+            ).update(
+                {"active": False},
+                synchronize_session=False
+            )
 
-            density_map = {}
-            for sdr in all_sdrs:
-                if sdr.grid_square and len(sdr.grid_square) >= 2:
-                    prefix = sdr.grid_square[:2].upper()
-                    density_map[prefix] = density_map.get(prefix, 0) + 1
+            self.db.commit()
+            self.last_kiwisdr_sync = datetime.now(timezone.utc)
 
-            self.sdr_density_cache = density_map
-            self.density_cache_time = datetime.utcnow()
-
-            logger.info(f"Updated SDR density cache: {len(density_map)} grid prefixes")
+            # Get total count efficiently
+            total_count = self.db.query(KiwiSDRSource).count()
+            logger.info(
+                f"KiwiSDR registry sync completed: {added_count} added, "
+                f"{updated_count} updated, {total_count} total in database"
+            )
 
         except Exception as e:
-            logger.error(f"Error updating SDR density cache: {e}")
-            # Use default values if update fails
-            self.sdr_density_cache = {}
-            self.density_cache_time = datetime.utcnow()
+            logger.error(f"Error syncing KiwiSDR registry: {e}")
+            self.db.rollback()
 
-    def _check_ocean_path_balance(self, candidates: List[SDRCandidate]) -> List[SDRCandidate]:
-        """Apply ocean/land path balancing (T084c).
+    def _sync_websdr_registry(self):
+        """Sync WebSDR registry from known sources."""
+        # TODO: Re-enable WebSDR
+        logger.info("WebSDR sync disabled for now")
+        self.last_websdr_sync = datetime.now(timezone.utc)
+        # try:
+        #     logger.info("Syncing WebSDR registry from known sources")
+        #
+        #     # This would check known WebSDR URLs and update status
+        #     active_websdrs = self.db.query(WebSDRSource).filter(
+        #         WebSDRSource.active == True
+        #     ).all()
+        #
+        #     # In a real implementation, you would:
+        #     # 1. Check each WebSDR URL for availability
+        #     # 2. Update connection status and capabilities
+        #     # 3. Add new WebSDRs from discovery
+        #
+        #     self.last_websdr_sync = datetime.now(timezone.utc)
+        #     logger.info(f"WebSDR registry sync completed, {len(active_websdrs)} SDRs in database")
+        #
+        # except Exception as e:
+        #     logger.error(f"Error syncing WebSDR registry: {e}")
 
-        Args:
-            candidates: List of SDR candidates
+    async def _check_kiwisdr_status(self, sdr: KiwiSDRSource):
+        """Check if a KiwiSDR is still online and update status (async)."""
+        try:
+            # Clean URL - remove both http:// and https:// prefixes
+            clean_url = sdr.url.replace('https://', '').replace('http://', '')
 
-        Returns:
-            Potentially reordered list prioritizing ocean paths if needed
-        """
-        # Calculate current ocean path percentage
-        progress = self.quota_manager.get_collection_progress()
-        ocean_percentage = progress.ocean_path_percentage
+            # Determine protocol from original URL
+            protocol = 'https' if 'https://' in sdr.url else 'http'
 
-        # If ocean paths are underrepresented (< 30% minimum)
-        if ocean_percentage < 30.0:
-            # Boost ocean-capable SDRs
-            ocean_candidates = []
-            land_candidates = []
+            # Use aiohttp for async HTTP check
+            timeout = aiohttp.ClientTimeout(total=5)  # Reduced timeout for faster checks
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(f"{protocol}://{clean_url}") as response:
+                    if response.status == 200:
+                        # SDR is online
+                        sdr.last_seen = datetime.now(timezone.utc)
+                        sdr.failure_count = max(0, sdr.failure_count - 1)
+                        if sdr.reliability_score:
+                            sdr.reliability_score = min(1.0, sdr.reliability_score + 0.05)
+                    else:
+                        # SDR returned error
+                        sdr.failure_count += 1
+                        if sdr.reliability_score:
+                            sdr.reliability_score = max(0.1, sdr.reliability_score - 0.1)
 
-            for candidate in candidates:
-                # Check if this SDR is likely to capture ocean paths
-                is_ocean_capable = self.grid_classifier.is_ocean_grid(
-                    candidate.sdr_id[:4] if len(candidate.sdr_id) >= 4 else ""
-                )
+        except Exception as e:
+            # Connection failed (don't log at warning level to reduce noise)
+            logger.debug(f"KiwiSDR {sdr.url} connection failed: {e}")
+            sdr.failure_count += 1
+            if sdr.reliability_score:
+                sdr.reliability_score = max(0.1, sdr.reliability_score - 0.1)
 
-                if is_ocean_capable:
-                    # Apply 1.3x boost to ocean-capable SDRs
-                    candidate.total_score *= 1.3
-                    ocean_candidates.append(candidate)
-                else:
-                    land_candidates.append(candidate)
+            # Mark as inactive if too many failures
+            if sdr.failure_count >= 10:
+                sdr.active = False
 
-            # Recombine with ocean SDRs prioritized
-            candidates = sorted(ocean_candidates, key=lambda c: c.total_score, reverse=True)
-            candidates.extend(sorted(land_candidates, key=lambda c: c.total_score, reverse=True))
+    async def _check_stale_sdrs_async(self, stale_sdrs: List[KiwiSDRSource]):
+        """Check multiple stale SDRs concurrently in background."""
+        logger.debug(f"Starting async health check for {len(stale_sdrs)} stale SDRs")
 
-        return candidates
+        # Run all checks concurrently
+        tasks = [self._check_kiwisdr_status(sdr) for sdr in stale_sdrs]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def allocate_sdrs_for_event(
-        self,
-        event_type: str,
-        target_count: int,
-        frequency_list: List[float],
-        duration_minutes: int = 60
-    ) -> List[SDRCandidate]:
-        """Allocate SDRs for space weather event using hybrid strategy.
+        # Commit changes to database
+        try:
+            self.db.commit()
+            online_count = sum(1 for sdr in stale_sdrs if sdr.failure_count == 0)
+            logger.info(f"Health check complete: {online_count}/{len(stale_sdrs)} stale SDRs are online")
+        except Exception as e:
+            logger.error(f"Error committing health check results: {e}")
+            self.db.rollback()
 
-        Args:
-            event_type: Type of event (storm, flare, etc.)
-            target_count: Number of SDRs needed
-            frequency_list: List of frequencies to monitor
-            duration_minutes: Expected session duration
+    # TODO: Re-enable WebSDR
+    # def _check_websdr_status(self, websdr: WebSDRSource):
+    #     """Check if a WebSDR is still online and update status."""
+    #     try:
+    #         import requests
+    #
+    #         # Try to connect to the WebSDR
+    #         response = requests.get(websdr.url, timeout=15)
+    #
+    #         if response.status_code == 200 and "websdr" in response.text.lower():
+    #             # WebSDR is online and responding
+    #             websdr.last_connected = datetime.now(timezone.utc)
+    #             websdr.failure_count = max(0, websdr.failure_count - 1)
+    #             if websdr.reliability_score:
+    #                 websdr.reliability_score = min(1.0, websdr.reliability_score + 0.05)
+    #         else:
+    #             # WebSDR returned error or unexpected content
+    #             websdr.failure_count += 1
+    #             if websdr.reliability_score:
+    #                 websdr.reliability_score = max(0.1, websdr.reliability_score - 0.1)
+    #
+    #     except Exception as e:
+    #         # Connection failed
+    #         logger.warning(f"WebSDR {websdr.url} connection failed: {e}")
+    #         websdr.failure_count += 1
+    #         if websdr.reliability_score:
+    #             websdr.reliability_score = max(0.1, websdr.reliability_score - 0.1)
+    #
+    #         # Mark as inactive if too many failures
+    #         if websdr.failure_count >= 5:  # Lower threshold for WebSDRs
+    #             websdr.active = False
+    #             logger.warning(f"Marking WebSDR {websdr.url} as inactive due to repeated failures")
+    #
+    #     self.db.commit()
 
-        Returns:
-            List of allocated SDR candidates
-        """
-        logger.info(
-            f"Allocating {target_count} SDRs for {event_type} event, "
-            f"duration: {duration_minutes} min"
-        )
-
-        allocated = []
-        used_urls = set()
-
-        for frequency_khz in frequency_list:
-            if len(allocated) >= target_count:
-                break
-
-            # Determine optimal strategy for this frequency/duration
-            if duration_minutes > 90:
-                # Long sessions: prefer WebSDR
-                prefer_types = [SDRType.WEBSDR, SDRType.KIWISDR]
-            elif duration_minutes < 30:
-                # Short sessions: prefer KiwiSDR
-                prefer_types = [SDRType.KIWISDR, SDRType.WEBSDR]
-            else:
-                # Medium sessions: no preference
-                prefer_types = [SDRType.WEBSDR, SDRType.KIWISDR]
-
-            for sdr_type in prefer_types:
-                candidate = self.select_optimal_sdr(
-                    frequency_khz, duration_minutes, f"{frequency_khz/1000:.0f}m"
-                )
-
-                if (candidate and
-                    candidate.sdr_type == sdr_type and
-                    candidate.url not in used_urls):
-
-                    allocated.append(candidate)
-                    used_urls.add(candidate.url)
-                    break
-
-        # If we need more SDRs, relax preferences
-        remaining_needed = target_count - len(allocated)
-        if remaining_needed > 0:
-            logger.info(f"Need {remaining_needed} more SDRs, relaxing preferences")
-
-            for frequency_khz in frequency_list:
-                if len(allocated) >= target_count:
-                    break
-
-                candidate = self.select_optimal_sdr(
-                    frequency_khz, duration_minutes, f"{frequency_khz/1000:.0f}m"
-                )
-
-                if candidate and candidate.url not in used_urls:
-                    allocated.append(candidate)
-                    used_urls.add(candidate.url)
-
-        logger.info(
-            f"Allocated {len(allocated)}/{target_count} SDRs for {event_type}: "
-            f"{sum(1 for c in allocated if c.sdr_type == SDRType.KIWISDR)} KiwiSDR, "
-            f"{sum(1 for c in allocated if c.sdr_type == SDRType.WEBSDR)} WebSDR"
-        )
-
-        return allocated
-
-    def get_hybrid_collection_strategy(
-        self, total_hours_target: int, time_budget_days: int
-    ) -> Dict[str, Any]:
-        """Calculate optimal hybrid collection strategy.
+    def update_sdr_usage(self, sdr_id: str, sdr_type: SDRType, usage_minutes: float, success: bool):
+        """Update SDR usage statistics after a session.
 
         Args:
-            total_hours_target: Total hours to collect
-            time_budget_days: Days available for collection
-
-        Returns:
-            Recommended hybrid strategy
-        """
-        hours_per_day_needed = total_hours_target / time_budget_days
-
-        # Calculate optimal mix based on session characteristics
-        if hours_per_day_needed > 200:
-            # High volume: need both types
-            kiwisdr_percentage = 0.6  # Short sessions
-            websdr_percentage = 0.4   # Long sessions
-            recommended_strategy = "AGGRESSIVE_HYBRID"
-        elif hours_per_day_needed > 100:
-            # Medium volume: moderate hybrid
-            kiwisdr_percentage = 0.7
-            websdr_percentage = 0.3
-            recommended_strategy = "BALANCED_HYBRID"
-        else:
-            # Low volume: mostly KiwiSDR
-            kiwisdr_percentage = 0.8
-            websdr_percentage = 0.2
-            recommended_strategy = "KIWISDR_PRIMARY"
-
-        # Calculate session allocations
-        avg_kiwisdr_session_hours = 1.0  # ~60 minutes average
-        avg_websdr_session_hours = 2.5   # ~150 minutes average
-
-        kiwisdr_hours_per_day = hours_per_day_needed * kiwisdr_percentage
-        websdr_hours_per_day = hours_per_day_needed * websdr_percentage
-
-        kiwisdr_sessions_per_day = kiwisdr_hours_per_day / avg_kiwisdr_session_hours
-        websdr_sessions_per_day = websdr_hours_per_day / avg_websdr_session_hours
-
-        return {
-            "strategy": recommended_strategy,
-            "target_hours_per_day": hours_per_day_needed,
-            "kiwisdr_allocation": {
-                "percentage": kiwisdr_percentage * 100,
-                "hours_per_day": kiwisdr_hours_per_day,
-                "sessions_per_day": kiwisdr_sessions_per_day,
-                "concurrent_sdrs": int(kiwisdr_sessions_per_day / 24 * avg_kiwisdr_session_hours),
-            },
-            "websdr_allocation": {
-                "percentage": websdr_percentage * 100,
-                "hours_per_day": websdr_hours_per_day,
-                "sessions_per_day": websdr_sessions_per_day,
-                "concurrent_sdrs": int(websdr_sessions_per_day / 24 * avg_websdr_session_hours),
-            },
-            "total_concurrent_sdrs": int(
-                kiwisdr_sessions_per_day / 24 * avg_kiwisdr_session_hours +
-                websdr_sessions_per_day / 24 * avg_websdr_session_hours
-            ),
-            "advantages": {
-                "kiwisdr": "Geographic diversity, individual operator relationships",
-                "websdr": "Longer sessions, institutional backing, higher capacity"
-            }
-        }
-
-    def get_selection_statistics(self) -> Dict[str, Any]:
-        """Get hybrid selection statistics.
-
-        Returns:
-            Selection statistics
+            sdr_id: SDR identifier
+            sdr_type: Type of SDR
+            usage_minutes: Minutes used in session
+            success: Whether session was successful
         """
         try:
-            # Count available SDRs by type
-            kiwisdrs = self._get_available_kiwisdrs(14080, True)  # Test frequency
-            websdrs = self._get_available_websdrs(14080)
+            if sdr_type == SDRType.KIWISDR:
+                sdr = self.db.query(KiwiSDRSource).filter(
+                    KiwiSDRSource.kiwisdr_id == sdr_id
+                ).first()
+            # TODO: Re-enable WebSDR
+            # else:
+            #     sdr = self.db.query(WebSDRSource).filter(
+            #         WebSDRSource.websdr_id == sdr_id
+            #     ).first()
+            else:
+                logger.warning(f"WebSDR usage tracking disabled")
+                return
 
-            # Calculate capacity
-            total_kiwisdr_capacity = sum(
-                sdr["remaining_daily_minutes"] for sdr in kiwisdrs
-            )
-            total_websdr_capacity = sum(
-                sdr["session_limit_minutes"] for sdr in websdrs
-            ) * 10  # Estimate 10 sessions per day per WebSDR
+            if sdr:
+                # Update usage statistics
+                sdr.daily_usage_minutes += usage_minutes
+                sdr.total_usage_minutes += usage_minutes
+                
+                if success:
+                    # Successful session
+                    if sdr_type == SDRType.KIWISDR:
+                        sdr.last_seen = datetime.now(timezone.utc)
+                    else:
+                        sdr.last_connected = datetime.now(timezone.utc)
+                    
+                    # Improve reliability score
+                    if sdr.reliability_score:
+                        sdr.reliability_score = min(1.0, sdr.reliability_score + 0.02)
+                    else:
+                        sdr.reliability_score = 0.8
+                        
+                    # Reset failure count on success
+                    sdr.failure_count = max(0, sdr.failure_count - 1)
+                else:
+                    # Failed session
+                    sdr.failure_count += 1
+                    if sdr.reliability_score:
+                        sdr.reliability_score = max(0.1, sdr.reliability_score - 0.05)
+                
+                self.db.commit()
+                logger.info(f"Updated {sdr_type.value} {sdr_id} usage: +{usage_minutes:.1f}min, success={success}")
+            
+        except Exception as e:
+            logger.error(f"Error updating SDR usage: {e}")
+
+    def force_registry_sync(self):
+        """Force immediate sync of both SDR registries."""
+        logger.info("Forcing immediate registry sync")
+        self.last_kiwisdr_sync = None
+        self.last_websdr_sync = None
+        self._sync_kiwisdr_registry()
+        self._sync_websdr_registry()
+
+    def get_registry_status(self) -> Dict[str, Any]:
+        """Get status of SDR registries and sync information."""
+        try:
+            kiwi_total = self.db.query(KiwiSDRSource).count()
+            kiwi_active = self.db.query(KiwiSDRSource).filter(KiwiSDRSource.active == True).count()
+            kiwi_recent = self.db.query(KiwiSDRSource).filter(
+                KiwiSDRSource.last_seen > datetime.now(timezone.utc) - timedelta(hours=24)
+            ).count()
+
+            # TODO: Re-enable WebSDR
+            # web_total = self.db.query(WebSDRSource).count()
+            # web_active = self.db.query(WebSDRSource).filter(WebSDRSource.active == True).count()
+            # web_recent = self.db.query(WebSDRSource).filter(
+            #     WebSDRSource.last_connected > datetime.now(timezone.utc) - timedelta(hours=24)
+            # ).count()
 
             return {
-                "available_sdrs": {
-                    "kiwisdr_count": len(kiwisdrs),
-                    "websdr_count": len(websdrs),
-                    "total_count": len(kiwisdrs) + len(websdrs),
+                "sync_status": {
+                    "last_kiwisdr_sync": self.last_kiwisdr_sync.isoformat() if self.last_kiwisdr_sync else None,
+                    "last_websdr_sync": "disabled",  # TODO: Re-enable WebSDR
+                    "sync_interval_hours": self.sync_interval.total_seconds() / 3600,
                 },
-                "daily_capacity_minutes": {
-                    "kiwisdr_total": total_kiwisdr_capacity,
-                    "websdr_total": total_websdr_capacity,
-                    "combined_total": total_kiwisdr_capacity + total_websdr_capacity,
+                "kiwisdr": {
+                    "total_count": kiwi_total,
+                    "active_count": kiwi_active,
+                    "seen_24h": kiwi_recent,
+                    "active_percentage": (kiwi_active / kiwi_total * 100) if kiwi_total > 0 else 0,
                 },
-                "daily_capacity_hours": {
-                    "kiwisdr_hours": total_kiwisdr_capacity / 60,
-                    "websdr_hours": total_websdr_capacity / 60,
-                    "combined_hours": (total_kiwisdr_capacity + total_websdr_capacity) / 60,
+                "websdr": {
+                    "status": "disabled",  # TODO: Re-enable WebSDR
+                    # "total_count": web_total,
+                    # "active_count": web_active,
+                    # "connected_24h": web_recent,
+                    # "active_percentage": (web_active / web_total * 100) if web_total > 0 else 0,
                 },
-                "strategy_recommendations": {
-                    "short_sessions": "Prefer KiwiSDR (30-90 min limits)",
-                    "long_sessions": "Prefer WebSDR (180+ min capability)",
-                    "high_volume": "Use aggressive hybrid strategy",
-                    "research_access": "Coordinate with WebSDR institutions"
+                "recommendations": {
+                    "needs_kiwisdr_sync": self.last_kiwisdr_sync is None or datetime.now(timezone.utc) - self.last_kiwisdr_sync > self.sync_interval,
+                    "needs_websdr_sync": False,  # TODO: Re-enable WebSDR
                 }
             }
-
+            
         except Exception as e:
-            logger.error(f"Error getting selection statistics: {e}")
+            logger.error(f"Error getting registry status: {e}")
             return {"error": str(e)}
 
     def close(self):

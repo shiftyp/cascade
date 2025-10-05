@@ -7,6 +7,7 @@ Allows adjusting collection parameters without restart or data loss.
 
 import argparse
 import json
+import os
 import redis
 import sys
 from typing import Optional
@@ -16,7 +17,7 @@ def update_config(
     baseline: Optional[int] = None,
     max_sdrs: Optional[int] = None,
     min_hours: Optional[int] = None,
-    redis_url: str = "redis://localhost:6379",
+    redis_url: str = os.getenv("REDIS_URL", "redis://cascade-keydb.internal:6379"),
 ):
     """Update collection scaling parameters live.
 
@@ -107,8 +108,8 @@ Examples:
     )
     parser.add_argument(
         '--redis',
-        default='redis://localhost:6379',
-        help='Redis URL (default: redis://localhost:6379)'
+        default=os.getenv('REDIS_URL', 'redis://cascade-keydb.internal:6379'),
+        help='Redis URL (default: from REDIS_URL env var or redis://cascade-keydb.internal:6379)'
     )
     parser.add_argument(
         '--show',

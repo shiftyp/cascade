@@ -22,9 +22,9 @@ if ! fly auth whoami &> /dev/null; then
     fly auth login
 fi
 
-# Configuration
-APP_NAME="cascade-kiwi-collector"
-DB_NAME="cascade-db"
+# # Configuration
+APP_NAME="cascade-collector"
+DB_NAME="cascade-rf-db"
 KEYDB_NAME="cascade-keydb"
 REGION="iad"  # US East - good global connectivity
 
@@ -40,7 +40,7 @@ echo "1️⃣ Creating Fly.io app..."
 if fly apps list | grep -q "$APP_NAME"; then
     echo "   ✅ App already exists"
 else
-    fly apps create "$APP_NAME" --region "$REGION"
+    fly apps create "$APP_NAME"
     echo "   ✅ App created"
 fi
 
@@ -55,27 +55,36 @@ else
         --region "$REGION" \
         --initial-cluster-size 3 \
         --vm-size shared-cpu-2x \
-        --volume-size 50 \
-        --snapshot-retention 7
+        --volume-size 50
 
     # Attach to app (sets DATABASE_URL automatically)
     fly postgres attach "$DB_NAME" --app "$APP_NAME"
     echo "   ✅ PostgreSQL HA Lite created and attached"
 fi
 
-# Step 3: Create Tigris Storage Buckets
+# Step 3: Create Tigris Storage
 echo "3️⃣ Setting up Tigris storage..."
 
-# Main IQ archive bucket
-echo "   Creating main IQ archive bucket..."
-fly storage create cascade-iq-data --app "$APP_NAME" --public false || true
+# Create Tigris storage for the app (this creates a single Tigris project)
+echo "   Setting up Tigris object storage..."
 
-# QA samples bucket
-echo "   Creating QA samples bucket..."
-fly storage create cascade-qa-samples --app "$APP_NAME" --public false || true
+# Check if Tigris is already configured
+if fly secrets list -a "$APP_NAME" | grep -q "AWS_ACCESS_KEY_ID"; then
+    echo "   ✅ Tigris storage already configured"
+else
+    echo "   Creating Tigris storage project..."
 
-echo "   ✅ Tigris storage configured (zero egress fees!)"
-echo "   📝 Note: Fly.io automatically sets AWS_* environment variables for Tigris"
+    # Create Tigris storage (this will set AWS_* env vars automatically)
+    fly storage create \
+        --app "$APP_NAME" \
+        --name "${APP_NAME}-storage" || true
+
+    echo "   ✅ Tigris storage created"
+fi
+
+echo "   📝 Note: Tigris provides a single storage project per app"
+echo "   📝 Buckets will be created programmatically when the app runs"
+echo "   📝 AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_ENDPOINT_URL are set automatically"
 
 # Step 4: Create KeyDB for coordination
 echo "4️⃣ Setting up KeyDB..."
@@ -83,7 +92,7 @@ if fly apps list | grep -q "$KEYDB_NAME"; then
     echo "   ✅ KeyDB already exists"
 else
     # Create KeyDB app
-    fly apps create "$KEYDB_NAME" --region "$REGION"
+    fly apps create "$KEYDB_NAME"
 
     # Create KeyDB configuration
     cat > keydb.fly.toml << 'EOF'
@@ -143,16 +152,80 @@ else
     echo "   ✅ CALLSIGN_SALT already configured"
 fi
 
-# Set Tigris bucket names (in addition to auto-configured AWS_* vars)
+# Check if Gmail notification credentials are set
+echo ""
+echo "📧 Checking Gmail notification setup..."
+if ! fly secrets list -a "$APP_NAME" | grep -q "GMAIL_SENDER_EMAIL"; then
+    echo "   ⚠️  Gmail notifications not configured."
+    echo "   This is optional but recommended for operator alerts."
+    echo ""
+    read -p "   Would you like to set up Gmail notifications? (y/N): " setup_gmail
+
+    if [[ "$setup_gmail" =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "   📝 Gmail Setup Instructions:"
+        echo "   1. Use a dedicated Gmail account for CASCADE alerts"
+        echo "   2. Enable 2-factor authentication on the account"
+        echo "   3. Generate an app-specific password:"
+        echo "      https://myaccount.google.com/apppasswords"
+        echo ""
+
+        read -p "   Enter Gmail address (e.g., cascade-alerts@gmail.com): " gmail_address
+        read -sp "   Enter Gmail app password (16 characters, no spaces): " gmail_password
+        echo ""
+
+        # Validate inputs
+        if [[ -n "$gmail_address" && -n "$gmail_password" ]]; then
+            # Also prompt for recipient emails
+            echo ""
+            echo "   📬 Notification Recipients:"
+            read -p "   Enter operator emails (comma-separated): " operator_emails
+
+            fly secrets set \
+                GMAIL_SENDER_EMAIL="$gmail_address" \
+                GMAIL_APP_PASSWORD="$gmail_password" \
+                NOTIFICATION_RECIPIENTS="$operator_emails" \
+                -a "$APP_NAME"
+
+            echo "   ✅ Gmail notifications configured"
+            echo "   📝 Test with: fly ssh console -a $APP_NAME -C 'python -m modules.data.src.notifications.gmail_notifier --test'"
+        else
+            echo "   ⚠️  Skipping Gmail setup - invalid inputs"
+        fi
+    else
+        echo "   ⚠️  Skipping Gmail notifications (can be configured later)"
+    fi
+else
+    echo "   ✅ Gmail notifications already configured"
+fi
+
+# Set Tigris bucket names for the application to use
 fly secrets set \
-    TIGRIS_BUCKET_MAIN="cascade-iq-data" \
+    TIGRIS_BUCKET="cascade-iq-data" \
     TIGRIS_BUCKET_QA="cascade-qa-samples" \
     -a "$APP_NAME" 2>/dev/null || true
 
 echo "   ✅ All secrets configured"
 
-# Step 6: Deploy the application
-echo "6️⃣ Deploying application..."
+# Step 6: Create persistent volume for data
+echo "6️⃣ Setting up persistent storage volume..."
+
+# Check if volume exists
+if fly volumes list -a "$APP_NAME" | grep -q "data"; then
+    echo "   ✅ Data volume already exists"
+else
+    echo "   Creating 100GB volume for local cache..."
+    fly volumes create data \
+        --app "$APP_NAME" \
+        --size 100 \
+        --no-encryption
+
+    echo "   ✅ Volume created (100GB for temporary local storage)"
+    echo "   📝 Note: Main storage is in Tigris, this is just for buffering"
+fi
+
+# Step 7: Deploy the application
+echo "7️⃣ Deploying application..."
 
 # Ensure we're in the right directory
 cd "$(dirname "$0")"
@@ -162,8 +235,8 @@ fly deploy --strategy rolling --ha=false
 
 echo "   ✅ Application deployed"
 
-# Step 7: Scale process groups
-echo "7️⃣ Scaling process groups..."
+# Step 8: Scale process groups
+echo "8️⃣ Scaling process groups..."
 
 fly scale count scheduler=1 --process-group scheduler
 fly scale count worker=2 --process-group worker
@@ -173,12 +246,12 @@ fly scale count dashboard=1 --process-group dashboard
 
 echo "   ✅ Process groups scaled"
 
-# Step 8: Run database migrations
-echo "8️⃣ Running database migrations..."
-fly ssh console -a "$APP_NAME" -C "python -m modules.data.migrations.run" || true
-echo "   ✅ Migrations complete"
+# Step 9: Run database initialization
+echo "9️⃣ Initializing database..."
+fly ssh console -a "$APP_NAME" -C "python /app/scripts/init_database.py" || true
+echo "   ✅ Database initialized"
 
-# Step 9: Display status and costs
+# Step 10: Display status and costs
 echo ""
 echo "========================================="
 echo "✅ Deployment Complete!"

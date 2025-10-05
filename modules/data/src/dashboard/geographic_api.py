@@ -19,7 +19,13 @@ app = FastAPI(title="Geographic Diversity API")
 # Enable CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://cascade-collector.fly.dev", 
+        "https://cascade-collector.fly.dev:3000",
+        "http://cascade-collector.internal:3000",
+        "https://cascade-collector.internal:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,6 +35,16 @@ app.add_middleware(
 quota_manager = GeographicQuotaManager()
 diversity_validator = GeographicDiversityValidator(quota_manager)
 southern_collector = SouthernHemispherePriorityCollector()
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Fly.io and monitoring."""
+    return {
+        "status": "healthy",
+        "service": "geographic_diversity_api",
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 
 @app.get("/api/diversity/geographic-data")

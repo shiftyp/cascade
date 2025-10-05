@@ -11,10 +11,9 @@ from unittest.mock import AsyncMock, Mock, patch
 from typing import List, Dict, Any
 
 # These imports will fail until implementation exists (TDD)
-from modules.data.src.collectors.worker import CollectionWorker
-from modules.data.src.collectors.lock_manager import LockManager
-from modules.data.src.collectors.queue_manager import QueueManager
-from modules.data.src.collectors.sdr_manager import SDRManager
+from src.collectors.worker import CollectionWorker
+from src.collectors.queue_manager import QueueManager
+from src.collectors.sdr_manager import SDRManager
 
 
 class TestWorkerCoordination:

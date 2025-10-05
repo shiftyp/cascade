@@ -21,16 +21,42 @@ docker-compose logs -f scheduler worker
 pytest tests/ -v
 ```
 
-## Project Goals
+## Project Goals (V1 MVP Strategy)
 
-- **Target**: 200,000-300,000 hours of HF radio data over 18 months (weighted collection)
-- **Baseline**: 4,000 hours per HF band (24,000 hours minimum)
-- **Sources**: 50-100 simultaneous KiwiSDR/WebSDR connections (scales to 200+ during events)
-- **Storage**: 35-75TB compressed data (FLAC format, varies with seasonal/event weighting)
+- **Target**: 24,000-36,000 hours of HF radio data over 6 months for V1 launch
+- **Per-Band**: 4,000-6,000 hours per HF band (6 bands)
+- **Sources**: 133 cooperating KiwiSDR owners @ 60 min/day (or 10-15 dedicated + 50-100 public)
+- **Storage**: 4-7TB compressed data (FLAC format)
 - **Privacy**: All callsigns anonymized via one-way hashing
-- **Collection Rate**: 200-500 hrs/day (weighted average accounting for seasonal variance and event scaling)
+- **Collection Rate**: 133-200 hrs/day baseline
+- **Geographic**: Accept V1 bias (65% Northern, 15% Southern, 20% Equatorial)
+- **Post-V1**: Telemetry from deployed systems improves underserved regions over 12-18 months
 
 ## Architecture
+
+### Processing Pipeline Separation
+
+The system separates collection from processing for maximum flexibility:
+
+1. **Collection Phase** (Current Implementation)
+   - Records raw IQ data from SDRs
+   - Saves to Tigris S3 with metadata
+   - Updates `recording_sessions` table with status
+   - Tracks `processing_status = 'unprocessed'` and `processing_version = NULL`
+
+2. **Post-Processing Phase** (Future Implementation)
+   - Separate worker queries database for unprocessed recordings
+   - Downloads from Tigris (zero egress fees)
+   - Runs FT8/WSPR extraction, QRN analysis
+   - Updates `processing_status = 'processed'` and `processing_version = 1`
+   - Creates `QRNSample` and `PropagationRecord` entries
+   - Can reprocess when `processing_version` increments
+
+This separation enables:
+- Continuous collection without processing bottlenecks
+- Algorithm updates without re-recording
+- Batch reprocessing of historical data
+- Independent resource scaling
 
 ### Module Structure
 
@@ -53,7 +79,7 @@ modules/data/
 │   ├── integration/      # End-to-end pipeline tests
 │   └── contract/         # API contract tests
 ├── migrations/           # PostgreSQL schema migrations
-├── scripts/              # Utility scripts
+├── scripts/              # Utility scripts (sync_kiwisdr_sources.py, setup_database.py)
 └── config/               # Configuration files
 ```
 
@@ -194,6 +220,30 @@ python -m modules.data.migrations.run
 docker-compose exec postgres psql -U postgres -d cascade_data -c "\dt"
 ```
 
+### Syncing KiwiSDR Sources
+
+The system maintains a local database of KiwiSDR receivers synced from the public directory:
+
+```bash
+# Sync from rx.linkfanel.net (runs automatically daily at 02:00 UTC)
+python scripts/sync_kiwisdr_sources.py
+
+# Dry-run to preview changes
+python scripts/sync_kiwisdr_sources.py --dry-run
+
+# The script will:
+# - Fetch the public KiwiSDR list from rx.linkfanel.net/kiwisdr_com.js
+# - Parse ~800+ active receivers with GPS, location, antenna data
+# - Add new receivers to kiwisdr_sources table
+# - Update existing receivers with fresh data
+# - Mark offline receivers as inactive
+# - Send email notification on completion/failure (if configured)
+```
+
+**Data Source**: Uses `http://rx.linkfanel.net/kiwisdr_com.js` (automatically updated from kiwisdr.com/public/)
+**Format**: JSON data with GPS coordinates, Maidenhead grid squares, antenna types, user limits
+**Scheduler**: Automatically runs daily at 02:00 UTC when scheduler is running
+
 ### Adding Test Data
 
 ```bash
@@ -221,11 +271,11 @@ The CASCADE Data Module requires PostgreSQL 15+ with significant storage:
 | Phase | Database Size | RAM Required | Recommended Config |
 |-------|--------------|--------------|-------------------|
 | **Development** | 5-20 GB | 2GB | Single node, shared-cpu-2x |
-| **Production (6mo)** | ~70 GB | 8GB | 3-node HA, shared-cpu-4x |
-| **Production (18mo)** | ~250 GB | 8-16GB | 3-node HA, shared-cpu-4x or performance-1x |
-| **Long-term** | 500GB+ | 16GB+ | 3-node HA, performance-2x |
+| **V1 Collection (6mo)** | ~50 GB | 4GB | Single node or 3-node HA, shared-cpu-2x |
+| **Post-V1 (optional)** | ~150 GB | 8GB | 3-node HA, shared-cpu-4x (if continuing collection) |
+| **Long-term (telemetry)** | 100-200GB+ | 8GB+ | 3-node HA, shared-cpu-4x (telemetry archive) |
 
-**Storage Growth**: ~14 GB/month during active collection
+**Storage Growth**: ~8 GB/month during V1 collection (reduced from 14 GB/month)
 - **recording_sessions**: 250K records, ~250 MB
 - **propagation_records**: 600M FT8/WSPR decodes, ~120 GB
 - **qrn_samples**: 90M samples, ~13.5 GB

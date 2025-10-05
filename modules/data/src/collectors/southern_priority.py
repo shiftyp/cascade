@@ -119,7 +119,7 @@ class SouthernHemispherePriorityCollector:
                         priority_level=priority_level,
                         priority_weight=weight,
                         availability_score=availability,
-                        last_used=sdr.last_successful_connection,
+                        last_used=sdr.last_connected,
                         daily_usage_minutes=sdr.daily_usage_minutes,
                         daily_limit_minutes=sdr.daily_limit_minutes
                     )

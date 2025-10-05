@@ -34,7 +34,7 @@ class CollectionSchedule(Base):
     # Recording parameters
     frequency_khz = Column(Integer, nullable=False)
     band = Column(String(10), nullable=True)
-    duration_seconds = Column(Integer, default=300)
+    duration_seconds = Column(Integer, default=360)
     interval_minutes = Column(Integer, default=60)
 
     # Target SDRs

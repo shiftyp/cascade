@@ -1,5 +1,6 @@
 """Integration tests for Phase 3.4: Dashboard components."""
 
+import os
 import pytest
 import asyncio
 from unittest.mock import Mock, patch, AsyncMock, MagicMock
@@ -175,7 +176,7 @@ class TestDashboardIntegration:
         from src.dashboard.terminal_dashboard import DashboardData
 
         db_config = {
-            'host': 'localhost',
+            'host': os.getenv('DB_HOST', 'localhost'),
             'port': 5432,
             'database': 'test',
             'user': 'test'

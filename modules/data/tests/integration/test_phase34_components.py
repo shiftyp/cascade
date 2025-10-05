@@ -157,7 +157,7 @@ class TestPhase34Components:
         from src.dashboard.terminal_dashboard import DashboardData
 
         db_config = {
-            'host': 'localhost',
+            'host': os.getenv('DB_HOST', 'localhost'),
             'port': 5432,
             'database': 'test',
             'user': 'test'

@@ -30,7 +30,12 @@ app = FastAPI(title="QA Sample Search API", version="1.0.0")
 # CORS for Next.js dashboard
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://cascade-kiwi-collector.fly.dev"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://cascade-collector.fly.dev", 
+        "http://cascade-collector.internal:3000",
+        "https://cascade-collector.internal:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,6 +51,45 @@ TIGRIS_ENDPOINT = os.getenv("TIGRIS_ENDPOINT", "https://fly.storage.tigris.dev")
 # Initialize components
 waterfall_generator = WaterfallGenerator()
 iq_reader = IQReader()
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Fly.io and monitoring."""
+    # Check database connectivity
+    db_status = "disconnected"
+    try:
+        if DATABASE_URL:
+            conn = await asyncpg.connect(DATABASE_URL, timeout=5)
+            await conn.execute("SELECT 1")
+            await conn.close()
+            db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {str(e)[:50]}"
+
+    # Check S3 connectivity
+    s3_status = "not_configured"
+    try:
+        if TIGRIS_ACCESS_KEY and TIGRIS_SECRET_KEY:
+            session = aioboto3.Session()
+            async with session.client(
+                's3',
+                endpoint_url=TIGRIS_ENDPOINT,
+                aws_access_key_id=TIGRIS_ACCESS_KEY,
+                aws_secret_access_key=TIGRIS_SECRET_KEY,
+            ) as s3:
+                await s3.head_bucket(Bucket=TIGRIS_BUCKET)
+                s3_status = "connected"
+    except Exception:
+        s3_status = "disconnected"
+
+    return {
+        "status": "healthy" if db_status == "connected" else "degraded",
+        "service": "qa_sample_api",
+        "database": db_status,
+        "s3": s3_status,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
 
 @dataclass
 class QASample:

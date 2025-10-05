@@ -14,10 +14,10 @@ class Config:
     """Main configuration class for the data collector."""
 
     # Database
-    POSTGRES_URL: str = os.getenv(
-        "POSTGRES_URL", "postgresql://cascade:cascade@localhost/cascade_data"
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL", "postgresql://cascade:cascade@localhost/cascade_data"
     )
-    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://cascade-keydb.internal:6379/0")
 
     # Storage
     TIGRIS_ACCESS_KEY: str = os.getenv("TIGRIS_ACCESS_KEY", "")
@@ -34,7 +34,7 @@ class Config:
     # Collection parameters
     DEFAULT_SAMPLE_RATE: int = 12000  # 12 kHz
     DEFAULT_BIT_DEPTH: int = 16
-    DEFAULT_RECORDING_DURATION: int = 300  # 5 minutes
+    DEFAULT_RECORDING_DURATION: int = 360  # 6 minutes
     MAX_CONCURRENT_SDRS: int = int(os.getenv("MAX_CONCURRENT_SDRS", "50"))
     MIN_CONCURRENT_SDRS: int = int(os.getenv("MIN_CONCURRENT_SDRS", "6"))
 
@@ -43,6 +43,16 @@ class Config:
     KIWI_CONNECTION_TIMEOUT: int = 30
     KIWI_RETRY_ATTEMPTS: int = 3
     KIWI_RETRY_DELAY: int = 5
+
+    # KiwiSDR client identification (for respectful automated use)
+    KIWI_CLIENT_NAME: str = os.getenv(
+        "KIWI_CLIENT_NAME",
+        "CASCADE-Research"
+    )
+    KIWI_CLIENT_CONTACT: str = os.getenv(
+        "KIWI_CLIENT_CONTACT",
+        "k0bb@arrl.net"
+    )
 
     # QA sampling (FR-036) - Progressive intelligent sampling
     QA_SAMPLE_PERCENTAGE: float = 0.01  # Default 1% (overridden by intelligent sampler)

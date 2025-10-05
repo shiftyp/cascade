@@ -306,7 +306,7 @@ class WebSDRSource(Base):
     # Relationships
     sessions = relationship(
         "RecordingSession",
-        back_populates="websdr",
+        back_populates="websdr_source",
         foreign_keys="RecordingSession.websdr_id",
     )
 
@@ -387,3 +387,63 @@ class WebSDRSource(Base):
             score *= 0.5
 
         return min(100, max(0, score))
+
+    def covers_frequency(self, freq_khz: float) -> bool:
+        """Check if this WebSDR covers the specified frequency.
+
+        Args:
+            freq_khz: Frequency in kHz
+
+        Returns:
+            True if frequency is within range
+        """
+        return self.min_freq_khz <= freq_khz <= self.max_freq_khz
+
+    @classmethod
+    def find_suitable_sources(cls, session, freq_khz: float, duration_minutes: int, 
+                            exclude_peak_hours: bool = True, min_reliability: float = 0.7):
+        """Find WebSDR sources suitable for the given frequency and duration.
+
+        Args:
+            session: SQLAlchemy session
+            freq_khz: Target frequency in kHz
+            duration_minutes: Expected session duration
+            exclude_peak_hours: Whether to exclude sources in peak hours
+            min_reliability: Minimum reliability score
+
+        Returns:
+            Query of suitable WebSDRSource objects ordered by priority
+        """
+        query = session.query(cls).filter(
+            cls.active == True,
+            cls.min_freq_khz <= freq_khz,
+            cls.max_freq_khz >= freq_khz
+        )
+
+        if min_reliability is not None:
+            query = query.filter(
+                cls.reliability_score.is_(None) | (cls.reliability_score >= min_reliability)
+            )
+
+        sources = query.all()
+
+        # Filter by usage limits and peak hours
+        suitable_sources = []
+        current_hour = datetime.utcnow().hour
+
+        for source in sources:
+            if not source.can_use_for_duration(duration_minutes):
+                continue
+            
+            if exclude_peak_hours and source.is_in_peak_hours(current_hour):
+                continue
+                
+            suitable_sources.append(source)
+
+        # Sort by priority score
+        suitable_sources.sort(
+            key=lambda s: s.get_priority_score(duration_minutes), 
+            reverse=True
+        )
+
+        return suitable_sources

@@ -5,15 +5,19 @@ Implements T026: Recorder orchestrator (FR-002, FR-007, FR-015, FR-020).
 
 import asyncio
 import logging
-from datetime import datetime
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from uuid import uuid4
 
 import numpy as np
 import soundfile as sf
+import boto3
+from botocore.exceptions import ClientError
 
 from ..collectors.kiwi_client import KiwiClient
+from ..collectors.websdr_client import WebSDRClient
 from ..collectors.sdr_manager import SDRManager
 from ..config import config
 from ..models import SessionLocal, RecordingSession
@@ -33,7 +37,32 @@ class Recorder:
         """
         self.active_sessions: Dict[str, RecordingSession] = {}
         self.kiwi_clients: Dict[str, KiwiClient] = {}
+        self.websdr_clients: Dict[str, WebSDRClient] = {}
         self.sdr_manager = sdr_manager or SDRManager()
+
+        # Initialize Tigris S3 client for cloud storage
+        self.s3_client = None
+        self.tigris_bucket = os.getenv('TIGRIS_BUCKET', 'cascade-iq-data')
+
+        # Initialize Tigris if credentials available
+        tigris_access_key = os.getenv('TIGRIS_ACCESS_KEY') or os.getenv('AWS_ACCESS_KEY_ID')
+        tigris_secret_key = os.getenv('TIGRIS_SECRET_KEY') or os.getenv('AWS_SECRET_ACCESS_KEY')
+
+        if tigris_access_key and tigris_secret_key:
+            try:
+                self.s3_client = boto3.client(
+                    's3',
+                    endpoint_url=os.getenv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev'),
+                    aws_access_key_id=tigris_access_key,
+                    aws_secret_access_key=tigris_secret_key,
+                    region_name=os.getenv('AWS_REGION', 'auto'),
+                )
+                logger.info(f"Tigris S3 client initialized for bucket: {self.tigris_bucket}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Tigris client: {e}")
+                logger.warning("Recordings will be stored locally only")
+        else:
+            logger.warning("Tigris credentials not found - recordings will be stored locally only")
 
     async def start_recording(
         self,
@@ -66,64 +95,116 @@ class Recorder:
         # Create database session record
         db = SessionLocal()
         try:
-            # Get or create KiwiSDR source
-            from ..models.kiwisdr_source import KiwiSDRSource
+            # Determine SDR type
+            is_websdr = "websdr" in kiwisdr_url.lower() or kiwisdr_url.startswith("http")
 
-            kiwi_source = (
-                db.query(KiwiSDRSource)
-                .filter_by(url=kiwisdr_url)
-                .first()
-            )
+            if is_websdr:
+                # Get or create WebSDR source
+                from ..models.websdr_source import WebSDRSource
 
-            if not kiwi_source:
-                kiwi_source = KiwiSDRSource(
-                    url=kiwisdr_url,
-                    name=kiwisdr_url.split(":")[0],
+                websdr_source = (
+                    db.query(WebSDRSource)
+                    .filter_by(url=kiwisdr_url)
+                    .first()
                 )
-                db.add(kiwi_source)
-                db.commit()
 
-            # Create recording session
-            session = RecordingSession(
-                session_id=session_id,
-                kiwisdr_id=kiwi_source.kiwisdr_id,
-                frequency_khz=frequency_khz,
-                bandwidth_khz=12.0,  # FR-020: 12 kHz windows
-                duration_seconds=duration_seconds,
-                band=band,
-                status="pending",
-            )
+                if not websdr_source:
+                    websdr_source = WebSDRSource(
+                        url=kiwisdr_url,
+                        name=kiwisdr_url.split("/")[2] if "/" in kiwisdr_url else kiwisdr_url,
+                    )
+                    db.add(websdr_source)
+                    db.commit()
+
+                # Create recording session with WebSDR
+                session = RecordingSession(
+                    session_id=session_id,
+                    websdr_id=websdr_source.websdr_id,
+                    frequency_khz=frequency_khz,
+                    bandwidth_khz=12.0,  # FR-020: 12 kHz windows
+                    duration_seconds=duration_seconds,
+                    band=band,
+                    status="pending",
+                )
+            else:
+                # Get or create KiwiSDR source
+                from ..models.kiwisdr_source import KiwiSDRSource
+
+                kiwi_source = (
+                    db.query(KiwiSDRSource)
+                    .filter_by(url=kiwisdr_url)
+                    .first()
+                )
+
+                if not kiwi_source:
+                    kiwi_source = KiwiSDRSource(
+                        url=kiwisdr_url,
+                        name=kiwisdr_url.split(":")[0],
+                    )
+                    db.add(kiwi_source)
+                    db.commit()
+
+                # Create recording session with KiwiSDR
+                session = RecordingSession(
+                    session_id=session_id,
+                    kiwisdr_id=kiwi_source.kiwisdr_id,
+                    frequency_khz=frequency_khz,
+                    bandwidth_khz=12.0,  # FR-020: 12 kHz windows
+                    duration_seconds=duration_seconds,
+                    band=band,
+                    status="pending",
+                )
+
             db.add(session)
             db.commit()
 
             # Store in active sessions
             self.active_sessions[session_id] = session
 
-            # Create KiwiSDR client
-            client = KiwiClient(kiwisdr_url)
-            self.kiwi_clients[session_id] = client
+            # Determine SDR type and create appropriate client
+            # Only treat as WebSDR if explicitly marked in URL
+            is_websdr = "websdr" in kiwisdr_url.lower()
 
-            # Connect to KiwiSDR
-            connected = await client.connect(
-                frequency_khz=frequency_khz,
-                mode="iq",
-                bandwidth_khz=12.0,
-            )
+            if is_websdr:
+                # Create WebSDR client
+                client = WebSDRClient(kiwisdr_url, session_id)
+                self.websdr_clients[session_id] = client
+
+                # Connect to WebSDR
+                connected = await client.connect(
+                    frequency_khz=frequency_khz,
+                    mode="iq",
+                    bandwidth_khz=12.0,
+                )
+            else:
+                # Create KiwiSDR client
+                client = KiwiClient(kiwisdr_url)
+                self.kiwi_clients[session_id] = client
+
+                # Connect to KiwiSDR
+                connected = await client.connect(
+                    frequency_khz=frequency_khz,
+                    mode="iq",
+                    bandwidth_khz=12.0,
+                )
 
             if not connected:
                 session.status = "failed"
-                session.error_message = "Failed to connect to KiwiSDR"
+                session.error_message = f"Failed to connect to {'WebSDR' if is_websdr else 'KiwiSDR'}"
                 db.commit()
                 raise ConnectionError(f"Failed to connect to {kiwisdr_url}")
 
             # Update session status
             session.status = "recording"
-            session.start_time = datetime.utcnow()
+            session.start_time = datetime.now(timezone.utc)
             db.commit()
 
-            # Start recording task
+            # Commit session to database before starting async task
+            db.commit()
+
+            # Start recording task (will create its own db session)
             asyncio.create_task(
-                self._record_and_save(session_id, duration_seconds, db)
+                self._record_and_save(session_id, duration_seconds)
             )
 
             return session_id
@@ -142,18 +223,36 @@ class Recorder:
         self,
         session_id: str,
         duration_seconds: int,
-        db,
     ):
         """Record and save IQ data (FR-007, FR-015).
 
         Args:
             session_id: Session ID
             duration_seconds: Recording duration
-            db: Database session
         """
+        # Create new database session for this async task
+        db = SessionLocal()
+
         try:
-            session = self.active_sessions[session_id]
-            client = self.kiwi_clients[session_id]
+            # Get session from active sessions (in-memory)
+            session = self.active_sessions.get(session_id)
+            if not session:
+                logger.error(f"Session {session_id} not found in active sessions")
+                return
+
+            # Reload from database to attach to this thread's session
+            session = db.query(RecordingSession).filter(
+                RecordingSession.session_id == session_id
+            ).first()
+
+            if not session:
+                logger.error(f"Session {session_id} not found in database")
+                return
+
+            client = self.kiwi_clients.get(session_id) or self.websdr_clients.get(session_id)
+            if not client:
+                logger.error(f"No client found for session {session_id}")
+                return
 
             # Record IQ data
             iq_data, metadata = await client.start_recording(
@@ -164,10 +263,16 @@ class Recorder:
             file_path = self._generate_file_path(session, metadata)
             await self._save_recording(iq_data, metadata, file_path)
 
+            # Upload to Tigris if configured
+            tigris_path = None
+            if self.s3_client:
+                tigris_path = await self._upload_to_tigris(file_path, session, metadata)
+
             # Update session record
-            session.end_time = datetime.utcnow()
+            session.end_time = datetime.now(timezone.utc)
             session.status = "completed"
             session.file_path = str(file_path)
+            session.tigris_path = tigris_path
             session.file_size_bytes = file_path.stat().st_size
             session.avg_snr_db = metadata.get("avg_snr_db")
             session.samples_received = len(iq_data)
@@ -178,14 +283,35 @@ class Recorder:
             else:
                 actual_duration_minutes = duration_seconds / 60.0
 
-            # Update SDR usage tracking (FR-008, FR-014) - CRITICAL!
-            kiwi_source = session.kiwisdr_source
-            if kiwi_source:
-                await self.sdr_manager.update_usage(kiwi_source, actual_duration_minutes)
-                logger.info(
-                    f"SDR {kiwi_source.url}: {actual_duration_minutes:.1f} min used, "
-                    f"{kiwi_source.remaining_daily_minutes:.1f} min remaining today"
-                )
+            # Update SDR usage tracking (FR-008, FR-014, FR-066) - CRITICAL!
+            # Handle both KiwiSDR and WebSDR sources
+            sdr_source = None
+            if hasattr(session, 'kiwisdr_source') and session.kiwisdr_source:
+                sdr_source = session.kiwisdr_source
+            elif hasattr(session, 'websdr_source') and session.websdr_source:
+                sdr_source = session.websdr_source
+
+            if sdr_source:
+                await self.sdr_manager.update_usage(sdr_source, actual_duration_minutes)
+
+                # Log remaining time based on type
+                from ..models import WebSDRSource
+                if isinstance(sdr_source, WebSDRSource):
+                    if sdr_source.daily_limit_minutes:
+                        remaining = sdr_source.daily_limit_minutes - sdr_source.daily_usage_minutes
+                        logger.info(
+                            f"WebSDR {sdr_source.url}: {actual_duration_minutes:.1f} min used, "
+                            f"{remaining:.1f} min remaining today"
+                        )
+                    else:
+                        logger.info(
+                            f"WebSDR {sdr_source.url}: {actual_duration_minutes:.1f} min used (unlimited)"
+                        )
+                else:
+                    logger.info(
+                        f"KiwiSDR {sdr_source.url}: {actual_duration_minutes:.1f} min used, "
+                        f"{sdr_source.remaining_daily_minutes:.1f} min remaining today"
+                    )
 
             db.commit()
             logger.info(f"Recording {session_id} completed: {file_path}")
@@ -195,20 +321,38 @@ class Recorder:
             session.status = "failed"
             session.error_message = str(e)
 
-            # Still track usage even on failure (FR-008)
+            # Still track usage even on failure (FR-008, FR-066)
             if session.start_time:
-                actual_duration_minutes = (datetime.utcnow() - session.start_time).total_seconds() / 60.0
-                kiwi_source = session.kiwisdr_source
-                if kiwi_source:
-                    await self.sdr_manager.update_usage(kiwi_source, actual_duration_minutes)
+                # Use timezone-aware datetime to match session.start_time
+                actual_duration_minutes = (datetime.now(timezone.utc) - session.start_time).total_seconds() / 60.0
+
+                # Handle both KiwiSDR and WebSDR sources
+                sdr_source = None
+                if hasattr(session, 'kiwisdr_source') and session.kiwisdr_source:
+                    sdr_source = session.kiwisdr_source
+                elif hasattr(session, 'websdr_source') and session.websdr_source:
+                    sdr_source = session.websdr_source
+
+                if sdr_source:
+                    await self.sdr_manager.update_usage(sdr_source, actual_duration_minutes)
                     logger.info(f"Tracked {actual_duration_minutes:.1f} min usage despite failure")
 
             db.commit()
         finally:
-            # Cleanup
+            # Cleanup clients
             if session_id in self.kiwi_clients:
                 self.kiwi_clients[session_id].disconnect()
                 del self.kiwi_clients[session_id]
+
+            if session_id in self.websdr_clients:
+                await self.websdr_clients[session_id].disconnect()
+                del self.websdr_clients[session_id]
+
+            if session_id in self.active_sessions:
+                del self.active_sessions[session_id]
+
+            # Close database session
+            db.close()
 
     def _generate_file_path(
         self,
@@ -241,11 +385,13 @@ class Recorder:
             location = f"_{session.kiwisdr_source.grid_square}"
 
         # Generate filename
+        # Convert UUID to string before slicing
+        session_id_str = str(session.session_id)
         filename = (
             f"{int(session.frequency_khz)}khz"
             f"_{timestamp.strftime('%H%M%S')}"
             f"{location}"
-            f"_{session.session_id[:8]}"
+            f"_{session_id_str[:8]}"
             ".flac"
         )
 
@@ -294,6 +440,71 @@ class Recorder:
 
         logger.info(f"Saved recording to {file_path}")
 
+    async def _upload_to_tigris(
+        self,
+        file_path: Path,
+        session: RecordingSession,
+        metadata: Dict[str, Any],
+    ) -> Optional[str]:
+        """Upload recording to Tigris S3.
+
+        Args:
+            file_path: Local file path
+            session: Recording session
+            metadata: Recording metadata
+
+        Returns:
+            Tigris object key if successful, None otherwise
+        """
+        try:
+            # Generate S3 key matching local path structure
+            timestamp = metadata["start_time"]
+            date_path = timestamp.strftime("%Y/%m/%d")
+
+            # Band or frequency-based organization
+            if session.band:
+                band_path = session.band
+            else:
+                band_path = f"{int(session.frequency_khz)}khz"
+
+            # Location component (grid square if available)
+            location = ""
+            if session.kiwisdr_source and session.kiwisdr_source.grid_square:
+                location = f"_{session.kiwisdr_source.grid_square}"
+
+            # S3 key structure: recordings/YYYY/MM/DD/band/filename
+            s3_key = f"recordings/{date_path}/{band_path}/{file_path.name}"
+
+            # Upload with metadata
+            with open(file_path, 'rb') as f:
+                self.s3_client.put_object(
+                    Bucket=self.tigris_bucket,
+                    Key=s3_key,
+                    Body=f,
+                    Metadata={
+                        'session_id': str(session.session_id),
+                        'frequency_khz': str(session.frequency_khz),
+                        'bandwidth_khz': str(session.bandwidth_khz),
+                        'sample_rate': str(session.sample_rate),
+                        'grid_square': session.kiwisdr_source.grid_square if session.kiwisdr_source else '',
+                        'gps_locked': str(session.gps_locked),
+                    }
+                )
+
+            logger.info(f"Uploaded recording to Tigris: {s3_key}")
+
+            # Optionally delete local file to save space (keep for now during testing)
+            # file_path.unlink()
+
+            return s3_key
+
+        except ClientError as e:
+            logger.error(f"Failed to upload to Tigris: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error uploading to Tigris: {e}")
+            return None
+
     async def stop_recording(self, session_id: str) -> Dict[str, Any]:
         """Stop an active recording.
 
@@ -317,7 +528,7 @@ class Recorder:
         db = SessionLocal()
         try:
             session.status = "stopped"
-            session.end_time = datetime.utcnow()
+            session.end_time = datetime.now(timezone.utc)
             db.commit()
 
             return {

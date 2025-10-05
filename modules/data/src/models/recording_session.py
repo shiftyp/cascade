@@ -37,12 +37,19 @@ class RecordingSession(Base):
         comment="Unique identifier for the session",
     )
 
-    # Foreign keys
+    # Foreign keys - one of these will be set
     kiwisdr_id = Column(
         PostgresUUID(as_uuid=True),
         ForeignKey("kiwisdr_sources.kiwisdr_id"),
-        nullable=False,
+        nullable=True,  # Now nullable since we might use WebSDR instead
         comment="Reference to KiwiSDR source",
+    )
+
+    websdr_id = Column(
+        PostgresUUID(as_uuid=True),
+        ForeignKey("websdr_sources.websdr_id"),
+        nullable=True,
+        comment="Reference to WebSDR source (FR-065)",
     )
 
     # Correlation support (FR-028)
@@ -176,6 +183,53 @@ class RecordingSession(Base):
         comment="Error message if failed",
     )
 
+    # Post-processing tracking
+    processing_status = Column(
+        String(20),
+        nullable=False,
+        default="unprocessed",
+        comment="Processing status: unprocessed, processing, processed, failed, skipped",
+    )
+
+    processing_version = Column(
+        Integer,
+        nullable=True,
+        comment="Version of processing pipeline applied (e.g., 1, 2, 3)",
+    )
+
+    processing_completed_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When processing was completed",
+    )
+
+    ft8_extracted = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="Whether FT8 signals have been extracted",
+    )
+
+    wspr_extracted = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="Whether WSPR signals have been extracted",
+    )
+
+    qrn_analyzed = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="Whether QRN analysis has been performed",
+    )
+
+    processing_metadata = Column(
+        Text,
+        nullable=True,
+        comment="JSON metadata from processing (e.g., signal counts, quality metrics)",
+    )
+
     # Metadata
     band = Column(
         String(10),
@@ -206,6 +260,7 @@ class RecordingSession(Base):
 
     # Relationships
     kiwisdr_source = relationship("KiwiSDRSource", back_populates="sessions")
+    websdr_source = relationship("WebSDRSource", back_populates="sessions")
     qrn_samples = relationship("QRNSample", back_populates="session")
     propagation_records = relationship("PropagationRecord", back_populates="session")
 

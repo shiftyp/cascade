@@ -118,6 +118,57 @@ class QueueManager:
         logger.debug(f"Pushed job {job_id} to {queue}")
         return job_id
 
+    async def push_job_delayed(
+        self,
+        queue: str,
+        job_data: Dict[str, Any],
+        delay_seconds: int = 5,
+    ) -> str:
+        """Push a job to the queue with a delay (using sorted set with future timestamp).
+
+        Args:
+            queue: Queue name
+            job_data: Job data dictionary
+            delay_seconds: Delay before job becomes available (seconds)
+
+        Returns:
+            Job ID
+        """
+        if not self.connected:
+            await self.connect()
+
+        # Generate job ID if not present
+        job_id = job_data.get("job_id", str(uuid4()))
+        job_data["job_id"] = job_id
+        job_data["queued_at"] = datetime.utcnow().isoformat()
+        job_data["delayed_until"] = (datetime.utcnow().timestamp() + delay_seconds)
+
+        # Serialize job
+        job_json = json.dumps(job_data)
+
+        # Add to delayed queue (sorted set with timestamp as score)
+        delayed_queue = f"{queue}:delayed"
+        await self.client.zadd(
+            delayed_queue,
+            {job_json: datetime.utcnow().timestamp() + delay_seconds}
+        )
+
+        # Track job status
+        await self.client.hset(
+            f"job:{job_id}",
+            mapping={
+                "status": "delayed",
+                "queue": queue,
+                "data": job_json,
+            },
+        )
+
+        # Set expiry for job tracking (7 days)
+        await self.client.expire(f"job:{job_id}", 604800)
+
+        logger.debug(f"Pushed job {job_id} to {queue} with {delay_seconds}s delay")
+        return job_id
+
     async def pop_job(
         self,
         queue: str,
@@ -134,6 +185,31 @@ class QueueManager:
         """
         if not self.connected:
             await self.connect()
+
+        # Check delayed queue first - move ready jobs to priority queue
+        delayed_queue = f"{queue}:delayed"
+        current_time = datetime.utcnow().timestamp()
+
+        # Get all jobs that are ready (score <= current_time)
+        ready_jobs = await self.client.zrangebyscore(
+            delayed_queue,
+            min=0,
+            max=current_time,
+            start=0,
+            num=10,  # Process up to 10 at a time
+        )
+
+        # Move ready jobs from delayed to priority queue
+        if ready_jobs:
+            for job_json in ready_jobs:
+                # Remove from delayed queue
+                await self.client.zrem(delayed_queue, job_json)
+                # Add to priority queue with high priority
+                await self.client.zadd(
+                    f"{queue}:priority",
+                    {job_json: -100}  # High priority for delayed jobs
+                )
+                logger.debug(f"Moved delayed job to priority queue")
 
         # Check priority queue first
         priority_queue = f"{queue}:priority"
