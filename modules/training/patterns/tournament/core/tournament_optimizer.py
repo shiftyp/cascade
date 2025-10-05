@@ -38,6 +38,15 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
     import os
     import numpy as np
     from pathlib import Path
+    import pickle
+    import sys
+
+    # Import pattern modules within the worker
+    patterns_parent_dir = Path(__file__).parent.parent.parent
+    if str(patterns_parent_dir) not in sys.path:
+        sys.path.insert(0, str(patterns_parent_dir))
+
+    from patterns.zadoff_chu import generate_zadoff_chu_pattern
 
     # This runs in a separate process
     # Set CPU affinity if on Windows/Linux
@@ -49,62 +58,172 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
     except:
         pass  # Affinity setting failed, continue anyway
 
-    # Simulate optimization (replace with actual pattern generation)
+    # Set random seed for reproducibility
     np.random.seed(seed)
-    # Start with a realistic initial score instead of infinity
-    best_score = -30.0 + np.random.normal(0, 2)  # Start around -30 dB with some variation
-    score_history = []
 
-    # Run for the specified number of iterations
-    # Update every 100 iterations or at least once
-    update_interval = min(100, max(1, iterations))
-    num_updates = max(1, iterations // update_interval)
+    # Create checkpoint directory for this trial
+    trial_checkpoint_dir = Path(checkpoint_dir) / f"trial_{trial_id}"
+    trial_checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    for i in range(num_updates):
-        # In real implementation, this would call optimize_pattern_two_phase
-        # Simulate gradual improvement with diminishing returns
-        improvement = np.random.exponential(0.5) * (1.0 / (i + 1))  # Smaller improvements over time
-        score = best_score - improvement
+    # Check for existing checkpoint
+    checkpoint_file = trial_checkpoint_dir / "latest_checkpoint.pkl"
+    if checkpoint_file.exists():
+        with open(checkpoint_file, 'rb') as f:
+            checkpoint = pickle.load(f)
+            pattern_set = checkpoint['pattern_set']
+            start_iteration = checkpoint['iteration']
+            best_score = checkpoint['best_score']
+            score_history = checkpoint['score_history']
+            temperature = checkpoint.get('temperature', 1.0)
+    else:
+        # Generate initial 128 frequency patterns (2-FSK binary sequences)
+        pattern_set = []
+        pattern_length = 50  # 50 symbols at 200 symbols/second = 250ms
 
-        # Add some noise to simulate realistic optimization
-        score += np.random.normal(0, 0.1)
+        # Use Zadoff-Chu sequences as base for first 31 patterns
+        for i in range(31):
+            freq_seq = generate_zadoff_chu_pattern(u=i, N=pattern_length)
+            pattern_set.append(freq_seq)
 
-        if score < best_score:
-            best_score = score
+        # Random patterns for the rest
+        for i in range(31, 128):
+            freq_seq = np.random.randint(0, 2, pattern_length, dtype=np.uint8)
+            pattern_set.append(freq_seq)
 
+        # Calculate initial score (max cross-correlation)
+        initial_scores = []
+        for i in range(len(pattern_set)):
+            for j in range(i + 1, len(pattern_set)):
+                # Normal correlation
+                corr = np.correlate(pattern_set[i].astype(np.float32) - 0.5,
+                                   pattern_set[j].astype(np.float32) - 0.5,
+                                   mode='valid')[0]
+                initial_scores.append(20 * np.log10(abs(corr) / pattern_length + 1e-10))
+
+                # Flip correlation (FSK inversion: 0↔1)
+                freq_inv = 1 - pattern_set[j]
+                corr_flip = np.correlate(pattern_set[i].astype(np.float32) - 0.5,
+                                        freq_inv.astype(np.float32) - 0.5,
+                                        mode='valid')[0]
+                initial_scores.append(20 * np.log10(abs(corr_flip) / pattern_length + 1e-10))
+
+        best_score = max(initial_scores) if initial_scores else -30.0
+        score_history = [best_score]
+        start_iteration = 0
+        temperature = 1.0
+
+    # Simulated annealing parameters
+    cooling_rate = 0.999
+    min_temperature = 0.01
+
+    # Run optimization iterations
+    iterations_per_update = max(100, iterations // 100)  # Update at most 100 times
+    current_iteration = start_iteration
+
+    while current_iteration < iterations:
+        batch_iterations = min(iterations_per_update, iterations - current_iteration)
+
+        # Optimize each pattern in the set
+        for _ in range(batch_iterations):
+            # Select random pattern to mutate
+            pattern_idx = np.random.randint(0, 128)
+            current_pattern = pattern_set[pattern_idx].copy()
+
+            # Mutate pattern (flip random bits based on temperature)
+            num_flips = max(1, int(temperature * 5))  # 1-5 bits based on temperature
+            flip_positions = np.random.choice(len(current_pattern), num_flips, replace=False)
+            mutated_pattern = current_pattern.copy()
+            mutated_pattern[flip_positions] = 1 - mutated_pattern[flip_positions]
+
+            # Calculate new correlations
+            new_scores = []
+            for j, other_pattern in enumerate(pattern_set):
+                if j != pattern_idx:
+                    # Normal correlation
+                    corr = np.correlate(mutated_pattern.astype(np.float32) - 0.5,
+                                       other_pattern.astype(np.float32) - 0.5,
+                                       mode='valid')[0]
+                    new_scores.append(20 * np.log10(abs(corr) / len(mutated_pattern) + 1e-10))
+
+                    # Flip correlation
+                    freq_inv = 1 - other_pattern
+                    corr_flip = np.correlate(mutated_pattern.astype(np.float32) - 0.5,
+                                            freq_inv.astype(np.float32) - 0.5,
+                                            mode='valid')[0]
+                    # Weight flip correlation slightly less (target -30 dB vs -37.5 dB)
+                    flip_score = 20 * np.log10(abs(corr_flip) / len(mutated_pattern) + 1e-10)
+                    new_scores.append(flip_score * 0.8)  # 80% weight for flip correlations
+
+            # Determine if we accept the mutation
+            if new_scores:
+                new_max_score = max(new_scores)
+
+                # Simulated annealing acceptance
+                if new_max_score < best_score:
+                    # Always accept improvements
+                    pattern_set[pattern_idx] = mutated_pattern
+                    best_score = new_max_score
+                elif temperature > min_temperature:
+                    # Sometimes accept worse solutions based on temperature
+                    delta = new_max_score - best_score
+                    probability = np.exp(-delta / temperature)
+                    if np.random.random() < probability:
+                        pattern_set[pattern_idx] = mutated_pattern
+
+            # Cool down
+            temperature = max(min_temperature, temperature * cooling_rate)
+            current_iteration += 1
+
+            if current_iteration >= iterations:
+                break
+
+        # Update score history
         score_history.append(best_score)
 
         # Save checkpoint periodically
-        current_iteration = (i + 1) * update_interval
-        if current_iteration % 10000 == 0 and checkpoint_dir:
-            trial_checkpoint_dir = Path(checkpoint_dir) / f"trial_{trial_id}"
-            trial_checkpoint_dir.mkdir(parents=True, exist_ok=True)
-            # In real implementation, save actual checkpoint
+        if current_iteration % 10000 == 0 or current_iteration >= iterations:
+            checkpoint = {
+                'pattern_set': pattern_set,
+                'iteration': current_iteration,
+                'best_score': best_score,
+                'score_history': score_history,
+                'temperature': temperature,
+                'trial_id': trial_id,
+                'seed': seed
+            }
+            with open(checkpoint_file, 'wb') as f:
+                pickle.dump(checkpoint, f)
 
-    # Calculate convergence rate (avoid NaN)
+    # Calculate convergence rate based on score improvement
     if len(score_history) > 10:
         recent_scores = score_history[-10:]
-        score_diff = abs(recent_scores[-1] - recent_scores[0])
-        # Avoid division by zero and NaN
-        if np.isfinite(score_diff) and np.isfinite(recent_scores[-1]):
-            convergence_rate = score_diff / 10
+        older_scores = score_history[-20:-10] if len(score_history) >= 20 else score_history[:10]
+
+        # Calculate average improvement
+        if all(np.isfinite(recent_scores)) and all(np.isfinite(older_scores)):
+            recent_avg = np.mean(recent_scores)
+            older_avg = np.mean(older_scores)
+            score_diff = older_avg - recent_avg  # Improvement (positive is good)
+            convergence_rate = max(0.001, abs(score_diff) / 10)
         else:
             convergence_rate = 0.001
     else:
-        convergence_rate = 0.001  # Small but non-zero
-
-    # Ensure convergence_rate is finite
-    if not np.isfinite(convergence_rate):
         convergence_rate = 0.001
+
+    # Save final pattern set
+    final_patterns_file = trial_checkpoint_dir / f"final_patterns_{current_iteration}.pkl"
+    with open(final_patterns_file, 'wb') as f:
+        pickle.dump(pattern_set, f)
 
     # Return results
     return {
         'trial_id': trial_id,
-        'iterations_run': iterations,
+        'iterations_run': current_iteration - start_iteration,
         'best_score': best_score,
-        'final_iteration': iterations,
+        'final_iteration': current_iteration,
         'convergence_rate': convergence_rate,
         'score_history': score_history[-100:],  # Last 100 scores
+        'patterns_file': str(final_patterns_file)
     }
 
 
@@ -325,6 +444,10 @@ class DynamicTournamentOptimizer:
         trial.convergence_rate = result['convergence_rate']
         trial.score_history.extend(result['score_history'])
 
+        # Store patterns file path if available
+        if 'patterns_file' in result:
+            trial.patterns_file = result['patterns_file']
+
         # Update global best
         if trial.best_score < self.global_best_score:
             self.global_best_score = trial.best_score
@@ -427,9 +550,29 @@ class DynamicTournamentOptimizer:
         self._generate_final_report()
 
         # Load and return best patterns
-        # In real implementation, load from checkpoint
-        # For now, return empty list as placeholder
-        return []
+        if hasattr(best_trial, 'patterns_file') and best_trial.patterns_file:
+            import pickle
+            try:
+                with open(best_trial.patterns_file, 'rb') as f:
+                    pattern_set = pickle.load(f)
+                    self.log_callback(f"\nLoaded {len(pattern_set)} patterns from best trial")
+                    return pattern_set
+            except Exception as e:
+                self.log_callback(f"Error loading patterns: {e}")
+                return []
+        else:
+            # Try to load from checkpoint directory
+            checkpoint_dir = self.checkpoint_dir / f"trial_{best_trial.trial_id}"
+            pattern_files = sorted(checkpoint_dir.glob("final_patterns_*.pkl"))
+            if pattern_files:
+                import pickle
+                with open(pattern_files[-1], 'rb') as f:
+                    pattern_set = pickle.load(f)
+                    self.log_callback(f"\nLoaded {len(pattern_set)} patterns from checkpoint")
+                    return pattern_set
+            else:
+                self.log_callback("No patterns file found")
+                return []
 
     def _generate_final_report(self):
         """Generate comprehensive final report"""

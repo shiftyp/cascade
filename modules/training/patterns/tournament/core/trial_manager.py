@@ -42,6 +42,7 @@ class Trial:
         self.status = 'pending'  # pending, running, paused, eliminated, completed
         self.iterations = 0
         self.patterns_complete = []
+        self.patterns_file = None  # Path to saved patterns
         self.start_time = None
         self.end_time = None
 
