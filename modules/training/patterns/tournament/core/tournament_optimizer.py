@@ -330,12 +330,17 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             current_time = time.time()
             if current_iteration % 1000 == 0 or (current_time - last_log_time) >= 10:
                 elapsed = current_time - start_time
-                iter_per_sec = (current_iteration - start_iteration) / elapsed if elapsed > 0 else 0
+                if elapsed > 0:
+                    iter_per_sec = (current_iteration - start_iteration) / elapsed
+                    speed_str = f"{iter_per_sec:.1f} iter/s"
+                else:
+                    speed_str = "N/A"
+
                 with open(debug_file_path, 'a') as f:
                     f.write(f"Progress: iteration {current_iteration}/{iterations}, "
                            f"best_score={best_score:.2f} dB, "
                            f"elapsed={elapsed:.1f}s, "
-                           f"speed={iter_per_sec:.1f} iter/s\n")
+                           f"speed={speed_str}\n")
                     f.flush()
                 last_log_time = current_time
 
@@ -375,14 +380,20 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             pickle.dump(pattern_set, f)
 
         total_elapsed = time.time() - start_time
+        iterations_done = current_iteration - start_iteration
+        avg_speed = iterations_done / total_elapsed if total_elapsed > 0 else float('inf')
+
         with open(debug_file_path, 'a') as f:
             f.write(f"\n=== WORKER COMPLETE ===\n")
             f.write(f"Final iteration: {current_iteration}\n")
-            f.write(f"Iterations completed: {current_iteration - start_iteration}\n")
+            f.write(f"Iterations completed: {iterations_done}\n")
             f.write(f"Final best score: {best_score:.2f} dB\n")
             f.write(f"Convergence rate: {convergence_rate:.6f}\n")
             f.write(f"Total time: {total_elapsed:.1f} seconds\n")
-            f.write(f"Average speed: {(current_iteration - start_iteration)/total_elapsed:.1f} iter/s\n")
+            if total_elapsed > 0:
+                f.write(f"Average speed: {avg_speed:.1f} iter/s\n")
+            else:
+                f.write(f"Average speed: N/A (completed instantly)\n")
             f.write(f"Patterns saved to: {final_patterns_file}\n")
             f.flush()
 
@@ -711,8 +722,9 @@ class DynamicTournamentOptimizer:
         self.compute_used += result['iterations_run']
 
         # Update progress
-        trial.progress = trial.iterations / (trial.compute_budget + trial.bonus_budget)
-        trial.calculate_eta(trial.compute_budget + trial.bonus_budget - trial.iterations)
+        total_budget = trial.compute_budget + trial.bonus_budget
+        trial.progress = trial.iterations / total_budget if total_budget > 0 else 1.0
+        trial.calculate_eta(max(0, total_budget - trial.iterations))
 
         # Log update
         self.log_callback(

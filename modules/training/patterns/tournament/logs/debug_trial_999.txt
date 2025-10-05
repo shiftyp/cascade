@@ -1,0 +1,42 @@
+=== WORKER START ===
+Trial ID: 999
+Process ID: 246554
+Working Directory: /workspaces/cascade/modules/training/patterns/tournament
+Python Path: ['', '/usr/local/python/3.12.1/lib/python312.zip', '/usr/local/python/3.12.1/lib/python3.12', '/usr/local/python/3.12.1/lib/python3.12/lib-dynload', '/home/codespace/.local/lib/python3.12/site-packages', '/usr/local/python/3.12.1/lib/python3.12/site-packages']
+Checkpoint dir: ./test
+Iterations: 0
+Seed: 42
+P-cores: None
+
+Importing psutil...
+Importing numpy...
+Importing pathlib...
+Importing pickle...
+All standard imports successful
+
+Patterns dir: /workspaces/cascade/modules/training/patterns
+sys.path before: ['', '/usr/local/python/3.12.1/lib/python312.zip', '/usr/local/python/3.12.1/lib/python3.12', '/usr/local/python/3.12.1/lib/python3.12/lib-dynload', '/home/codespace/.local/lib/python3.12/site-packages', '/usr/local/python/3.12.1/lib/python3.12/site-packages']
+sys.path after: ['/workspaces/cascade/modules/training/patterns', '', '/usr/local/python/3.12.1/lib/python312.zip', '/usr/local/python/3.12.1/lib/python3.12', '/usr/local/python/3.12.1/lib/python3.12/lib-dynload', '/home/codespace/.local/lib/python3.12/site-packages', '/usr/local/python/3.12.1/lib/python3.12/site-packages']
+About to import zadoff_chu...
+Successfully imported zadoff_chu
+Set random seed to 42
+Created checkpoint dir: test/trial_999
+No checkpoint found, generating initial patterns
+Generating 128 patterns of length 32
+Generated 128 patterns
+Calculating initial correlations...
+Initial best score: -5.10 dB
+Starting optimization from iteration 0
+Starting optimization loop:
+  Iterations per update: 100
+  Target iterations: 0
+  Mutations per iteration: 10
+
+=== WORKER COMPLETE ===
+Final iteration: 0
+Iterations completed: 0
+Final best score: -5.10 dB
+Convergence rate: 0.001000
+Total time: 0.0 seconds
+Average speed: 0.0 iter/s
+Patterns saved to: test/trial_999/final_patterns_0.pkl
