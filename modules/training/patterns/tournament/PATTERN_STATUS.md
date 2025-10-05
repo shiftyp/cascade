@@ -6,10 +6,11 @@ Optimized pattern generator for CASCADE HF modem with QR-like erasure coding:
 
 ### Pattern Structure
 - **Total**: 16 patterns (reused across 67 frequency pairs = 1,072 logical channels)
-- **Length**: 512 symbols (2.56 seconds at 200 symbols/second)
+- **Core**: 128 bits per pattern (the actual pattern signature)
+- **Expanded**: 512 symbols (2.56 seconds at 200 symbols/second) via repetition map
 - **Modulation**: 2-FSK (binary frequency sequences)
-- **Repetition Map**: 128 unique data positions, each repeated 4x
-- **Erasure Tolerance**: 37.5% (need only 320 of 512 symbols to decode)
+- **Repetition Map**: Each of 128 core bits repeated 4x across 512 symbols
+- **Erasure Tolerance**: 37.5% (need only 320 of 512 symbols to recover via majority vote)
 
 ### Orthogonality Targets
 - **Normal**: -30.0 dB (Welch bound: -30.4 dB)
@@ -24,32 +25,40 @@ Optimized pattern generator for CASCADE HF modem with QR-like erasure coding:
 - **Multi-pattern**: Up to 3,000 bps with 8 patterns
 
 ### Optimization Process
-1. **Initial patterns**: Diverse initialization (sparse, dense, alternating, random)
-2. **Mutation**: 2-100 bit flips based on temperature
-3. **Triple evaluation**:
+1. **Initial patterns**: 16 random 128-bit cores, expanded to 512 via repetition map
+2. **Mutation**: Mutate 128 core bits (19 → 1 bit over time)
+3. **Expansion**: Apply repetition map to get 512-symbol pattern
+4. **Triple evaluation** on expanded patterns:
    - Normal correlation: Full cross-correlation (1,023 shifts)
    - Flip correlation: Inverted pattern correlation
    - Erasure correlation: 5 trials with 37.5% random dropout
-4. **Global update**: Every 10 iterations across all 120 pattern pairs
+5. **Accept**: Only if improved (greedy hill-climbing)
+6. **Global update**: Every 10 iterations across all 120 pattern pairs
 
 ### Execution Schedule
-- **First run**: 50,000 iterations minimum per trial
-- **Subsequent**: 10,000 iteration evaluation intervals
-- **Total budget**: 3.2M iterations across 8 trials
+- **First run**: 200,000 iterations minimum per trial
+- **Subsequent**: 50,000 iteration evaluation intervals
+- **Total budget**: 4.8M iterations across 8 trials (600k avg per trial)
 - **68x faster** than 128-pattern approach (120 pairs vs 8,128 pairs)
+- **Smaller search space**: 128 core bits vs 512 independent bits
 
 ### Computational Complexity
-- **Per iteration**: ~0.02 seconds (50 iter/sec)
-- **50k iterations**: ~17 minutes per trial
-- **3.2M total**: ~18 hours on 8 P-cores
+- **Per iteration**: ~0.003 seconds (300-400 iter/sec)
+  - Mutate 128 core bits
+  - Expand to 512 using repetition map
+  - Correlate 15 other expanded patterns
+  - Every 10th: full pairwise eval (120 pairs)
+- **200k iterations**: ~10-13 minutes per trial
+- **4.8M total**: ~24-32 hours on 8 P-cores
 
 ### Output Format
 ```python
 {
-    'patterns': [array([0,1,1,0,...]), ...],  # 16 binary patterns
-    'repetition_maps': [array([45,12,78,...]), ...],  # Data position indices (0-127)
+    'patterns': [array([0,1,1,0,...]), ...],  # 16 × 128 core patterns
+    'repetition_maps': [array([45,12,78,...]), ...],  # 16 × 512 expansion maps (same for all)
     'num_patterns': 16,
-    'pattern_length': 512,
+    'pattern_core_length': 128,  # Core bits
+    'pattern_full_length': 512,  # After expansion
     'unique_data_positions': 128,
     'redundancy_factor': 4,
     'best_score': -28.5  # dB
@@ -70,21 +79,27 @@ import pickle
 with open('patterns_20251005.pkl', 'rb') as f:
     data = pickle.load(f)
 
-patterns = data['patterns']
-repetition_maps = data['repetition_maps']
+pattern_cores = data['patterns']  # 16 × 128 core patterns
+repetition_maps = data['repetition_maps']  # 16 × 512 expansion maps
 
 # Encode data on pattern 0
-pattern = patterns[0]  # 512 binary symbols (2-FSK tones)
-rep_map = repetition_maps[0]  # Which symbols carry same data
+pattern_core = pattern_cores[0]  # 128 core bits (pattern signature)
+rep_map = repetition_maps[0]  # Expansion map (0-127 indices)
+
+# Expand to full 512-symbol pattern
+pattern_full = pattern_core[rep_map]  # 512 symbols for transmission
 
 user_data = [1, 0, 1, 1, ...]  # 128 bits of user data
 iq_symbols = []
 
-for i, fsk_symbol in enumerate(pattern):
-    data_index = rep_map[i]  # Which data bit (0-127)
+for i, fsk_symbol in enumerate(pattern_full):
+    data_index = rep_map[i]  # Which data position (0-127)
     iq_value = user_data[data_index]  # Get the data bit
-    # Modulate: fsk_symbol determines tone, iq_value determines phase/amplitude
+    # Modulate: fsk_symbol determines 2-FSK tone, iq_value determines IQ phase/amplitude
     iq_symbols.append(modulate(fsk_symbol, iq_value))
+
+# Note: Symbols with same rep_map[i] carry same data bit (redundancy)
+# This enables majority vote decoding with 37.5% erasures
 ```
 
 ## Next Steps

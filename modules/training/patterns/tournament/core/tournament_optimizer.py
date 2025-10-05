@@ -194,49 +194,57 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write(f"Target: -30 dB normal, -28 dB flip, -27 dB with erasure\n")
                 f.flush()
 
-            # Generate truly random, diverse binary patterns
-            # Random patterns of length 512 should start at -25 to -27 dB
+            # First, create repetition map (same for all patterns)
+            # This defines which symbols repeat (QR-like structure)
+            repetition_map = np.zeros(pattern_length, dtype=np.uint8)
+
+            # Create interleaved repetition: 128 positions, each repeated 4x
+            for data_pos in range(128):
+                repetition_map[data_pos * 4] = data_pos
+                repetition_map[data_pos * 4 + 1] = data_pos
+                repetition_map[data_pos * 4 + 2] = data_pos
+                repetition_map[data_pos * 4 + 3] = data_pos
+
+            # Shuffle to spread repetitions (burst error resistance)
+            shuffle_groups = np.arange(128)
+            np.random.shuffle(shuffle_groups)
+            shuffled_map = np.zeros(pattern_length, dtype=np.uint8)
+            for idx, group in enumerate(shuffle_groups):
+                shuffled_map[idx * 4:(idx + 1) * 4] = [group] * 4
+
+            repetition_map = shuffled_map
+
+            with open(debug_file_path, 'a') as f:
+                f.write(f"Created repetition map: 128 positions × 4 repetitions\n")
+                f.flush()
+
+            # Generate patterns using 128 core bits + expansion
+            pattern_core_length = 128  # Only optimize 128 bits
+
             for i in range(num_patterns):
-                # Use unique seed for each pattern to ensure diversity
-                pattern_seed = seed + i * 7919  # Use large prime for better distribution
+                # Use unique seed for each pattern
+                pattern_seed = seed + i * 7919
                 np.random.seed(pattern_seed)
 
-                # Generate completely random binary pattern
-                # This ensures low initial correlation (expected -25 to -27 dB)
-                pattern = np.random.randint(0, 2, pattern_length, dtype=np.uint8)
+                # Generate 128 core bits (the actual pattern)
+                pattern_core = np.random.randint(0, 2, pattern_core_length, dtype=np.uint8)
 
-                pattern_set.append(pattern)
+                # Expand to 512 symbols using repetition map
+                # This creates the QR-like structure
+                pattern_full = pattern_core[repetition_map]
 
-                # 2. Generate repetition map (same for all patterns initially)
-                # 128 unique data positions, each repeated 4 times
-                repetition_map = np.zeros(pattern_length, dtype=np.uint8)
+                # Store the core pattern (what we'll mutate)
+                pattern_set.append(pattern_core)
 
-                # Create interleaved repetition for burst error resistance
-                # Each of 128 data positions appears 4 times, spread across pattern
-                for data_pos in range(128):
-                    # Spread the 4 repetitions evenly
-                    repetition_map[data_pos * 4] = data_pos
-                    repetition_map[data_pos * 4 + 1] = data_pos
-                    repetition_map[data_pos * 4 + 2] = data_pos
-                    repetition_map[data_pos * 4 + 3] = data_pos
-
-                # Shuffle to spread repetitions (maintains which symbols are repeated together)
-                # This provides better burst error resistance
-                shuffle_groups = np.arange(128)
-                np.random.shuffle(shuffle_groups)
-                shuffled_map = np.zeros(pattern_length, dtype=np.uint8)
-                for idx, group in enumerate(shuffle_groups):
-                    shuffled_map[idx * 4:(idx + 1) * 4] = [group] * 4
-
-                repetition_maps.append(shuffled_map)
+                # All patterns use the same repetition map for consistency
+                repetition_maps.append(repetition_map.copy())
 
             with open(debug_file_path, 'a') as f:
                 f.write(f"Generated {len(pattern_set)} patterns\n")
                 f.write("Calculating initial correlations...\n")
                 f.flush()
 
-            # Calculate initial scores (normal, flip, and erasure orthogonality)
-            # Convert binary (0/1) to bipolar (±1) for proper correlation
+            # Calculate initial scores on EXPANDED patterns
             max_normal_corr = -np.inf
             max_flip_corr = -np.inf
             max_erasure_corr = -np.inf
@@ -263,9 +271,13 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
             for i in range(num_patterns):
                 for j in range(i + 1, num_patterns):
+                    # Expand core patterns to full length using repetition map
+                    pattern_i_full = pattern_set[i][repetition_map]
+                    pattern_j_full = pattern_set[j][repetition_map]
+
                     # Convert to ±1 representation
-                    pattern_i = 2 * pattern_set[i].astype(np.float32) - 1
-                    pattern_j = 2 * pattern_set[j].astype(np.float32) - 1
+                    pattern_i = 2 * pattern_i_full.astype(np.float32) - 1
+                    pattern_j = 2 * pattern_j_full.astype(np.float32) - 1
 
                     # 1. Normal correlation with all time shifts
                     xcorr_normal = np.correlate(pattern_i, pattern_j, mode='full')
@@ -305,9 +317,9 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write(f"Starting optimization from iteration {start_iteration}\n")
                 f.flush()
     
-        # Mutation intensity (starts high, decreases over time for fine-tuning)
-        initial_mutation_rate = 0.15  # 15% of bits
-        final_mutation_rate = 0.01    # 1% of bits
+        # Mutation intensity for 128 core bits (starts high, decreases over time)
+        initial_mutation_rate = 0.15  # 15% of 128 bits = ~19 bits
+        final_mutation_rate = 0.01    # 1% of 128 bits = ~1 bit
     
         # Run optimization iterations
         # Return results more frequently for live dashboard updates (every 10k iterations)
@@ -318,8 +330,10 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             f.write(f"Starting optimization loop:\n")
             f.write(f"  Iterations per update: {iterations_per_update}\n")
             f.write(f"  Target iterations: {iterations}\n")
-            f.write(f"  Initial mutation rate: {initial_mutation_rate:.1%} ({int(initial_mutation_rate * pattern_length)} bits)\n")
-            f.write(f"  Final mutation rate: {final_mutation_rate:.1%} ({int(final_mutation_rate * pattern_length)} bits)\n")
+            f.write(f"  Core pattern length: {pattern_core_length} bits\n")
+            f.write(f"  Expanded length: {pattern_length} symbols (via repetition map)\n")
+            f.write(f"  Initial mutation: {initial_mutation_rate:.1%} ({int(initial_mutation_rate * pattern_core_length)} core bits)\n")
+            f.write(f"  Final mutation: {final_mutation_rate:.1%} ({int(final_mutation_rate * pattern_core_length)} core bits)\n")
             f.flush()
 
         import time
@@ -332,34 +346,41 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             # Optimize each pattern in the set
             for iter_count in range(batch_iterations):
                 # Select random pattern to mutate
-                pattern_idx = np.random.randint(0, num_patterns)  # Only 16 patterns now
-                original_pattern = pattern_set[pattern_idx].copy()
+                pattern_idx = np.random.randint(0, num_patterns)
+                original_core = pattern_set[pattern_idx].copy()  # 128 core bits
 
                 # Mutation with adaptive intensity (large changes early, fine-tuning later)
-                mutated_pattern = original_pattern.copy()
+                mutated_core = original_core.copy()
 
                 # Calculate current mutation rate based on progress
                 progress = (current_iteration - start_iteration) / iterations
                 mutation_rate = initial_mutation_rate * (1 - progress) + final_mutation_rate * progress
 
-                # Number of bits to flip (based on mutation rate)
-                num_flips = max(1, int(mutation_rate * pattern_length))
+                # Number of CORE bits to flip (based on 128, not 512)
+                num_flips = max(1, int(mutation_rate * pattern_core_length))
 
-                # Randomly flip bits
-                flip_positions = np.random.choice(pattern_length, num_flips, replace=False)
-                mutated_pattern[flip_positions] = 1 - mutated_pattern[flip_positions]
+                # Randomly flip core bits
+                flip_positions = np.random.choice(pattern_core_length, num_flips, replace=False)
+                mutated_core[flip_positions] = 1 - mutated_core[flip_positions]
+
+                # Expand both original and mutated to 512 for evaluation
+                original_full = original_core[repetition_map]
+                mutated_full = mutated_core[repetition_map]
 
                 # Calculate correlations for the mutated pattern (all three types)
+                # Test on EXPANDED patterns (512 symbols)
                 max_normal_new = -100.0
                 max_flip_new = -100.0
                 max_erasure_new = -100.0
 
-                # Convert to ±1
-                pattern_mut = 2 * mutated_pattern.astype(np.float32) - 1
+                # Convert mutated expanded pattern to ±1
+                pattern_mut = 2 * mutated_full.astype(np.float32) - 1
 
                 for j in range(num_patterns):
                     if j != pattern_idx:
-                        pattern_j = 2 * pattern_set[j].astype(np.float32) - 1
+                        # Expand pattern j and convert to ±1
+                        pattern_j_full = pattern_set[j][repetition_map]
+                        pattern_j = 2 * pattern_j_full.astype(np.float32) - 1
 
                         # Normal correlation
                         xcorr_normal = np.correlate(pattern_mut, pattern_j, mode='full')
@@ -384,11 +405,13 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 max_normal_old = -100.0
                 max_flip_old = -100.0
                 max_erasure_old = -100.0
-                pattern_old = 2 * original_pattern.astype(np.float32) - 1
+                pattern_old = 2 * original_full.astype(np.float32) - 1
 
                 for j in range(num_patterns):
                     if j != pattern_idx:
-                        pattern_j = 2 * pattern_set[j].astype(np.float32) - 1
+                        # Expand pattern j and convert to ±1
+                        pattern_j_full = pattern_set[j][repetition_map]
+                        pattern_j = 2 * pattern_j_full.astype(np.float32) - 1
 
                         # Normal correlation
                         xcorr_normal = np.correlate(pattern_old, pattern_j, mode='full')
@@ -412,7 +435,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 # Keep mutation ONLY if it improves orthogonality
                 # Lower (more negative) correlation is better
                 if max_correlation_new < max_correlation_old:
-                    pattern_set[pattern_idx] = mutated_pattern
+                    pattern_set[pattern_idx] = mutated_core  # Update core pattern
 
                 # Update global best score periodically (every 10 iterations for accuracy)
                 # by checking the actual worst case across ALL pattern pairs
@@ -423,8 +446,13 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
                     for i in range(num_patterns):
                         for j in range(i + 1, num_patterns):
-                            pi = 2 * pattern_set[i].astype(np.float32) - 1
-                            pj = 2 * pattern_set[j].astype(np.float32) - 1
+                            # Expand core patterns to full 512 symbols
+                            pi_full = pattern_set[i][repetition_map]
+                            pj_full = pattern_set[j][repetition_map]
+
+                            # Convert to ±1
+                            pi = 2 * pi_full.astype(np.float32) - 1
+                            pj = 2 * pj_full.astype(np.float32) - 1
 
                             # Normal correlation
                             corr = np.correlate(pi, pj, mode='full')
@@ -515,10 +543,11 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         # Save final pattern set with repetition maps
         final_patterns_file = trial_checkpoint_dir / f"final_patterns_{current_iteration}.pkl"
         final_data = {
-            'patterns': pattern_set,
-            'repetition_maps': repetition_maps,
+            'patterns': pattern_set,  # 16 × 128 core patterns
+            'repetition_maps': repetition_maps,  # 16 × 512 expansion maps (same for all)
             'num_patterns': len(pattern_set),
-            'pattern_length': len(pattern_set[0]) if pattern_set else 0,
+            'pattern_core_length': len(pattern_set[0]) if pattern_set else 0,  # 128
+            'pattern_full_length': 512,  # After expansion
             'unique_data_positions': 128,
             'redundancy_factor': 4,
             'best_score': best_score,
