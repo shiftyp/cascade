@@ -17,15 +17,8 @@ from datetime import datetime
 from .trial_manager import Trial
 from .elimination_strategy import EliminationStrategy, EliminationConfig
 
-# Import pattern generation functions from parent module
-import sys
-patterns_parent_dir = Path(__file__).parent.parent.parent.parent
-if str(patterns_parent_dir) not in sys.path:
-    sys.path.insert(0, str(patterns_parent_dir))
-
-import patterns
-from patterns import Pattern, generate_pattern_set
-from patterns.optimizer import optimize_pattern_two_phase
+# Pattern generation imports moved to worker function to avoid
+# print statements during module load that corrupt Rich UI
 
 
 def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
@@ -42,11 +35,17 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
     import sys
 
     # Import pattern modules within the worker
+    # Suppress any print statements during import to avoid corrupting Rich UI
+    import io
+    import contextlib
+
     patterns_parent_dir = Path(__file__).parent.parent.parent
     if str(patterns_parent_dir) not in sys.path:
         sys.path.insert(0, str(patterns_parent_dir))
 
-    from patterns.zadoff_chu import generate_zadoff_chu_pattern
+    # Redirect stdout during import to prevent print statements from corrupting Rich UI
+    with contextlib.redirect_stdout(io.StringIO()):
+        from patterns.zadoff_chu import generate_zadoff_chu_pattern
 
     # This runs in a separate process
     # Set CPU affinity if on Windows/Linux
@@ -289,7 +288,7 @@ class DynamicTournamentOptimizer:
         start_core = (trial_id * cores_per_trial) % 8
         return list(range(start_core, min(start_core + cores_per_trial, 8)))
 
-    def run_tournament(self) -> List[Pattern]:
+    def run_tournament(self) -> List[np.ndarray]:
         """Run the tournament optimization"""
         self.start_time = datetime.now()
         self.initialize_trials()
@@ -532,7 +531,7 @@ class DynamicTournamentOptimizer:
 
         return False
 
-    def _finalize_tournament(self) -> List[Pattern]:
+    def _finalize_tournament(self) -> List[np.ndarray]:
         """Finalize tournament and return best patterns"""
         self.log_callback("\n" + "=" * 60)
         self.log_callback("Tournament Complete!")
