@@ -61,7 +61,8 @@ python generate_patterns_tournament.py --config config/tournament.yaml
 python generate_patterns_tournament.py \
     --trials 8 \
     --budget 2000000 \
-    --flip-weight 0.6 \
+    --pattern-count 16 \
+    --pattern-length 512 \
     --aggressive-elimination
 ```
 
