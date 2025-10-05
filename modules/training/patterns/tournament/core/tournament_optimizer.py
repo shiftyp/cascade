@@ -169,7 +169,6 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 start_iteration = checkpoint['iteration']
                 best_score = checkpoint['best_score']
                 score_history = checkpoint['score_history']
-                temperature = checkpoint.get('temperature', 1.0)
         else:
             with open(debug_file_path, 'a') as f:
                 f.write("No checkpoint found, generating initial patterns\n")
@@ -296,7 +295,6 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             best_score = max(max_normal_corr, max_flip_corr, max_erasure_corr)
             score_history = [best_score]
             start_iteration = 0
-            temperature = 1.0
 
             with open(debug_file_path, 'a') as f:
                 f.write(f"Initial orthogonality:\n")
@@ -307,21 +305,21 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write(f"Starting optimization from iteration {start_iteration}\n")
                 f.flush()
     
-        # Simulated annealing parameters
-        cooling_rate = 0.999
-        min_temperature = 0.01
+        # Mutation intensity (starts high, decreases over time for fine-tuning)
+        initial_mutation_rate = 0.15  # 15% of bits
+        final_mutation_rate = 0.01    # 1% of bits
     
         # Run optimization iterations
         # Return results more frequently for live dashboard updates (every 10k iterations)
         iterations_per_update = min(10000, iterations // 5)  # Update at least 5 times, every 10k max
         current_iteration = start_iteration
-        mutations_per_iteration = 10  # Test multiple mutations per iteration for better optimization
 
         with open(debug_file_path, 'a') as f:
             f.write(f"Starting optimization loop:\n")
             f.write(f"  Iterations per update: {iterations_per_update}\n")
             f.write(f"  Target iterations: {iterations}\n")
-            f.write(f"  Mutations per iteration: {mutations_per_iteration}\n")
+            f.write(f"  Initial mutation rate: {initial_mutation_rate:.1%} ({int(initial_mutation_rate * pattern_length)} bits)\n")
+            f.write(f"  Final mutation rate: {final_mutation_rate:.1%} ({int(final_mutation_rate * pattern_length)} bits)\n")
             f.flush()
 
         import time
@@ -337,19 +335,15 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 pattern_idx = np.random.randint(0, num_patterns)  # Only 16 patterns now
                 original_pattern = pattern_set[pattern_idx].copy()
 
-                # Simple mutation for binary patterns
+                # Mutation with adaptive intensity (large changes early, fine-tuning later)
                 mutated_pattern = original_pattern.copy()
 
-                # Temperature-based mutation intensity
-                if temperature > 0.8:
-                    # High temperature: larger changes
-                    num_flips = max(20, min(100, int(temperature * 120)))
-                elif temperature > 0.4:
-                    # Medium temperature: moderate changes
-                    num_flips = max(10, min(50, int(temperature * 60)))
-                else:
-                    # Low temperature: fine tuning
-                    num_flips = max(2, min(20, int(temperature * 30)))
+                # Calculate current mutation rate based on progress
+                progress = (current_iteration - start_iteration) / iterations
+                mutation_rate = initial_mutation_rate * (1 - progress) + final_mutation_rate * progress
+
+                # Number of bits to flip (based on mutation rate)
+                num_flips = max(1, int(mutation_rate * pattern_length))
 
                 # Randomly flip bits
                 flip_positions = np.random.choice(pattern_length, num_flips, replace=False)
@@ -415,10 +409,9 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 # Combined score for original: worst-case across all criteria
                 max_correlation_old = max(max_normal_old, max_flip_old, max_erasure_old)
 
-                # Decide whether to keep mutation
-                # Accept if the mutated pattern has lower worst-case correlation than original
+                # Keep mutation ONLY if it improves orthogonality
+                # Lower (more negative) correlation is better
                 if max_correlation_new < max_correlation_old:
-                    # Improvement! Keep the mutation
                     pattern_set[pattern_idx] = mutated_pattern
 
                 # Update global best score periodically (every 10 iterations for accuracy)
@@ -466,15 +459,6 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                                f"Best={best_score:.2f} dB\n")
                         f.flush()
 
-                elif temperature > min_temperature:
-                    # Sometimes accept worse solutions based on temperature
-                    delta = max_correlation_new - max_correlation_old
-                    probability = np.exp(-delta / temperature)
-                    if np.random.random() < probability:
-                        pattern_set[pattern_idx] = mutated_pattern
-
-                # Cool down
-                temperature = max(min_temperature, temperature * cooling_rate)
                 current_iteration += 1
 
                 if current_iteration >= iterations:
@@ -506,7 +490,6 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     'iteration': current_iteration,
                     'best_score': best_score,
                     'score_history': score_history,
-                    'temperature': temperature,
                     'trial_id': trial_id,
                     'seed': seed
                 }
