@@ -217,15 +217,15 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             # This defines which symbols repeat (QR-like structure)
             repetition_map = np.zeros(pattern_length, dtype=np.uint8)
 
-            # Create interleaved repetition: 128 positions, each repeated 4x
-            for data_pos in range(128):
+            # Create interleaved repetition: pattern_core_length positions, each repeated 4x
+            for data_pos in range(pattern_core_length):
                 repetition_map[data_pos * 4] = data_pos
                 repetition_map[data_pos * 4 + 1] = data_pos
                 repetition_map[data_pos * 4 + 2] = data_pos
                 repetition_map[data_pos * 4 + 3] = data_pos
 
             # Shuffle to spread repetitions (burst error resistance)
-            shuffle_groups = np.arange(128)
+            shuffle_groups = np.arange(pattern_core_length)
             np.random.shuffle(shuffle_groups)
             shuffled_map = np.zeros(pattern_length, dtype=np.uint8)
             for idx, group in enumerate(shuffle_groups):
@@ -234,11 +234,11 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             repetition_map = shuffled_map
 
             with open(debug_file_path, 'a') as f:
-                f.write(f"Created repetition map: 128 positions × 4 repetitions\n")
+                f.write(f"Created repetition map: {pattern_core_length} positions × 4 repetitions\n")
                 f.flush()
 
             # GENETIC ALGORITHM SETUP
-            pattern_core_length = 128  # Core pattern bits
+            # pattern_core_length already calculated above (pattern_length // 4)
             population_size = 32  # Number of pattern sets in population
             num_elites = 4  # Top performers preserved unchanged
 
