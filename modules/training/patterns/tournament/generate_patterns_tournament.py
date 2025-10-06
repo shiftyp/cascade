@@ -141,6 +141,7 @@ class TournamentRunner:
         )
 
         # Initialize optimizer
+        pattern_config = self.config.get('pattern', {})
         self.optimizer = DynamicTournamentOptimizer(
             total_compute_budget=tournament_config.get('total_compute_budget', 2_000_000),
             num_initial_trials=tournament_config.get('initial_trials', 8),
@@ -148,7 +149,9 @@ class TournamentRunner:
             eval_interval=tournament_config.get('evaluation_interval', 10_000),
             checkpoint_dir=checkpoint_dir,
             log_callback=self.log_message,
-            execution_mode=hardware_config.get('execution_mode', 'auto')
+            execution_mode=hardware_config.get('execution_mode', 'auto'),
+            num_patterns=pattern_config.get('count', 16),
+            pattern_length=pattern_config.get('length', 512)
         )
 
         # Initialize dashboard

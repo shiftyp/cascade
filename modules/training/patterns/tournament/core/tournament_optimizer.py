@@ -28,10 +28,15 @@ def simple_test_worker(x: int) -> int:
 
 
 def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
-                           checkpoint_dir: str, p_cores: List[int] = None) -> Dict[str, Any]:
+                           checkpoint_dir: str, p_cores: List[int] = None,
+                           num_patterns: int = 16, pattern_length: int = 512) -> Dict[str, Any]:
     """
     Standalone function to run a single trial in a subprocess.
     This must be a module-level function to be picklable.
+
+    Args:
+        num_patterns: Number of patterns to generate (default 16)
+        pattern_length: Symbols per pattern after expansion (default 512)
     """
     # Immediate debug output - use simple file operations to ensure it works
     import os
@@ -188,25 +193,24 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write("No checkpoint found, generating initial patterns\n")
                 f.flush()
 
-            # Generate 16 patterns with 512 symbols and repetition maps
+            # Use passed parameters for pattern generation
+            pattern_core_length = pattern_length // 4  # Core is 1/4 of full (4x redundancy)
             pattern_set = []
             repetition_maps = []
-            pattern_length = 512  # 2.56 seconds at 200 sym/s (5ms per symbol)
-            pattern_core_length = 128  # Core pattern bits (expanded to 512 via repetition)
-            num_patterns = 16  # Only 16 patterns needed!
 
-            # With 512 symbols and 37.5% erasure tolerance:
-            # Need 320 symbols minimum to recognize (512 * 0.625)
-            # 128 unique data positions, each repeated 4 times
-            # Welch bound for 16 patterns: sqrt(15/511) ≈ 0.171, or -30.4 dB (achievable!)
+            # Calculate Welch bound for this configuration
+            min_symbols_needed = int(pattern_length * 0.625)  # 37.5% erasure tolerance
+            duration_sec = pattern_length * 0.005  # At 200 symbols/sec
+            welch_bound_ratio = np.sqrt((num_patterns - 1) / (pattern_length - 1))
+            welch_bound_db = 20 * np.log10(welch_bound_ratio)
 
             with open(debug_file_path, 'a') as f:
-                f.write(f"Generating {num_patterns} patterns with repetition maps\n")
-                f.write(f"Pattern length: {pattern_length} symbols (2.56 sec)\n")
-                f.write(f"Data positions: 128 unique, 4x redundancy\n")
-                f.write(f"Erasure tolerance: 37.5% (need 320 of 512 symbols)\n")
-                f.write(f"Welch bound: -30.4 dB (theoretical limit)\n")
-                f.write(f"Target: -30 dB normal, -28 dB flip, -27 dB with erasure\n")
+                f.write(f"Pattern configuration:\n")
+                f.write(f"  Number of patterns: {num_patterns}\n")
+                f.write(f"  Pattern length: {pattern_length} symbols ({duration_sec:.2f} sec)\n")
+                f.write(f"  Core length: {pattern_core_length} bits (4x redundancy)\n")
+                f.write(f"  Min symbols for decode: {min_symbols_needed} (37.5% erasure)\n")
+                f.write(f"  Welch bound: {welch_bound_db:.2f} dB (theoretical limit)\n")
                 f.flush()
 
             # First, create repetition map (same for all patterns)
@@ -556,10 +560,12 @@ class DynamicTournamentOptimizer:
         total_compute_budget: int = 2_000_000,
         num_initial_trials: int = 8,
         min_iterations: int = 50_000,
-        eval_interval: int = 5_000,  # Reduced since iterations are now slower
+        eval_interval: int = 5_000,
         checkpoint_dir: str = "./checkpoints",
         log_callback: Optional[Callable] = None,
-        execution_mode: str = "auto"  # "process", "thread", "sequential", or "auto"
+        execution_mode: str = "auto",  # "process", "thread", "sequential", or "auto"
+        num_patterns: int = 16,  # Number of patterns to generate
+        pattern_length: int = 512  # Symbols per pattern (after 4x expansion)
     ):
         self.total_budget = total_compute_budget
         self.num_initial_trials = num_initial_trials
@@ -568,6 +574,8 @@ class DynamicTournamentOptimizer:
         self.checkpoint_dir = Path(checkpoint_dir)
         self.log_callback = log_callback or print
         self.execution_mode = execution_mode
+        self.num_patterns = num_patterns
+        self.pattern_length = pattern_length
 
         # Create checkpoint directory
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -842,7 +850,9 @@ class DynamicTournamentOptimizer:
                             iterations_to_run,
                             trial.seed,
                             str(self.checkpoint_dir),
-                            trial.p_cores
+                            trial.p_cores,
+                            self.num_patterns,
+                            self.pattern_length
                         )
                         futures[future] = trial_id
 
@@ -911,7 +921,9 @@ class DynamicTournamentOptimizer:
                         iterations_to_run,
                         trial.seed,
                         str(self.checkpoint_dir),
-                        trial.p_cores
+                        trial.p_cores,
+                        self.num_patterns,
+                        self.pattern_length
                     )
                     self._process_trial_result(trial_id, result)
                 except Exception as e:
