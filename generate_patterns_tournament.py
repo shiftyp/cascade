@@ -2,23 +2,24 @@
 parser.add_argument(
     '--redundancy',
     type=int,
+    choices=[1, 2, 4, 6],  # Add 1 to allowed values
     default=2,
-    help='Pattern redundancy factor (minimum 1, no built-in redundancy at 1x)'
+    help='Pattern redundancy factor (1=no redundancy, 2/4/6=with redundancy)'
 )
 
 # ...existing code...
 
 def validate_args(args):
     """Validate command line arguments."""
-    if args.redundancy < 1:
-        raise ValueError("Redundancy must be at least 1")
+    if args.redundancy not in [1, 2, 4, 6]:
+        raise ValueError("Redundancy must be one of: 1, 2, 4, 6")
     # ...existing code...
 
 # ...existing code...
 
 def generate_pattern_with_redundancy(base_pattern, redundancy):
     """
-    Generate pattern with redundancy spreading.
+    Generate pattern with optional redundancy.
     If redundancy=1, return base pattern as-is (no redundancy).
     """
     if redundancy == 1:
