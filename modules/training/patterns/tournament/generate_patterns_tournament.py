@@ -391,8 +391,8 @@ def main():
         '--redundancy',
         type=int,
         default=4,
-        choices=[2, 3, 4],
-        help='Redundancy factor: 2x (fast, 15%% erasure), 3x (balanced, 25%% erasure), 4x (robust, 37.5%% erasure)'
+        choices=[1, 2, 3, 4],  # Add 1 to allowed values
+        help='Redundancy factor: 1x (no redundancy, LDPC only), 2x (fast, 15%% erasure), 3x (balanced, 25%% erasure), 4x (robust, 37.5%% erasure)'
     )
 
     # Hardware parameters
