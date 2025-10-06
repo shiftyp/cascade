@@ -1129,31 +1129,8 @@ class DynamicTournamentOptimizer:
                 self.log_callback(f"Trial {trial_id} receives {bonus:,} bonus iterations")
 
     def _check_convergence(self) -> bool:
-        """Check if tournament has converged"""
-        if len(self.active_trials) <= 1:
-            return True  # Only one trial left
-
-        # Check if using GA (different convergence criteria)
-        active_trial_objects = [t for t in self.trials if t.trial_id in self.active_trials]
-        using_ga = any(hasattr(t, 'algorithm') and t.algorithm == 'GA' for t in active_trial_objects)
-
-        if using_ga:
-            # GA convergence: Only stop if truly exceptional or fully exhausted
-            # Don't check stagnation - GA needs many generations to converge
-            if self.global_best_score < -29.5:  # Very close to target
-                return True
-            # Otherwise let it run to full budget
-            return False
-        else:
-            # Hill climbing convergence (original logic)
-            all_stagnant = all(t.convergence_rate < 0.0001 for t in active_trial_objects)
-            if all_stagnant and self.compute_used > self.total_budget * 0.5:
-                return True
-
-            # Check if best score is exceptional
-            if self.global_best_score < -45.0:
-                return True
-
+        """Check if tournament has converged - DISABLED, always run to completion"""
+        # Never stop early - always run full budget
         return False
 
     def _finalize_tournament(self) -> List[np.ndarray]:
