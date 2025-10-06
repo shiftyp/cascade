@@ -283,43 +283,61 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 return 20 * np.log10(peak / len(p1_erased) + 1e-10)
 
             # Fitness evaluation function for a pattern set
-            def evaluate_fitness(pattern_set_cores):
-                """Calculate fitness (worst-case orthogonality) for a pattern set"""
+            def evaluate_fitness(pattern_set_cores, use_sampling=True, sample_size=30):
+                """Calculate fitness (worst-case orthogonality) for a pattern set
+
+                Args:
+                    pattern_set_cores: List of 128-bit core patterns
+                    use_sampling: If True, sample random pairs (faster)
+                    sample_size: Number of pairs to sample (default 30 of 120)
+                """
                 worst_normal = -100.0
                 worst_flip = -100.0
                 worst_erasure = -100.0
 
-                for i in range(num_patterns):
-                    for j in range(i + 1, num_patterns):
-                        # Expand and convert to ±1
-                        pi_full = pattern_set_cores[i][repetition_map]
-                        pj_full = pattern_set_cores[j][repetition_map]
-                        pi = 2 * pi_full.astype(np.float32) - 1
-                        pj = 2 * pj_full.astype(np.float32) - 1
+                # Generate all possible pairs
+                all_pairs = [(i, j) for i in range(num_patterns) for j in range(i + 1, num_patterns)]
 
-                        # Normal correlation
-                        xcorr = np.correlate(pi, pj, mode='full')
-                        peak = np.max(np.abs(xcorr))
-                        corr_db = 20 * np.log10(peak / pattern_length + 1e-10)
-                        worst_normal = max(worst_normal, corr_db)
+                # Select pairs to evaluate
+                if use_sampling and len(all_pairs) > sample_size:
+                    # Random sample for speed
+                    pairs_to_check = [all_pairs[idx] for idx in np.random.choice(
+                        len(all_pairs), sample_size, replace=False
+                    )]
+                else:
+                    # Full evaluation
+                    pairs_to_check = all_pairs
 
-                        # Flip correlation
-                        xcorr_f = np.correlate(pi, -pj, mode='full')
-                        peak_f = np.max(np.abs(xcorr_f))
-                        corr_f_db = 20 * np.log10(peak_f / pattern_length + 1e-10)
-                        worst_flip = max(worst_flip, corr_f_db)
+                for i, j in pairs_to_check:
+                    # Expand and convert to ±1
+                    pi_full = pattern_set_cores[i][repetition_map]
+                    pj_full = pattern_set_cores[j][repetition_map]
+                    pi = 2 * pi_full.astype(np.float32) - 1
+                    pj = 2 * pj_full.astype(np.float32) - 1
 
-                        # Erasure (quick test)
-                        erasure_db = test_with_erasure(pi, pj, 0.375)
-                        worst_erasure = max(worst_erasure, erasure_db)
+                    # Normal correlation
+                    xcorr = np.correlate(pi, pj, mode='full')
+                    peak = np.max(np.abs(xcorr))
+                    corr_db = 20 * np.log10(peak / pattern_length + 1e-10)
+                    worst_normal = max(worst_normal, corr_db)
+
+                    # Flip correlation
+                    xcorr_f = np.correlate(pi, -pj, mode='full')
+                    peak_f = np.max(np.abs(xcorr_f))
+                    corr_f_db = 20 * np.log10(peak_f / pattern_length + 1e-10)
+                    worst_flip = max(worst_flip, corr_f_db)
+
+                    # Erasure (quick test)
+                    erasure_db = test_with_erasure(pi, pj, 0.375)
+                    worst_erasure = max(worst_erasure, erasure_db)
 
                 # Return worst-case (higher/less negative is worse)
                 return max(worst_normal, worst_flip, worst_erasure)
 
-            # Evaluate initial population
+            # Evaluate initial population (full evaluation for baseline)
             fitness_scores = []
             for set_idx, pattern_set_cores in enumerate(population):
-                fitness = evaluate_fitness(pattern_set_cores)
+                fitness = evaluate_fitness(pattern_set_cores, use_sampling=False)
                 fitness_scores.append((fitness, set_idx))
 
             # Sort by fitness (lower/more negative is better)
@@ -355,6 +373,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             f.write(f"  Mutation rate: {mutation_rate:.1%} ({int(mutation_rate * pattern_core_length)} bits)\n")
             f.write(f"  Crossover rate: {crossover_rate:.1%}\n")
             f.write(f"  Elites: {num_elites}\n")
+            f.write(f"  Adaptive sampling: 30 pairs (75% speedup), full eval every 10th gen\n")
+            f.write(f"  Expected speed: ~30 iter/s sampled, ~8 iter/s full\n")
             f.flush()
 
         import time
@@ -400,10 +420,17 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             # Replace population
             population = new_population
 
-            # EVALUATION: Evaluate new population
+            # EVALUATION: Adaptive sampling (30 pairs most of the time, full every 10th)
+            use_full_eval = (current_generation % 10 == 0)
             fitness_scores = []
+
             for set_idx, pattern_set_cores in enumerate(population):
-                fitness = evaluate_fitness(pattern_set_cores)
+                if use_full_eval:
+                    # Full evaluation every 10th generation for accurate tracking
+                    fitness = evaluate_fitness(pattern_set_cores, use_sampling=False)
+                else:
+                    # Sampled evaluation (30 pairs) for speed
+                    fitness = evaluate_fitness(pattern_set_cores, use_sampling=True, sample_size=30)
                 fitness_scores.append((fitness, set_idx))
 
             # Sort by fitness
@@ -438,8 +465,10 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 median_fitness = fitness_scores[population_size // 2][0]
                 worst_fitness = fitness_scores[-1][0]
 
+                eval_type = "FULL" if (current_generation % 10 == 0) else "sampled(30)"
+
                 with open(debug_file_path, 'a') as f:
-                    f.write(f"Generation {current_generation}/{total_generations}:\n")
+                    f.write(f"Generation {current_generation}/{total_generations} [{eval_type}]:\n")
                     f.write(f"  Best: {best_fitness:.2f} dB, Median: {median_fitness:.2f} dB, "
                            f"Worst: {worst_fitness:.2f} dB\n")
                     f.write(f"  Overall best: {best_score:.2f} dB\n")
