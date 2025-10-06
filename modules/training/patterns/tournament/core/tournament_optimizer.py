@@ -416,6 +416,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             current_generation += 1
 
             # Logging and checkpointing
+            current_time = time.time()
             if current_generation % 100 == 0 or (current_time - last_log_time) >= 10:
                 elapsed = current_time - start_time
                 if elapsed > 0:
