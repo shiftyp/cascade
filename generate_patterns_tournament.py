@@ -27,3 +27,12 @@ def generate_pattern_with_redundancy(base_pattern, redundancy):
     
     # Apply redundancy spreading for redundancy > 1
     # ...existing code...
+
+def apply_redundancy(pattern, redundancy):
+    """Apply redundancy to pattern. If redundancy=1, return as-is."""
+    if redundancy == 1:
+        # No redundancy - pure orthogonal pattern
+        return pattern
+    
+    # Apply spreading/repetition for redundancy > 1
+    # ...existing code...
