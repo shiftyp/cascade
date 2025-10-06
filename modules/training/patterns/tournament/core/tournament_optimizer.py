@@ -432,70 +432,27 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 original_full = original_core[repetition_map]
                 mutated_full = mutated_core[repetition_map]
 
-                # Calculate correlations for the mutated pattern (all three types)
-                # Test on EXPANDED patterns (512 symbols)
-                max_normal_new = -100.0
-                max_flip_new = -100.0
-                max_erasure_new = -100.0
+                # Step 5: Evaluate mutation ONLY against the other pattern in worst pair
+                # This focuses optimization on fixing the actual problem
 
-                # Convert mutated expanded pattern to ±1
+                # Expand other pattern
+                other_pattern_full = pattern_set[other_idx][repetition_map]
                 pattern_mut = 2 * mutated_full.astype(np.float32) - 1
-
-                for j in range(num_patterns):
-                    if j != pattern_idx:
-                        # Expand pattern j and convert to ±1
-                        pattern_j_full = pattern_set[j][repetition_map]
-                        pattern_j = 2 * pattern_j_full.astype(np.float32) - 1
-
-                        # Normal correlation
-                        xcorr_normal = np.correlate(pattern_mut, pattern_j, mode='full')
-                        peak_normal = np.max(np.abs(xcorr_normal))
-                        corr_normal_db = 20 * np.log10(peak_normal / pattern_length + 1e-10)
-                        max_normal_new = max(max_normal_new, corr_normal_db)
-
-                        # Flip correlation
-                        xcorr_flip = np.correlate(pattern_mut, -pattern_j, mode='full')
-                        peak_flip = np.max(np.abs(xcorr_flip))
-                        corr_flip_db = 20 * np.log10(peak_flip / pattern_length + 1e-10)
-                        max_flip_new = max(max_flip_new, corr_flip_db)
-
-                        # Erasure correlation (quick single test during optimization)
-                        erasure_db = test_with_erasure(pattern_mut, pattern_j, 0.375)
-                        max_erasure_new = max(max_erasure_new, erasure_db)
-
-                # Combined score for mutation: worst-case across all criteria
-                max_correlation_new = max(max_normal_new, max_flip_new, max_erasure_new)
-
-                # For comparison, calculate current pattern's worst correlation
-                max_normal_old = -100.0
-                max_flip_old = -100.0
-                max_erasure_old = -100.0
+                pattern_other = 2 * other_pattern_full.astype(np.float32) - 1
                 pattern_old = 2 * original_full.astype(np.float32) - 1
 
-                for j in range(num_patterns):
-                    if j != pattern_idx:
-                        # Expand pattern j and convert to ±1
-                        pattern_j_full = pattern_set[j][repetition_map]
-                        pattern_j = 2 * pattern_j_full.astype(np.float32) - 1
+                # Test new correlation (only against the paired pattern)
+                xcorr_n_new = np.correlate(pattern_mut, pattern_other, mode='full')
+                xcorr_f_new = np.correlate(pattern_mut, -pattern_other, mode='full')
+                new_corr = max(np.max(np.abs(xcorr_n_new)), np.max(np.abs(xcorr_f_new)))
 
-                        # Normal correlation
-                        xcorr_normal = np.correlate(pattern_old, pattern_j, mode='full')
-                        peak_normal = np.max(np.abs(xcorr_normal))
-                        corr_normal_db = 20 * np.log10(peak_normal / pattern_length + 1e-10)
-                        max_normal_old = max(max_normal_old, corr_normal_db)
+                # Test old correlation
+                xcorr_n_old = np.correlate(pattern_old, pattern_other, mode='full')
+                xcorr_f_old = np.correlate(pattern_old, -pattern_other, mode='full')
+                old_corr = max(np.max(np.abs(xcorr_n_old)), np.max(np.abs(xcorr_f_old)))
 
-                        # Flip correlation
-                        xcorr_flip = np.correlate(pattern_old, -pattern_j, mode='full')
-                        peak_flip = np.max(np.abs(xcorr_flip))
-                        corr_flip_db = 20 * np.log10(peak_flip / pattern_length + 1e-10)
-                        max_flip_old = max(max_flip_old, corr_flip_db)
-
-                        # Erasure correlation
-                        erasure_db = test_with_erasure(pattern_old, pattern_j, 0.375)
-                        max_erasure_old = max(max_erasure_old, erasure_db)
-
-                # Combined score for original: worst-case across all criteria
-                max_correlation_old = max(max_normal_old, max_flip_old, max_erasure_old)
+                max_correlation_new = 20 * np.log10(new_corr / pattern_length + 1e-10)
+                max_correlation_old = 20 * np.log10(old_corr / pattern_length + 1e-10)
 
                 # Keep mutation ONLY if it improves orthogonality
                 # Lower (more negative) correlation is better
