@@ -178,6 +178,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             pattern_set = []
             repetition_maps = []
             pattern_length = 512  # 2.56 seconds at 200 sym/s (5ms per symbol)
+            pattern_core_length = 128  # Core pattern bits (expanded to 512 via repetition)
             num_patterns = 16  # Only 16 patterns needed!
 
             # With 512 symbols and 37.5% erasure tolerance:
@@ -340,30 +341,94 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         start_time = time.time()
         last_log_time = start_time
 
+        # Track worst pair for guided hill climbing
+        worst_pair_i, worst_pair_j = 0, 1
+
         while current_iteration < iterations:
             batch_iterations = min(iterations_per_update, iterations - current_iteration)
 
-            # Optimize each pattern in the set
+            # Optimize each pattern in the set using GUIDED hill climbing
             for iter_count in range(batch_iterations):
-                # Select random pattern to mutate
-                pattern_idx = np.random.randint(0, num_patterns)
-                original_core = pattern_set[pattern_idx].copy()  # 128 core bits
+                # Step 1: Find the worst pattern pair (re-evaluate every 100 iterations for efficiency)
+                if current_iteration % 100 == 0:
+                    worst_pair_i, worst_pair_j = 0, 1
+                    worst_pair_corr = -100.0
 
-                # Mutation with adaptive intensity (large changes early, fine-tuning later)
-                mutated_core = original_core.copy()
+                    for i in range(num_patterns):
+                        for j in range(i + 1, num_patterns):
+                            # Expand and correlate
+                            pi_full = pattern_set[i][repetition_map]
+                            pj_full = pattern_set[j][repetition_map]
+                            pi = 2 * pi_full.astype(np.float32) - 1
+                            pj = 2 * pj_full.astype(np.float32) - 1
 
-                # Calculate current mutation rate based on progress
+                            # Quick max correlation check (normal + flip)
+                            xcorr_n = np.correlate(pi, pj, mode='full')
+                            peak_n = np.max(np.abs(xcorr_n))
+                            xcorr_f = np.correlate(pi, -pj, mode='full')
+                            peak_f = np.max(np.abs(xcorr_f))
+
+                            corr = max(peak_n, peak_f)
+                            if corr > worst_pair_corr:
+                                worst_pair_corr = corr
+                                worst_pair_i, worst_pair_j = i, j
+
+                # Step 2: Mutate the pattern from worst pair to reduce correlation
+                # Alternate between the two patterns in the pair
+                pattern_idx = worst_pair_i if current_iteration % 2 == 0 else worst_pair_j
+                other_idx = worst_pair_j if pattern_idx == worst_pair_i else worst_pair_i
+
+                original_core = pattern_set[pattern_idx].copy()
+                other_core = pattern_set[other_idx].copy()
+
+                # Step 3: Identify which core bits contribute most to correlation
+                # Expand patterns
+                original_full = original_core[repetition_map]
+                other_full = other_core[repetition_map]
+
+                # For each core bit, calculate how much it contributes to correlation
+                bit_contributions = np.zeros(pattern_core_length)
+                for bit_idx in range(pattern_core_length):
+                    # Find where this core bit appears in expanded pattern
+                    positions = np.where(repetition_map == bit_idx)[0]
+
+                    # If this bit differs from the other pattern's bit, it reduces correlation
+                    # If they match, it increases correlation
+                    other_bit = other_core[bit_idx]
+                    this_bit = original_core[bit_idx]
+
+                    if this_bit == other_bit:
+                        # Matching bits increase correlation - flip these to reduce
+                        bit_contributions[bit_idx] = len(positions)  # Higher contribution
+                    else:
+                        # Differing bits reduce correlation - leave these alone
+                        bit_contributions[bit_idx] = -len(positions)
+
+                # Step 4: Flip bits with highest contribution (matching bits)
                 progress = (current_iteration - start_iteration) / iterations
                 mutation_rate = initial_mutation_rate * (1 - progress) + final_mutation_rate * progress
-
-                # Number of CORE bits to flip (based on 128, not 512)
                 num_flips = max(1, int(mutation_rate * pattern_core_length))
 
-                # Randomly flip core bits
-                flip_positions = np.random.choice(pattern_core_length, num_flips, replace=False)
+                # Probabilistically flip based on contribution
+                # Normalize contributions to probabilities
+                positive_contributions = np.maximum(bit_contributions, 0)
+                if np.sum(positive_contributions) > 0:
+                    flip_probs = positive_contributions / np.sum(positive_contributions)
+                    flip_positions = np.random.choice(
+                        pattern_core_length,
+                        num_flips,
+                        replace=False,
+                        p=flip_probs
+                    )
+                else:
+                    # Fallback to random if no positive contributions
+                    flip_positions = np.random.choice(pattern_core_length, num_flips, replace=False)
+
+                # Create mutated core
+                mutated_core = original_core.copy()
                 mutated_core[flip_positions] = 1 - mutated_core[flip_positions]
 
-                # Expand both original and mutated to 512 for evaluation
+                # Expand both for evaluation
                 original_full = original_core[repetition_map]
                 mutated_full = mutated_core[repetition_map]
 

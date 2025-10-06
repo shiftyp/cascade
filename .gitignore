@@ -6,4 +6,4 @@ __pychache__
 *.swo
 .DS_Store
 env/
-venv/
+venv/Also 
