@@ -62,9 +62,7 @@ class TournamentRunner:
             'pattern': {
                 'count': 16,
                 'length': 512,
-                'unique_data_positions': 128,
-                'redundancy_factor': 4,
-                'erasure_tolerance': 0.375,
+                'redundancy': 4,  # Redundancy factor (2, 3, or 4)
                 'target_normal_db': -30.0,
                 'target_flip_db': -28.0,
                 'target_erasure_db': -27.0
@@ -120,7 +118,8 @@ class TournamentRunner:
         # Partition checkpoints and logs by pattern configuration
         num_patterns = pattern_config.get('count', 16)
         pattern_length = pattern_config.get('length', 512)
-        config_suffix = f"p{num_patterns}_l{pattern_length}"
+        redundancy = pattern_config.get('redundancy', 4)
+        config_suffix = f"p{num_patterns}_l{pattern_length}_r{redundancy}x"
 
         base_checkpoint_dir = tournament_config.get('checkpoint_dir', './checkpoints')
         base_log_dir = logging_config.get('log_dir', './logs')
@@ -180,7 +179,8 @@ class TournamentRunner:
             log_callback=self.log_message,
             execution_mode=hardware_config.get('execution_mode', 'auto'),
             num_patterns=pattern_config.get('count', 16),
-            pattern_length=pattern_config.get('length', 512)
+            pattern_length=pattern_config.get('length', 512),
+            redundancy=pattern_config.get('redundancy', 4)
         )
 
         # Initialize dashboard
@@ -384,7 +384,15 @@ def main():
         '--pattern-length',
         type=int,
         default=512,
-        help='Symbols per pattern'
+        help='Symbols per pattern (must be multiple of redundancy factor)'
+    )
+
+    parser.add_argument(
+        '--redundancy',
+        type=int,
+        default=4,
+        choices=[2, 3, 4],
+        help='Redundancy factor: 2x (fast, 15%% erasure), 3x (balanced, 25%% erasure), 4x (robust, 37.5%% erasure)'
     )
 
     # Hardware parameters
@@ -496,6 +504,9 @@ def main():
 
         if args.pattern_length != 512:
             runner.config.setdefault('pattern', {})['length'] = args.pattern_length
+
+        if args.redundancy != 4:
+            runner.config.setdefault('pattern', {})['redundancy'] = args.redundancy
 
         # Always set hardware config from command line
         runner.config.setdefault('hardware', {})['num_p_cores'] = num_p_cores

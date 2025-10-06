@@ -30,7 +30,7 @@ def simple_test_worker(x: int) -> int:
 def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                            checkpoint_dir: str, p_cores: List[int] = None,
                            num_patterns: int = 16, pattern_length: int = 512,
-                           target_generations: int = None) -> Dict[str, Any]:
+                           target_generations: int = None, redundancy: int = 4) -> Dict[str, Any]:
     """
     Standalone function to run a single trial in a subprocess.
     This must be a module-level function to be picklable.
@@ -40,6 +40,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         target_generations: Total generations this trial should reach (absolute)
         num_patterns: Number of patterns to generate (default 16)
         pattern_length: Symbols per pattern after expansion (default 512)
+        redundancy: Redundancy factor - 2x, 3x, or 4x (default 4)
     """
     # Immediate debug output - use simple file operations to ensure it works
     import os
@@ -179,7 +180,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             f.flush()
 
         # Define GA constants (before checkpoint check so always available)
-        pattern_core_length = pattern_length // 4  # Core is 1/4 of full (4x redundancy)
+        pattern_core_length = pattern_length // redundancy  # Core bits based on redundancy factor
         population_size = 32  # Number of pattern sets in population
         num_elites = 4  # Top performers preserved unchanged
 
@@ -237,31 +238,41 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             # Use uint16 to support core lengths > 255
             repetition_map = np.zeros(pattern_length, dtype=np.uint16)
 
-            # Create interleaved repetition: pattern_core_length positions, each repeated 4x
+            # Create interleaved repetition: pattern_core_length positions, each repeated Nx
             for data_pos in range(pattern_core_length):
-                repetition_map[data_pos * 4] = data_pos
-                repetition_map[data_pos * 4 + 1] = data_pos
-                repetition_map[data_pos * 4 + 2] = data_pos
-                repetition_map[data_pos * 4 + 3] = data_pos
+                for rep in range(redundancy):
+                    repetition_map[data_pos * redundancy + rep] = data_pos
 
             # Shuffle to spread repetitions (burst error resistance)
             shuffle_groups = np.arange(pattern_core_length)
             np.random.shuffle(shuffle_groups)
             shuffled_map = np.zeros(pattern_length, dtype=np.uint16)  # uint16 for large patterns
             for idx, group in enumerate(shuffle_groups):
-                shuffled_map[idx * 4:(idx + 1) * 4] = [group] * 4
+                for rep in range(redundancy):
+                    shuffled_map[idx * redundancy + rep] = group
 
             repetition_map = shuffled_map
 
+            # Calculate erasure tolerance based on redundancy
+            if redundancy == 4:
+                erasure_tolerance = 0.375  # Need 2 of 4 copies
+            elif redundancy == 3:
+                erasure_tolerance = 0.33   # Need 2 of 3 copies
+            else:  # redundancy == 2
+                erasure_tolerance = 0.25   # Need 1 of 2 copies (50% is borderline)
+
             with open(debug_file_path, 'a') as f:
-                f.write(f"Created repetition map: {pattern_core_length} positions × 4 repetitions\n")
+                f.write(f"Created repetition map: {pattern_core_length} positions × {redundancy} repetitions\n")
+                f.write(f"Erasure tolerance: {erasure_tolerance:.1%}\n")
                 f.flush()
 
         # HELPER FUNCTIONS (defined at worker level so always available regardless of checkpoint)
 
-        # Helper function for erasure testing
-        def test_with_erasure(p1, p2, erasure_rate=0.375):
+        # Helper function for erasure testing (uses configured erasure_tolerance)
+        def test_with_erasure(p1, p2, erasure_rate=None):
             """Test correlation with random erasures"""
+            if erasure_rate is None:
+                erasure_rate = erasure_tolerance  # Use configured value
             keep_rate = 1.0 - erasure_rate
             mask = np.random.random(len(p1)) < keep_rate
             p1_erased = p1[mask]
@@ -688,7 +699,8 @@ class DynamicTournamentOptimizer:
         log_callback: Optional[Callable] = None,
         execution_mode: str = "auto",  # "process", "thread", "sequential", or "auto"
         num_patterns: int = 16,  # Number of patterns to generate
-        pattern_length: int = 512  # Symbols per pattern (after 4x expansion)
+        pattern_length: int = 512,  # Symbols per pattern (after expansion)
+        redundancy: int = 4  # Redundancy factor (2, 3, or 4)
     ):
         self.total_generations = total_generations
         self.num_initial_trials = num_initial_trials
@@ -697,6 +709,7 @@ class DynamicTournamentOptimizer:
         self.execution_mode = execution_mode
         self.num_patterns = num_patterns
         self.pattern_length = pattern_length
+        self.redundancy = redundancy
 
         # Create checkpoint directory
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -1041,7 +1054,8 @@ class DynamicTournamentOptimizer:
                             trial.p_cores,
                             self.num_patterns,
                             self.pattern_length,
-                            trial.target_generations
+                            trial.target_generations,
+                            self.redundancy
                         )
                         futures[future] = trial_id
 
@@ -1113,7 +1127,8 @@ class DynamicTournamentOptimizer:
                         trial.p_cores,
                         self.num_patterns,
                         self.pattern_length,
-                        trial.target_generations
+                        trial.target_generations,
+                        self.redundancy
                     )
                     self._process_trial_result(trial_id, result)
                 except Exception as e:

@@ -10,13 +10,14 @@ tournament:
 
 pattern:
   count: 16                      # Number of patterns to generate
-  length: 512                    # Symbols per pattern (2.56 seconds at 200 sym/s)
-  unique_data_positions: 128     # Unique data positions (4x redundancy)
-  redundancy_factor: 4           # Each data position repeated 4x
-  erasure_tolerance: 0.375       # Can lose 37.5% of symbols
-  target_normal_db: -30.0        # Normal orthogonality target (Welch bound: -30.4)
+  length: 512                    # Symbols per pattern (total after expansion)
+  redundancy: 4                  # Redundancy factor: 2x, 3x, or 4x
+  # Redundancy trade-offs (for 16 patterns, 512 symbols):
+  #   4x: 128 core bits, -18.3 dB Welch, 37.5% erasure tolerance
+  #   3x: 170 core bits, -19.6 dB Welch, 25% erasure tolerance
+  #   2x: 256 core bits, -21.3 dB Welch, 15-20% erasure tolerance
+  target_normal_db: -30.0        # Normal orthogonality target
   target_flip_db: -28.0          # Flip orthogonality target
-  target_erasure_db: -27.0       # With 37.5% erasure
 
 hardware:
   num_p_cores: 8                 # Number of P-cores (265K has 8)

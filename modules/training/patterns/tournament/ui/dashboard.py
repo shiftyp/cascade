@@ -78,7 +78,10 @@ class PatternGeneratorDashboard:
             header_text = Text()
             header_text.append("CASCADE Pattern Tournament", style="bold white")
             header_text.append(" | ", style="dim")
-            header_text.append(f"{self.optimizer.num_patterns}p × {self.optimizer.pattern_length}s", style="bold cyan")
+            # Show: patterns × core_bits × redundancy (e.g., "8p × 256c × 2x")
+            redundancy = self.optimizer.redundancy if hasattr(self.optimizer, 'redundancy') else 4
+            core_bits = self.optimizer.pattern_length // redundancy
+            header_text.append(f"{self.optimizer.num_patterns}p × {core_bits}c × {redundancy}x", style="bold cyan")
             header_text.append(" | ", style="dim")
 
             # Show generation progress
