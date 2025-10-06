@@ -775,9 +775,28 @@ class DynamicTournamentOptimizer:
         # Main tournament loop - run trials until complete
         # For GA: trials run until they hit their generation target (no budget checks)
         loop_count = 0
+        last_compute_used = 0
+        stuck_count = 0
+
         while len(self.active_trials) > 0:
             loop_count += 1
-            self.log_callback(f"DEBUG: Main loop iteration {loop_count}, active_trials: {self.active_trials}")
+
+            # Safety: Detect infinite loops (no progress)
+            if self.compute_used == last_compute_used:
+                stuck_count += 1
+                if stuck_count > 3:
+                    self.log_callback("ERROR: Loop stuck - no progress for 3 iterations")
+                    self.log_callback(f"Active trials: {self.active_trials}")
+                    for tid in self.active_trials:
+                        t = self.trials[tid]
+                        self.log_callback(f"  Trial {tid}: gen {t.iterations//32}/{t.target_generations}, status={t.status}")
+                    break
+            else:
+                stuck_count = 0
+                last_compute_used = self.compute_used
+
+            if loop_count % 10 == 0:  # Only log every 10th iteration to reduce spam
+                self.log_callback(f"DEBUG: Main loop iteration {loop_count}, active_trials: {self.active_trials}")
 
             # Update phase
             self._update_phase()
@@ -785,7 +804,8 @@ class DynamicTournamentOptimizer:
             # Run active trials
             self._run_trial_batch()
 
-            self.log_callback(f"DEBUG: After _run_trial_batch, active_trials: {self.active_trials}")
+            if loop_count % 10 == 0:
+                self.log_callback(f"DEBUG: After _run_trial_batch, active_trials: {self.active_trials}")
 
             # Check if any trials exhausted (completed all generations)
             completed_trials = []
