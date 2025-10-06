@@ -164,6 +164,11 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             f.write(f"Created checkpoint dir: {trial_checkpoint_dir}\n")
             f.flush()
 
+        # Define GA constants (before checkpoint check so always available)
+        pattern_core_length = pattern_length // 4  # Core is 1/4 of full (4x redundancy)
+        population_size = 32  # Number of pattern sets in population
+        num_elites = 4  # Top performers preserved unchanged
+
         # Check for existing checkpoint
         checkpoint_file = trial_checkpoint_dir / "latest_checkpoint.pkl"
         if checkpoint_file.exists():
@@ -193,8 +198,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write("No checkpoint found, generating initial patterns\n")
                 f.flush()
 
-            # Use passed parameters for pattern generation
-            pattern_core_length = pattern_length // 4  # Core is 1/4 of full (4x redundancy)
+            # Initialize pattern storage
+            # pattern_core_length already defined above
             pattern_set = []
             repetition_maps = []
 
@@ -238,9 +243,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.flush()
 
             # GENETIC ALGORITHM SETUP
-            # pattern_core_length already calculated above (pattern_length // 4)
-            population_size = 32  # Number of pattern sets in population
-            num_elites = 4  # Top performers preserved unchanged
+            # pattern_core_length, population_size, num_elites already defined above
 
             with open(debug_file_path, 'a') as f:
                 f.write(f"Initializing genetic algorithm:\n")
