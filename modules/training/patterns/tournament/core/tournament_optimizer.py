@@ -220,7 +220,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
             # First, create repetition map (same for all patterns)
             # This defines which symbols repeat (QR-like structure)
-            repetition_map = np.zeros(pattern_length, dtype=np.uint8)
+            # Use uint16 to support core lengths > 255
+            repetition_map = np.zeros(pattern_length, dtype=np.uint16)
 
             # Create interleaved repetition: pattern_core_length positions, each repeated 4x
             for data_pos in range(pattern_core_length):
@@ -232,7 +233,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             # Shuffle to spread repetitions (burst error resistance)
             shuffle_groups = np.arange(pattern_core_length)
             np.random.shuffle(shuffle_groups)
-            shuffled_map = np.zeros(pattern_length, dtype=np.uint8)
+            shuffled_map = np.zeros(pattern_length, dtype=np.uint16)  # uint16 for large patterns
             for idx, group in enumerate(shuffle_groups):
                 shuffled_map[idx * 4:(idx + 1) * 4] = [group] * 4
 
@@ -242,6 +243,75 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write(f"Created repetition map: {pattern_core_length} positions × 4 repetitions\n")
                 f.flush()
 
+        # HELPER FUNCTIONS (defined at worker level so always available regardless of checkpoint)
+
+        # Helper function for erasure testing
+        def test_with_erasure(p1, p2, erasure_rate=0.375):
+            """Test correlation with random erasures"""
+            keep_rate = 1.0 - erasure_rate
+            mask = np.random.random(len(p1)) < keep_rate
+            p1_erased = p1[mask]
+            p2_erased = p2[mask]
+            if len(p1_erased) < 10:
+                return 0.0
+            xcorr = np.correlate(p1_erased, p2_erased, mode='full')
+            peak = np.max(np.abs(xcorr))
+            return 20 * np.log10(peak / len(p1_erased) + 1e-10)
+
+        # Fitness evaluation function for a pattern set
+        def evaluate_fitness(pattern_set_cores, use_sampling=True, sample_size=30):
+            """Calculate fitness (worst-case orthogonality) for a pattern set
+
+            Args:
+                pattern_set_cores: List of 128-bit core patterns
+                use_sampling: If True, sample random pairs (faster)
+                sample_size: Number of pairs to sample (default 30 of 120)
+            """
+            worst_normal = -100.0
+            worst_flip = -100.0
+            worst_erasure = -100.0
+
+            # Generate all possible pairs
+            all_pairs = [(i, j) for i in range(num_patterns) for j in range(i + 1, num_patterns)]
+
+            # Select pairs to evaluate
+            if use_sampling and len(all_pairs) > sample_size:
+                # Random sample for speed
+                pairs_to_check = [all_pairs[idx] for idx in np.random.choice(
+                    len(all_pairs), sample_size, replace=False
+                )]
+            else:
+                # Full evaluation
+                pairs_to_check = all_pairs
+
+            for i, j in pairs_to_check:
+                # Expand and convert to ±1
+                pi_full = pattern_set_cores[i][repetition_map]
+                pj_full = pattern_set_cores[j][repetition_map]
+                pi = 2 * pi_full.astype(np.float32) - 1
+                pj = 2 * pj_full.astype(np.float32) - 1
+
+                # Normal correlation
+                xcorr = np.correlate(pi, pj, mode='full')
+                peak = np.max(np.abs(xcorr))
+                corr_db = 20 * np.log10(peak / pattern_length + 1e-10)
+                worst_normal = max(worst_normal, corr_db)
+
+                # Flip correlation
+                xcorr_f = np.correlate(pi, -pj, mode='full')
+                peak_f = np.max(np.abs(xcorr_f))
+                corr_f_db = 20 * np.log10(peak_f / pattern_length + 1e-10)
+                worst_flip = max(worst_flip, corr_f_db)
+
+                # Erasure (quick test)
+                erasure_db = test_with_erasure(pi, pj, 0.375)
+                worst_erasure = max(worst_erasure, erasure_db)
+
+            # Return worst-case (higher/less negative is worse)
+            return max(worst_normal, worst_flip, worst_erasure)
+
+        # Continue with initialization or checkpoint resume
+        if not checkpoint_file.exists():
             # GENETIC ALGORITHM SETUP
             # pattern_core_length, population_size, num_elites already defined above
 
