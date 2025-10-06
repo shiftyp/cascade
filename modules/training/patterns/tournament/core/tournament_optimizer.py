@@ -659,10 +659,10 @@ class DynamicTournamentOptimizer:
 
     def __init__(
         self,
-        total_compute_budget: int = 2_000_000,
+        total_compute_budget: int = 4_800_000,
         num_initial_trials: int = 8,
-        min_iterations: int = 50_000,
-        eval_interval: int = 5_000,
+        min_iterations: int = 200_000,
+        eval_interval: int = 50_000,
         checkpoint_dir: str = "./checkpoints",
         log_callback: Optional[Callable] = None,
         execution_mode: str = "auto",  # "process", "thread", "sequential", or "auto"
@@ -767,13 +767,15 @@ class DynamicTournamentOptimizer:
             self._run_trial_batch()
 
             # Evaluate and potentially eliminate
-            if self.compute_used >= self.min_iterations:
-                self._evaluate_and_eliminate()
+            # DISABLED for GA - elimination doesn't make sense with population-based optimization
+            # Each trial runs its own population, all should complete
+            # if self.compute_used >= self.min_iterations:
+            #     self._evaluate_and_eliminate()
 
-            # Check for convergence
-            if self._check_convergence():
-                self.log_callback("Convergence achieved - stopping early")
-                break
+            # Check for convergence - DISABLED, always run to completion
+            # if self._check_convergence():
+            #     self.log_callback("Convergence achieved - stopping early")
+            #     break
 
         # Stop monitoring
         self.running = False
@@ -925,8 +927,8 @@ class DynamicTournamentOptimizer:
                             continue
 
                         # Submit trial for execution
-                        # First run: at least min_iterations (50k)
-                        # Subsequent runs: eval_interval (10k) chunks
+                        # First run: at least min_iterations (200k)
+                        # Subsequent runs: eval_interval (50k) chunks
                         if trial.iterations == 0:
                             iterations_to_run = max(self.min_iterations, self.eval_interval)
                         else:
@@ -934,6 +936,15 @@ class DynamicTournamentOptimizer:
                                 self.eval_interval,
                                 trial.compute_budget + trial.bonus_budget - trial.iterations
                             )
+
+                        # Debug: Log what we're actually running
+                        with open(master_debug, 'a') as f:
+                            f.write(f"Trial {trial_id} scheduling:\n")
+                            f.write(f"  trial.iterations: {trial.iterations}\n")
+                            f.write(f"  min_iterations: {self.min_iterations}\n")
+                            f.write(f"  eval_interval: {self.eval_interval}\n")
+                            f.write(f"  iterations_to_run: {iterations_to_run}\n")
+                            f.flush()
 
                         # Update trial status to running
                         trial.status = 'running'
