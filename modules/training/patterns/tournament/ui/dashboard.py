@@ -265,8 +265,8 @@ class PatternGeneratorDashboard:
                 f"[bold cyan]Configuration[/bold cyan]",
                 f"────────────────",
                 f"Trials:       {self.optimizer.num_initial_trials if self.optimizer else '-'}",
-                f"Eval Interval: {self.optimizer.eval_interval:,} " if self.optimizer else "-",
-                f"Min Iterations: {self.optimizer.min_iterations:,}" if self.optimizer else "-"
+                f"Total Gens:   {self.optimizer.total_generations:,}" if self.optimizer else "-",
+                f"Per Trial:    {self.optimizer.total_generations // self.optimizer.num_initial_trials:,} gens" if self.optimizer else "-"
             ]
 
             info_text = "\n".join(info_lines)
