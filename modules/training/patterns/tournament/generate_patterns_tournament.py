@@ -218,8 +218,8 @@ class TournamentRunner:
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # Save pickle file with all data
-        pickle_file = output_dir / f"patterns_{timestamp}.pkl"
+        # Include configuration in filename for clarity
+        pickle_file = output_dir / f"patterns_{self.config_suffix}_{timestamp}.pkl"
         import pickle
         with open(pickle_file, 'wb') as f:
             pickle.dump(pattern_data, f)
