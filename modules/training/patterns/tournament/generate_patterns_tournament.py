@@ -116,8 +116,18 @@ class TournamentRunner:
         # Create directories with safe access
         tournament_config = self.config.get('tournament', {})
         logging_config = self.config.get('logging', {})
-        checkpoint_dir = tournament_config.get('checkpoint_dir', './checkpoints')
-        log_dir = logging_config.get('log_dir', './logs')
+        pattern_config = self.config.get('pattern', {})
+
+        # Partition checkpoints and logs by pattern configuration
+        num_patterns = pattern_config.get('count', 16)
+        pattern_length = pattern_config.get('length', 512)
+        config_suffix = f"p{num_patterns}_l{pattern_length}"
+
+        base_checkpoint_dir = tournament_config.get('checkpoint_dir', './checkpoints')
+        base_log_dir = logging_config.get('log_dir', './logs')
+
+        checkpoint_dir = f"{base_checkpoint_dir}/{config_suffix}"
+        log_dir = f"{base_log_dir}/{config_suffix}"
 
         Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
         Path(log_dir).mkdir(parents=True, exist_ok=True)
