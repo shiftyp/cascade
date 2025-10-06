@@ -771,12 +771,18 @@ class DynamicTournamentOptimizer:
 
         # Main tournament loop - run trials until complete
         # For GA: trials run until they hit their generation target (no budget checks)
+        loop_count = 0
         while len(self.active_trials) > 0:
+            loop_count += 1
+            self.log_callback(f"DEBUG: Main loop iteration {loop_count}, active_trials: {self.active_trials}")
+
             # Update phase
             self._update_phase()
 
             # Run active trials
             self._run_trial_batch()
+
+            self.log_callback(f"DEBUG: After _run_trial_batch, active_trials: {self.active_trials}")
 
             # Check if any trials exhausted (completed all generations)
             completed_trials = []
@@ -900,7 +906,10 @@ class DynamicTournamentOptimizer:
     def _run_trial_batch(self):
         """Run all active trials for eval_interval iterations"""
         if not self.active_trials:
+            self.log_callback("DEBUG: _run_trial_batch called but no active trials!")
             return
+
+        self.log_callback(f"DEBUG: _run_trial_batch starting with {len(self.active_trials)} active trials")
 
         # Prepare batch execution
         batch_size = min(len(self.active_trials), 8)  # Max 8 parallel workers
