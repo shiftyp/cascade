@@ -45,7 +45,18 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
     # Create debug file with absolute path and simple operations
     try:
-        log_dir = os.path.join(os.path.dirname(checkpoint_dir), 'logs')
+        # Create logs parallel to checkpoints with same partitioning
+        # checkpoint_dir is like "./checkpoints/p16_l512"
+        # We want log_dir to be "./logs/p16_l512"
+        checkpoint_parts = checkpoint_dir.split(os.sep)
+        if 'checkpoints' in checkpoint_parts:
+            # Replace 'checkpoints' with 'logs' in path
+            log_parts = [p if p != 'checkpoints' else 'logs' for p in checkpoint_parts]
+            log_dir = os.path.join(*log_parts)
+        else:
+            # Fallback: put logs alongside checkpoints
+            log_dir = os.path.join(os.path.dirname(checkpoint_dir), 'logs')
+
         os.makedirs(log_dir, exist_ok=True)
         debug_file_path = os.path.join(log_dir, f'debug_trial_{trial_id}.txt')
 
@@ -771,6 +782,15 @@ class DynamicTournamentOptimizer:
             completed_trials = []
             for trial_id in self.active_trials[:]:
                 trial = self.trials[trial_id]
+                # Calculate generation progress
+                total_gens = trial.compute_budget // 32
+                current_gen = trial.iterations // 32
+
+                # Debug log
+                self.log_callback(f"DEBUG: Trial {trial_id}: gen {current_gen}/{total_gens}, "
+                                 f"iterations {trial.iterations}/{trial.compute_budget}, "
+                                 f"status={trial.status}")
+
                 if trial.status == 'completed':
                     completed_trials.append(trial_id)
 
@@ -778,6 +798,9 @@ class DynamicTournamentOptimizer:
             for trial_id in completed_trials:
                 self.active_trials.remove(trial_id)
                 self.log_callback(f"Trial {trial_id} completed all generations")
+
+            # Debug: Show active trials
+            self.log_callback(f"DEBUG: Active trials remaining: {self.active_trials}")
 
         # Stop monitoring
         self.running = False
