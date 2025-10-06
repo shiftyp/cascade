@@ -451,7 +451,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         start_time = time.time()
         last_log_time = start_time
 
-        # Main genetic algorithm loop
+        # Main genetic algorithm loop (runs for specified generations, no budget checks)
         while current_generation < total_generations:
             # SELECTION: Keep top performers
             elites = [population[fitness_scores[i][1]] for i in range(num_elites)]
@@ -758,24 +758,26 @@ class DynamicTournamentOptimizer:
         # Start background checkpoint monitoring for live updates
         self._start_checkpoint_monitor()
 
-        # Main tournament loop
-        while self.compute_used < self.total_budget and len(self.active_trials) > 0:
+        # Main tournament loop - run trials until complete
+        # For GA: trials run until they hit their generation target (no budget checks)
+        while len(self.active_trials) > 0:
             # Update phase
             self._update_phase()
 
-            # Run active trials for eval_interval
+            # Run active trials
             self._run_trial_batch()
 
-            # Evaluate and potentially eliminate
-            # DISABLED for GA - elimination doesn't make sense with population-based optimization
-            # Each trial runs its own population, all should complete
-            # if self.compute_used >= self.min_iterations:
-            #     self._evaluate_and_eliminate()
+            # Check if any trials exhausted (completed all generations)
+            completed_trials = []
+            for trial_id in self.active_trials[:]:
+                trial = self.trials[trial_id]
+                if trial.status == 'completed':
+                    completed_trials.append(trial_id)
 
-            # Check for convergence - DISABLED, always run to completion
-            # if self._check_convergence():
-            #     self.log_callback("Convergence achieved - stopping early")
-            #     break
+            # Remove completed trials from active list
+            for trial_id in completed_trials:
+                self.active_trials.remove(trial_id)
+                self.log_callback(f"Trial {trial_id} completed all generations")
 
         # Stop monitoring
         self.running = False
@@ -785,7 +787,17 @@ class DynamicTournamentOptimizer:
 
     def _update_phase(self):
         """Update optimization phase based on progress"""
-        progress = self.compute_used / self.total_budget
+        # For GA: Use best trial's generation progress instead of compute budget
+        if self.trials and hasattr(self.trials[0], 'generation'):
+            # Use generation progress
+            best_trial = min(self.trials, key=lambda t: t.best_score)
+            if hasattr(best_trial, 'generation'):
+                total_gens = self.total_budget // 32  # population_size
+                progress = best_trial.generation / total_gens if total_gens > 0 else 0
+            else:
+                progress = self.compute_used / self.total_budget
+        else:
+            progress = self.compute_used / self.total_budget
 
         if progress < 0.25:
             new_phase = 'exploration'
@@ -919,31 +931,35 @@ class DynamicTournamentOptimizer:
                     for trial_id in self.active_trials:
                         trial = self.trials[trial_id]
 
-                        # Check if trial has budget left
-                        if trial.iterations >= trial.compute_budget + trial.bonus_budget:
+                        # Skip if already completed
+                        if trial.status == 'completed':
+                            continue
+
+                        # For GA: Run in generation batches
+                        # First run: 200k iterations (6,250 generations)
+                        # Subsequent: 50k iterations (1,562 generations) until total_budget reached
+                        total_generations_for_trial = trial.compute_budget // 32  # population_size = 32
+                        current_gen_for_trial = trial.iterations // 32
+
+                        if current_gen_for_trial >= total_generations_for_trial:
+                            # This trial finished all its generations
+                            trial.status = 'completed'
                             with open(master_debug, 'a') as f:
-                                f.write(f"Skipping trial {trial_id} - budget exhausted\n")
+                                f.write(f"Trial {trial_id} completed {current_gen_for_trial} generations\n")
                                 f.flush()
                             continue
 
                         # Submit trial for execution
-                        # First run: at least min_iterations (200k)
-                        # Subsequent runs: eval_interval (50k) chunks
                         if trial.iterations == 0:
                             iterations_to_run = max(self.min_iterations, self.eval_interval)
                         else:
-                            iterations_to_run = min(
-                                self.eval_interval,
-                                trial.compute_budget + trial.bonus_budget - trial.iterations
-                            )
+                            # Run until trial budget, not global budget
+                            remaining = trial.compute_budget - trial.iterations
+                            iterations_to_run = min(self.eval_interval, remaining)
 
-                        # Debug: Log what we're actually running
                         with open(master_debug, 'a') as f:
-                            f.write(f"Trial {trial_id} scheduling:\n")
-                            f.write(f"  trial.iterations: {trial.iterations}\n")
-                            f.write(f"  min_iterations: {self.min_iterations}\n")
-                            f.write(f"  eval_interval: {self.eval_interval}\n")
-                            f.write(f"  iterations_to_run: {iterations_to_run}\n")
+                            f.write(f"Trial {trial_id}: Gen {current_gen_for_trial}/{total_generations_for_trial}, "
+                                   f"running {iterations_to_run} iterations\n")
                             f.flush()
 
                         # Update trial status to running
@@ -1009,8 +1025,16 @@ class DynamicTournamentOptimizer:
             for trial_id in self.active_trials:
                 trial = self.trials[trial_id]
 
-                # Check if trial has budget left
-                if trial.iterations >= trial.compute_budget + trial.bonus_budget:
+                # Skip if completed
+                if trial.status == 'completed':
+                    continue
+
+                # Check if trial finished its generations
+                total_generations_for_trial = trial.compute_budget // 32
+                current_gen_for_trial = trial.iterations // 32
+
+                if current_gen_for_trial >= total_generations_for_trial:
+                    trial.status = 'completed'
                     continue
 
                 # Update trial status to running
@@ -1019,15 +1043,11 @@ class DynamicTournamentOptimizer:
 
                 try:
                     # Run the trial directly (no parallelism)
-                    # First run: at least min_iterations (50k)
-                    # Subsequent runs: eval_interval (10k) chunks
                     if trial.iterations == 0:
                         iterations_to_run = max(self.min_iterations, self.eval_interval)
                     else:
-                        iterations_to_run = min(
-                            self.eval_interval,
-                            trial.compute_budget + trial.bonus_budget - trial.iterations
-                        )
+                        remaining = trial.compute_budget - trial.iterations
+                        iterations_to_run = min(self.eval_interval, remaining)
 
                     result = run_single_trial_worker(
                         trial_id,
@@ -1065,9 +1085,11 @@ class DynamicTournamentOptimizer:
         if 'patterns_file' in result:
             trial.patterns_file = result['patterns_file']
 
-        # Update trial status based on budget
-        total_budget = trial.compute_budget + trial.bonus_budget
-        if trial.iterations >= total_budget:
+        # Update trial status based on generation completion
+        total_gens = trial.compute_budget // 32  # population_size = 32
+        current_gen = trial.iterations // 32
+
+        if current_gen >= total_gens:
             trial.status = 'completed'
         else:
             trial.status = 'paused'  # Waiting for next batch
@@ -1084,12 +1106,12 @@ class DynamicTournamentOptimizer:
                     t.is_best = False
 
         # Update compute used based on actual trial iterations
-        # This is always calculated, never incremented, to avoid double-counting
         self.compute_used = sum(t.iterations for t in self.trials)
 
-        # Update progress
-        trial.progress = trial.iterations / total_budget if total_budget > 0 else 1.0
-        trial.calculate_eta(max(0, total_budget - trial.iterations))
+        # Update progress based on generations
+        trial.progress = current_gen / total_gens if total_gens > 0 else 1.0
+        remaining_gens = total_gens - current_gen
+        trial.calculate_eta(remaining_gens * 32)  # Convert generations to iterations for ETA
 
         # Log update
         self.log_callback(
