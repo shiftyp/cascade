@@ -132,6 +132,17 @@ class TournamentRunner:
         Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
         Path(log_dir).mkdir(parents=True, exist_ok=True)
 
+        # Store partitioned paths for later use
+        self.checkpoint_dir = checkpoint_dir
+        self.log_dir = log_dir
+        self.config_suffix = config_suffix  # Save for logging
+
+        # Log partition info (if not using Rich UI, print it)
+        if self.config.get('ui', {}).get('type', 'rich') != 'rich':
+            print(f"Configuration: {num_patterns} patterns × {pattern_length} symbols")
+            print(f"Checkpoints: {checkpoint_dir}")
+            print(f"Logs: {log_dir}")
+
         # Initialize core manager
         hardware_config = self.config.get('hardware', {})
         self.core_manager = CoreManager(
@@ -150,14 +161,14 @@ class TournamentRunner:
             use_console=(ui_type != 'rich')  # Disable console output for Rich UI
         )
 
-        # Initialize optimizer
+        # Initialize optimizer with partitioned checkpoint_dir
         pattern_config = self.config.get('pattern', {})
         self.optimizer = DynamicTournamentOptimizer(
             total_compute_budget=tournament_config.get('total_compute_budget', 2_000_000),
             num_initial_trials=tournament_config.get('initial_trials', 8),
             min_iterations=tournament_config.get('min_iterations_before_elimination', 50_000),
             eval_interval=tournament_config.get('evaluation_interval', 10_000),
-            checkpoint_dir=checkpoint_dir,
+            checkpoint_dir=checkpoint_dir,  # Already partitioned above
             log_callback=self.log_message,
             execution_mode=hardware_config.get('execution_mode', 'auto'),
             num_patterns=pattern_config.get('count', 16),
@@ -201,8 +212,8 @@ class TournamentRunner:
 
     def save_patterns(self, pattern_data):
         """Save generated patterns to file"""
-        checkpoint_dir = self.config.get('tournament', {}).get('checkpoint_dir', './checkpoints')
-        output_dir = Path(checkpoint_dir) / 'output'
+        # Use the partitioned checkpoint_dir
+        output_dir = Path(self.checkpoint_dir) / 'output'
         output_dir.mkdir(exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

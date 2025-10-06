@@ -79,6 +79,8 @@ class PatternGeneratorDashboard:
             header_text = Text()
             header_text.append("CASCADE Pattern Tournament", style="bold white")
             header_text.append(" | ", style="dim")
+            header_text.append(f"{self.optimizer.num_patterns}p × {self.optimizer.pattern_length}s", style="bold cyan")
+            header_text.append(" | ", style="dim")
             header_text.append(f"Phase: {self.optimizer.current_phase.upper()}", style=f"bold {phase_color}")
             header_text.append(" | ", style="dim")
             header_text.append(f"Progress: {compute_pct:.1f}%", style="green")
