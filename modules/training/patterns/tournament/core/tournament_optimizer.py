@@ -1133,16 +1133,26 @@ class DynamicTournamentOptimizer:
         if len(self.active_trials) <= 1:
             return True  # Only one trial left
 
-        # Check if all trials have stagnated
+        # Check if using GA (different convergence criteria)
         active_trial_objects = [t for t in self.trials if t.trial_id in self.active_trials]
-        all_stagnant = all(t.convergence_rate < 0.0001 for t in active_trial_objects)
+        using_ga = any(hasattr(t, 'algorithm') and t.algorithm == 'GA' for t in active_trial_objects)
 
-        if all_stagnant and self.compute_used > self.total_budget * 0.5:
-            return True
+        if using_ga:
+            # GA convergence: Only stop if truly exceptional or fully exhausted
+            # Don't check stagnation - GA needs many generations to converge
+            if self.global_best_score < -29.5:  # Very close to target
+                return True
+            # Otherwise let it run to full budget
+            return False
+        else:
+            # Hill climbing convergence (original logic)
+            all_stagnant = all(t.convergence_rate < 0.0001 for t in active_trial_objects)
+            if all_stagnant and self.compute_used > self.total_budget * 0.5:
+                return True
 
-        # Check if best score is exceptional
-        if self.global_best_score < -45.0:  # Exceptional result
-            return True
+            # Check if best score is exceptional
+            if self.global_best_score < -45.0:
+                return True
 
         return False
 
