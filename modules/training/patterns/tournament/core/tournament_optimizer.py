@@ -710,21 +710,24 @@ class DynamicTournamentOptimizer:
     def initialize_trials(self):
         """Initialize all trials"""
         self.trials = []
+        # Calculate target generations per trial
+        total_generations = self.total_budget // 32  # population_size = 32
+        target_gens_per_trial = total_generations // self.num_initial_trials
+
         for i in range(self.num_initial_trials):
             trial = Trial(
                 trial_id=i,
                 seed=1000 * (i + 1),
                 p_cores=self._assign_p_cores(i)
             )
-            # Ensure each trial gets at least min_iterations (50k)
-            trial.compute_budget = max(
-                self.min_iterations,
-                self.total_budget // self.num_initial_trials
-            )
+            # Set target generations for this trial
+            trial.target_generations = target_gens_per_trial
+            trial.target_iterations = target_gens_per_trial * 32  # For compatibility
             self.trials.append(trial)
 
         self.active_trials = list(range(self.num_initial_trials))
-        self.log_callback(f"Initialized {self.num_initial_trials} trials")
+        self.log_callback(f"Initialized {self.num_initial_trials} trials, "
+                         f"{target_gens_per_trial:,} generations each")
 
     def _assign_p_cores(self, trial_id: int) -> List[int]:
         """Assign P-cores to a trial"""
@@ -789,12 +792,12 @@ class DynamicTournamentOptimizer:
             for trial_id in self.active_trials[:]:
                 trial = self.trials[trial_id]
                 # Calculate generation progress
-                total_gens = trial.compute_budget // 32
+                total_gens = trial.target_generations
                 current_gen = trial.iterations // 32
 
                 # Debug log
                 self.log_callback(f"DEBUG: Trial {trial_id}: gen {current_gen}/{total_gens}, "
-                                 f"iterations {trial.iterations}/{trial.compute_budget}, "
+                                 f"iterations {trial.iterations}/{trial.target_iterations}, "
                                  f"status={trial.status}")
 
                 if trial.status == 'completed':
@@ -872,9 +875,11 @@ class DynamicTournamentOptimizer:
                             trial.ga_worst = fitness_scores[-1][0]
 
                     # Update progress
-                    total_budget = trial.compute_budget + trial.bonus_budget
-                    trial.progress = trial.iterations / total_budget if total_budget > 0 else 0
-                    trial.calculate_eta(max(0, total_budget - trial.iterations))
+                    total_gens = trial.target_generations if hasattr(trial, 'target_generations') else (trial.target_iterations // 32)
+                    current_gen = trial.iterations // 32
+                    trial.progress = current_gen / total_gens if total_gens > 0 else 0
+                    remaining_gens = max(0, total_gens - current_gen)
+                    trial.calculate_eta(remaining_gens * 32)
 
                     # Update convergence rate
                     score_history = checkpoint.get('score_history', [])
@@ -969,8 +974,8 @@ class DynamicTournamentOptimizer:
 
                         # For GA: Run in generation batches
                         # First run: 200k iterations (6,250 generations)
-                        # Subsequent: 50k iterations (1,562 generations) until total_budget reached
-                        total_generations_for_trial = trial.compute_budget // 32  # population_size = 32
+                        # Subsequent: 50k iterations (1,562 generations) until target reached
+                        total_generations_for_trial = trial.target_generations
                         current_gen_for_trial = trial.iterations // 32
 
                         if current_gen_for_trial >= total_generations_for_trial:
@@ -985,8 +990,8 @@ class DynamicTournamentOptimizer:
                         if trial.iterations == 0:
                             iterations_to_run = max(self.min_iterations, self.eval_interval)
                         else:
-                            # Run until trial budget, not global budget
-                            remaining = trial.compute_budget - trial.iterations
+                            # Run until target, not budget
+                            remaining = trial.target_iterations - trial.iterations
                             iterations_to_run = min(self.eval_interval, remaining)
 
                         with open(master_debug, 'a') as f:
@@ -1062,7 +1067,7 @@ class DynamicTournamentOptimizer:
                     continue
 
                 # Check if trial finished its generations
-                total_generations_for_trial = trial.compute_budget // 32
+                total_generations_for_trial = trial.target_generations
                 current_gen_for_trial = trial.iterations // 32
 
                 if current_gen_for_trial >= total_generations_for_trial:
@@ -1078,7 +1083,7 @@ class DynamicTournamentOptimizer:
                     if trial.iterations == 0:
                         iterations_to_run = max(self.min_iterations, self.eval_interval)
                     else:
-                        remaining = trial.compute_budget - trial.iterations
+                        remaining = trial.target_iterations - trial.iterations
                         iterations_to_run = min(self.eval_interval, remaining)
 
                     result = run_single_trial_worker(
@@ -1118,7 +1123,7 @@ class DynamicTournamentOptimizer:
             trial.patterns_file = result['patterns_file']
 
         # Update trial status based on generation completion
-        total_gens = trial.compute_budget // 32  # population_size = 32
+        total_gens = trial.target_generations
         current_gen = trial.iterations // 32
 
         if current_gen >= total_gens:
@@ -1189,9 +1194,10 @@ class DynamicTournamentOptimizer:
                 remaining_budget
             )
 
-            for trial_id, bonus in allocation.items():
-                self.trials[trial_id].bonus_budget += bonus
-                self.log_callback(f"Trial {trial_id} receives {bonus:,} bonus iterations")
+            # Bonus allocation disabled for GA (all trials run to target_generations)
+            # for trial_id, bonus in allocation.items():
+            #     self.trials[trial_id].bonus_budget += bonus
+            #     self.log_callback(f"Trial {trial_id} receives {bonus:,} bonus iterations")
 
     def _check_convergence(self) -> bool:
         """Check if tournament has converged - DISABLED, always run to completion"""
