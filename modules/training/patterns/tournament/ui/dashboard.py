@@ -81,10 +81,19 @@ class PatternGeneratorDashboard:
             header_text.append(" | ", style="dim")
             header_text.append(f"{self.optimizer.num_patterns}p × {self.optimizer.pattern_length}s", style="bold cyan")
             header_text.append(" | ", style="dim")
-            header_text.append(f"Phase: {self.optimizer.current_phase.upper()}", style=f"bold {phase_color}")
+
+            # Show generations if using GA
+            ga_trial = next((t for t in self.optimizer.trials if hasattr(t, 'algorithm') and t.algorithm == 'GA'), None)
+            if ga_trial and hasattr(ga_trial, 'generation'):
+                total_generations = self.optimizer.total_budget // 32  # population_size = 32
+                gen_pct = (ga_trial.generation / total_generations * 100) if total_generations > 0 else 0
+                header_text.append(f"Gen: {ga_trial.generation:,}/{total_generations:,} ({gen_pct:.1f}%)", style="bold green")
+            else:
+                header_text.append(f"Progress: {compute_pct:.1f}%", style="green")
+                header_text.append(f" ({self.optimizer.compute_used:,}/{self.optimizer.total_budget:,})", style="dim")
+
             header_text.append(" | ", style="dim")
-            header_text.append(f"Progress: {compute_pct:.1f}%", style="green")
-            header_text.append(f" ({self.optimizer.compute_used:,}/{self.optimizer.total_budget:,})", style="dim")
+            header_text.append(f"Phase: {self.optimizer.current_phase.upper()}", style=f"bold {phase_color}")
 
             return Panel(
                 Align.center(header_text),
@@ -190,13 +199,17 @@ class PatternGeneratorDashboard:
             # Check if any trials are using GA
             ga_trials = [t for t in self.optimizer.trials if hasattr(t, 'algorithm') and t.algorithm == 'GA']
 
-            if ga_trials:
-                # Show GA-specific stats
+            if ga_trials and hasattr(ga_trials[0], 'generation'):
+                # Show GA-specific stats with generation info
+                current_gen = ga_trials[0].generation
+                total_gen = self.optimizer.total_budget // 32  # population_size = 32
+                gen_progress = (current_gen / total_gen * 100) if total_gen > 0 else 0
+
                 stats_lines = [
                     f"[bold cyan]Algorithm:[/]        Genetic (Pop=32)",
                     f"[bold cyan]Active Trials:[/]    {active_count}",
-                    f"[bold yellow]Compute Used:[/]     {self.optimizer.compute_used:,}",
-                    f"[bold green]Compute Left:[/]     {compute_remaining:,}",
+                    f"[bold yellow]Generation:[/]       {current_gen:,}/{total_gen:,}",
+                    f"[bold green]Gen Progress:[/]     {gen_progress:.1f}%",
                     "",
                     f"[bold]Best Score:[/]       {best_score_str}",
                     f"[bold]Best Trial:[/]       #{self.optimizer.global_best_trial_id or '-'}",

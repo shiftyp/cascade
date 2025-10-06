@@ -338,7 +338,13 @@ def main():
         '--budget',
         type=int,
         default=4_800_000,
-        help='Total compute budget (iterations)'
+        help='Total compute budget (iterations). For GA: iterations = generations × population_size(32)'
+    )
+
+    parser.add_argument(
+        '--generations',
+        type=int,
+        help='Total generations for GA (alternative to --budget). If specified, overrides --budget.'
     )
 
     parser.add_argument(
@@ -489,7 +495,14 @@ def main():
         if args.trials != 8:
             runner.config.setdefault('tournament', {})['initial_trials'] = args.trials
 
-        if args.budget != 2000000:
+        # Handle --generations parameter (converts to iterations)
+        if args.generations:
+            # For GA: iterations = generations × population_size
+            # Population size is hardcoded to 32 in worker
+            iterations = args.generations * 32
+            runner.config.setdefault('tournament', {})['total_compute_budget'] = iterations
+            runner.config.setdefault('tournament', {})['_generations'] = args.generations
+        elif args.budget != 4800000:
             runner.config.setdefault('tournament', {})['total_compute_budget'] = args.budget
 
         if args.min_iterations != 50000:
