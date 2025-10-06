@@ -164,11 +164,25 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         if checkpoint_file.exists():
             with open(checkpoint_file, 'rb') as f:
                 checkpoint = pickle.load(f)
-                pattern_set = checkpoint['pattern_set']
-                repetition_maps = checkpoint.get('repetition_maps', [])
-                start_iteration = checkpoint['iteration']
-                best_score = checkpoint['best_score']
-                score_history = checkpoint['score_history']
+
+                # Check if this is a GA checkpoint or old format
+                if 'population' in checkpoint:
+                    # GA checkpoint
+                    population = checkpoint['population']
+                    fitness_scores = checkpoint.get('fitness_scores', [])
+                    repetition_map = checkpoint.get('repetition_map')
+                    pattern_set = checkpoint['pattern_set']
+                    start_iteration = checkpoint['iteration']
+                    best_score = checkpoint['best_score']
+                    score_history = checkpoint['score_history']
+                    # Will continue below with GA initialization
+                else:
+                    # Old format - convert to GA
+                    pattern_set = checkpoint['pattern_set']
+                    start_iteration = checkpoint['iteration']
+                    best_score = checkpoint['best_score']
+                    score_history = checkpoint['score_history']
+                    # Will reinitialize population below
         else:
             with open(debug_file_path, 'a') as f:
                 f.write("No checkpoint found, generating initial patterns\n")
@@ -219,325 +233,221 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write(f"Created repetition map: 128 positions × 4 repetitions\n")
                 f.flush()
 
-            # Generate patterns using 128 core bits + expansion
-            pattern_core_length = 128  # Only optimize 128 bits
-
-            for i in range(num_patterns):
-                # Use unique seed for each pattern
-                pattern_seed = seed + i * 7919
-                np.random.seed(pattern_seed)
-
-                # Generate 128 core bits (the actual pattern)
-                pattern_core = np.random.randint(0, 2, pattern_core_length, dtype=np.uint8)
-
-                # Expand to 512 symbols using repetition map
-                # This creates the QR-like structure
-                pattern_full = pattern_core[repetition_map]
-
-                # Store the core pattern (what we'll mutate)
-                pattern_set.append(pattern_core)
-
-                # All patterns use the same repetition map for consistency
-                repetition_maps.append(repetition_map.copy())
+            # GENETIC ALGORITHM SETUP
+            pattern_core_length = 128  # Core pattern bits
+            population_size = 32  # Number of pattern sets in population
+            num_elites = 4  # Top performers preserved unchanged
 
             with open(debug_file_path, 'a') as f:
-                f.write(f"Generated {len(pattern_set)} patterns\n")
-                f.write("Calculating initial correlations...\n")
+                f.write(f"Initializing genetic algorithm:\n")
+                f.write(f"  Population size: {population_size} pattern sets\n")
+                f.write(f"  Patterns per set: {num_patterns}\n")
+                f.write(f"  Core bits per pattern: {pattern_core_length}\n")
+                f.write(f"  Elites preserved: {num_elites}\n")
                 f.flush()
 
-            # Calculate initial scores on EXPANDED patterns
-            max_normal_corr = -np.inf
-            max_flip_corr = -np.inf
-            max_erasure_corr = -np.inf
-            correlation_count = 0
+            # Initialize population: 32 sets of 16 patterns (128-bit cores)
+            population = []
+            for set_idx in range(population_size):
+                pattern_set_core = []
+                for i in range(num_patterns):
+                    pattern_seed = seed + set_idx * 1000 + i * 7919
+                    np.random.seed(pattern_seed)
+                    pattern_core = np.random.randint(0, 2, pattern_core_length, dtype=np.uint8)
+                    pattern_set_core.append(pattern_core)
+                population.append(pattern_set_core)
+
+            with open(debug_file_path, 'a') as f:
+                f.write(f"Generated population of {len(population)} pattern sets\n")
+                f.write("Evaluating initial fitness...\n")
+                f.flush()
 
             # Helper function for erasure testing
             def test_with_erasure(p1, p2, erasure_rate=0.375):
                 """Test correlation with random erasures"""
-                # Create erasure mask (keep 62.5% of symbols)
                 keep_rate = 1.0 - erasure_rate
                 mask = np.random.random(len(p1)) < keep_rate
-
-                # Apply erasure
                 p1_erased = p1[mask]
                 p2_erased = p2[mask]
-
-                if len(p1_erased) < 10:  # Safety check
+                if len(p1_erased) < 10:
                     return 0.0
-
-                # Compute correlation on surviving symbols
                 xcorr = np.correlate(p1_erased, p2_erased, mode='full')
                 peak = np.max(np.abs(xcorr))
                 return 20 * np.log10(peak / len(p1_erased) + 1e-10)
 
-            for i in range(num_patterns):
-                for j in range(i + 1, num_patterns):
-                    # Expand core patterns to full length using repetition map
-                    pattern_i_full = pattern_set[i][repetition_map]
-                    pattern_j_full = pattern_set[j][repetition_map]
+            # Fitness evaluation function for a pattern set
+            def evaluate_fitness(pattern_set_cores):
+                """Calculate fitness (worst-case orthogonality) for a pattern set"""
+                worst_normal = -100.0
+                worst_flip = -100.0
+                worst_erasure = -100.0
 
-                    # Convert to ±1 representation
-                    pattern_i = 2 * pattern_i_full.astype(np.float32) - 1
-                    pattern_j = 2 * pattern_j_full.astype(np.float32) - 1
+                for i in range(num_patterns):
+                    for j in range(i + 1, num_patterns):
+                        # Expand and convert to ±1
+                        pi_full = pattern_set_cores[i][repetition_map]
+                        pj_full = pattern_set_cores[j][repetition_map]
+                        pi = 2 * pi_full.astype(np.float32) - 1
+                        pj = 2 * pj_full.astype(np.float32) - 1
 
-                    # 1. Normal correlation with all time shifts
-                    xcorr_normal = np.correlate(pattern_i, pattern_j, mode='full')
-                    peak_normal = np.max(np.abs(xcorr_normal))
-                    corr_normal_db = 20 * np.log10(peak_normal / pattern_length + 1e-10)
-                    max_normal_corr = max(max_normal_corr, corr_normal_db)
+                        # Normal correlation
+                        xcorr = np.correlate(pi, pj, mode='full')
+                        peak = np.max(np.abs(xcorr))
+                        corr_db = 20 * np.log10(peak / pattern_length + 1e-10)
+                        worst_normal = max(worst_normal, corr_db)
 
-                    # 2. Flip correlation (pattern inverted: 0↔1)
-                    xcorr_flip = np.correlate(pattern_i, -pattern_j, mode='full')
-                    peak_flip = np.max(np.abs(xcorr_flip))
-                    corr_flip_db = 20 * np.log10(peak_flip / pattern_length + 1e-10)
-                    max_flip_corr = max(max_flip_corr, corr_flip_db)
+                        # Flip correlation
+                        xcorr_f = np.correlate(pi, -pj, mode='full')
+                        peak_f = np.max(np.abs(xcorr_f))
+                        corr_f_db = 20 * np.log10(peak_f / pattern_length + 1e-10)
+                        worst_flip = max(worst_flip, corr_f_db)
 
-                    # 3. Erasure correlation (test with 37.5% symbols dropped)
-                    # Run multiple trials for robustness
-                    erasure_trials = []
-                    for _ in range(5):
-                        erasure_db = test_with_erasure(pattern_i, pattern_j, 0.375)
-                        erasure_trials.append(erasure_db)
-                    corr_erasure_db = np.max(erasure_trials)  # Worst case
-                    max_erasure_corr = max(max_erasure_corr, corr_erasure_db)
+                        # Erasure (quick test)
+                        erasure_db = test_with_erasure(pi, pj, 0.375)
+                        worst_erasure = max(worst_erasure, erasure_db)
 
-                    correlation_count += 3
+                # Return worst-case (higher/less negative is worse)
+                return max(worst_normal, worst_flip, worst_erasure)
 
-            # Combined score: worst-case across all three criteria
-            # Lower (more negative) is better orthogonality
-            best_score = max(max_normal_corr, max_flip_corr, max_erasure_corr)
+            # Evaluate initial population
+            fitness_scores = []
+            for set_idx, pattern_set_cores in enumerate(population):
+                fitness = evaluate_fitness(pattern_set_cores)
+                fitness_scores.append((fitness, set_idx))
+
+            # Sort by fitness (lower/more negative is better)
+            fitness_scores.sort(key=lambda x: x[0])
+            best_score = fitness_scores[0][0]
+            best_set_idx = fitness_scores[0][1]
+            pattern_set = population[best_set_idx]  # Track best for checkpointing
             score_history = [best_score]
             start_iteration = 0
 
             with open(debug_file_path, 'a') as f:
-                f.write(f"Initial orthogonality:\n")
-                f.write(f"  Normal: {max_normal_corr:.2f} dB\n")
-                f.write(f"  Flip: {max_flip_corr:.2f} dB\n")
-                f.write(f"  Erasure: {max_erasure_corr:.2f} dB\n")
-                f.write(f"  Combined score: {best_score:.2f} dB\n")
-                f.write(f"Starting optimization from iteration {start_iteration}\n")
+                f.write(f"Initial population fitness:\n")
+                f.write(f"  Best: {fitness_scores[0][0]:.2f} dB (set {fitness_scores[0][1]})\n")
+                f.write(f"  Median: {fitness_scores[16][0]:.2f} dB\n")
+                f.write(f"  Worst: {fitness_scores[-1][0]:.2f} dB (set {fitness_scores[-1][1]})\n")
+                f.write(f"Starting genetic algorithm optimization\n")
                 f.flush()
     
-        # Mutation intensity for 128 core bits (starts high, decreases over time)
-        initial_mutation_rate = 0.15  # 15% of 128 bits = ~19 bits
-        final_mutation_rate = 0.01    # 1% of 128 bits = ~1 bit
-    
-        # Run optimization iterations
-        # Return results more frequently for live dashboard updates (every 10k iterations)
-        iterations_per_update = min(10000, iterations // 5)  # Update at least 5 times, every 10k max
+        # Genetic algorithm parameters
+        mutation_rate = 0.10  # 10% of 128 bits = ~13 bits per mutation
+        crossover_rate = 0.7  # 70% of offspring use crossover
+
+        # Calculate generations from iterations
+        # Each generation evaluates population_size sets
+        total_generations = iterations // population_size
         current_iteration = start_iteration
+        current_generation = start_iteration // population_size
 
         with open(debug_file_path, 'a') as f:
-            f.write(f"Starting optimization loop:\n")
-            f.write(f"  Iterations per update: {iterations_per_update}\n")
-            f.write(f"  Target iterations: {iterations}\n")
-            f.write(f"  Core pattern length: {pattern_core_length} bits\n")
-            f.write(f"  Expanded length: {pattern_length} symbols (via repetition map)\n")
-            f.write(f"  Initial mutation: {initial_mutation_rate:.1%} ({int(initial_mutation_rate * pattern_core_length)} core bits)\n")
-            f.write(f"  Final mutation: {final_mutation_rate:.1%} ({int(final_mutation_rate * pattern_core_length)} core bits)\n")
+            f.write(f"Genetic algorithm parameters:\n")
+            f.write(f"  Total generations: {total_generations}\n")
+            f.write(f"  Population size: {population_size}\n")
+            f.write(f"  Mutation rate: {mutation_rate:.1%} ({int(mutation_rate * pattern_core_length)} bits)\n")
+            f.write(f"  Crossover rate: {crossover_rate:.1%}\n")
+            f.write(f"  Elites: {num_elites}\n")
             f.flush()
 
         import time
         start_time = time.time()
         last_log_time = start_time
 
-        # Track worst pair for guided hill climbing
-        worst_pair_i, worst_pair_j = 0, 1
+        # Main genetic algorithm loop
+        while current_generation < total_generations:
+            # SELECTION: Keep top performers
+            elites = [population[fitness_scores[i][1]] for i in range(num_elites)]
 
-        while current_iteration < iterations:
-            batch_iterations = min(iterations_per_update, iterations - current_iteration)
+            # Create new population
+            new_population = elites.copy()  # Preserve elites
 
-            # Optimize each pattern in the set using GUIDED hill climbing
-            for iter_count in range(batch_iterations):
-                # Step 1: Find the worst pattern pair (re-evaluate every 100 iterations for efficiency)
-                if current_iteration % 100 == 0:
-                    worst_pair_i, worst_pair_j = 0, 1
-                    worst_pair_corr = -100.0
+            # CROSSOVER and MUTATION: Create offspring
+            while len(new_population) < population_size:
+                if np.random.random() < crossover_rate:
+                    # Crossover: Breed from top 50%
+                    parent1_idx = np.random.randint(0, population_size // 2)
+                    parent2_idx = np.random.randint(0, population_size // 2)
+                    parent1 = population[fitness_scores[parent1_idx][1]]
+                    parent2 = population[fitness_scores[parent2_idx][1]]
 
-                    for i in range(num_patterns):
-                        for j in range(i + 1, num_patterns):
-                            # Expand and correlate
-                            pi_full = pattern_set[i][repetition_map]
-                            pj_full = pattern_set[j][repetition_map]
-                            pi = 2 * pi_full.astype(np.float32) - 1
-                            pj = 2 * pj_full.astype(np.float32) - 1
-
-                            # Quick max correlation check (normal + flip)
-                            xcorr_n = np.correlate(pi, pj, mode='full')
-                            peak_n = np.max(np.abs(xcorr_n))
-                            xcorr_f = np.correlate(pi, -pj, mode='full')
-                            peak_f = np.max(np.abs(xcorr_f))
-
-                            corr = max(peak_n, peak_f)
-                            if corr > worst_pair_corr:
-                                worst_pair_corr = corr
-                                worst_pair_i, worst_pair_j = i, j
-
-                # Step 2: Mutate the pattern from worst pair to reduce correlation
-                # Alternate between the two patterns in the pair
-                pattern_idx = worst_pair_i if current_iteration % 2 == 0 else worst_pair_j
-                other_idx = worst_pair_j if pattern_idx == worst_pair_i else worst_pair_i
-
-                original_core = pattern_set[pattern_idx].copy()
-                other_core = pattern_set[other_idx].copy()
-
-                # Step 3: Identify which core bits contribute most to correlation
-                # Expand patterns
-                original_full = original_core[repetition_map]
-                other_full = other_core[repetition_map]
-
-                # For each core bit, calculate how much it contributes to correlation
-                bit_contributions = np.zeros(pattern_core_length)
-                for bit_idx in range(pattern_core_length):
-                    # Find where this core bit appears in expanded pattern
-                    positions = np.where(repetition_map == bit_idx)[0]
-
-                    # If this bit differs from the other pattern's bit, it reduces correlation
-                    # If they match, it increases correlation
-                    other_bit = other_core[bit_idx]
-                    this_bit = original_core[bit_idx]
-
-                    if this_bit == other_bit:
-                        # Matching bits increase correlation - flip these to reduce
-                        bit_contributions[bit_idx] = len(positions)  # Higher contribution
-                    else:
-                        # Differing bits reduce correlation - leave these alone
-                        bit_contributions[bit_idx] = -len(positions)
-
-                # Step 4: Flip bits with highest contribution (matching bits)
-                progress = (current_iteration - start_iteration) / iterations
-                mutation_rate = initial_mutation_rate * (1 - progress) + final_mutation_rate * progress
-                num_flips = max(1, int(mutation_rate * pattern_core_length))
-
-                # Probabilistically flip based on contribution
-                # Normalize contributions to probabilities
-                positive_contributions = np.maximum(bit_contributions, 0)
-                if np.sum(positive_contributions) > 0:
-                    flip_probs = positive_contributions / np.sum(positive_contributions)
-                    flip_positions = np.random.choice(
-                        pattern_core_length,
-                        num_flips,
-                        replace=False,
-                        p=flip_probs
-                    )
+                    # Single-point crossover: split at random pattern
+                    crossover_point = np.random.randint(1, num_patterns)
+                    offspring = parent1[:crossover_point] + parent2[crossover_point:]
                 else:
-                    # Fallback to random if no positive contributions
-                    flip_positions = np.random.choice(pattern_core_length, num_flips, replace=False)
+                    # No crossover: Clone from top 50%
+                    parent_idx = np.random.randint(0, population_size // 2)
+                    offspring = [p.copy() for p in population[fitness_scores[parent_idx][1]]]
 
-                # Create mutated core
-                mutated_core = original_core.copy()
-                mutated_core[flip_positions] = 1 - mutated_core[flip_positions]
+                # MUTATION: Mutate offspring (skip elites)
+                for pattern_idx in range(num_patterns):
+                    if np.random.random() < mutation_rate:
+                        # Mutate this pattern
+                        num_flips = np.random.randint(1, int(mutation_rate * pattern_core_length) + 5)
+                        flip_positions = np.random.choice(pattern_core_length, num_flips, replace=False)
+                        offspring[pattern_idx] = offspring[pattern_idx].copy()
+                        offspring[pattern_idx][flip_positions] = 1 - offspring[pattern_idx][flip_positions]
 
-                # Expand both for evaluation
-                original_full = original_core[repetition_map]
-                mutated_full = mutated_core[repetition_map]
+                new_population.append(offspring)
 
-                # Step 5: Evaluate mutation ONLY against the other pattern in worst pair
-                # This focuses optimization on fixing the actual problem
+            # Replace population
+            population = new_population
 
-                # Expand other pattern
-                other_pattern_full = pattern_set[other_idx][repetition_map]
-                pattern_mut = 2 * mutated_full.astype(np.float32) - 1
-                pattern_other = 2 * other_pattern_full.astype(np.float32) - 1
-                pattern_old = 2 * original_full.astype(np.float32) - 1
+            # EVALUATION: Evaluate new population
+            fitness_scores = []
+            for set_idx, pattern_set_cores in enumerate(population):
+                fitness = evaluate_fitness(pattern_set_cores)
+                fitness_scores.append((fitness, set_idx))
 
-                # Test new correlation (only against the paired pattern)
-                xcorr_n_new = np.correlate(pattern_mut, pattern_other, mode='full')
-                xcorr_f_new = np.correlate(pattern_mut, -pattern_other, mode='full')
-                new_corr = max(np.max(np.abs(xcorr_n_new)), np.max(np.abs(xcorr_f_new)))
+            # Sort by fitness
+            fitness_scores.sort(key=lambda x: x[0])
 
-                # Test old correlation
-                xcorr_n_old = np.correlate(pattern_old, pattern_other, mode='full')
-                xcorr_f_old = np.correlate(pattern_old, -pattern_other, mode='full')
-                old_corr = max(np.max(np.abs(xcorr_n_old)), np.max(np.abs(xcorr_f_old)))
+            # Track best
+            current_best = fitness_scores[0][0]
+            if current_best < best_score:
+                best_score = current_best
+                best_set_idx = fitness_scores[0][1]
+                pattern_set = population[best_set_idx]
 
-                max_correlation_new = 20 * np.log10(new_corr / pattern_length + 1e-10)
-                max_correlation_old = 20 * np.log10(old_corr / pattern_length + 1e-10)
+            score_history.append(best_score)
 
-                # Keep mutation ONLY if it improves orthogonality
-                # Lower (more negative) correlation is better
-                if max_correlation_new < max_correlation_old:
-                    pattern_set[pattern_idx] = mutated_core  # Update core pattern
+            # Update iteration counter
+            current_iteration = current_generation * population_size
+            current_generation += 1
 
-                # Update global best score periodically (every 10 iterations for accuracy)
-                # by checking the actual worst case across ALL pattern pairs
-                if current_iteration % 10 == 0:
-                    worst_normal = -100.0
-                    worst_flip = -100.0
-                    worst_erasure = -100.0
-
-                    for i in range(num_patterns):
-                        for j in range(i + 1, num_patterns):
-                            # Expand core patterns to full 512 symbols
-                            pi_full = pattern_set[i][repetition_map]
-                            pj_full = pattern_set[j][repetition_map]
-
-                            # Convert to ±1
-                            pi = 2 * pi_full.astype(np.float32) - 1
-                            pj = 2 * pj_full.astype(np.float32) - 1
-
-                            # Normal correlation
-                            corr = np.correlate(pi, pj, mode='full')
-                            max_corr = np.max(np.abs(corr))
-                            corr_db = 20 * np.log10(max_corr / pattern_length + 1e-10)
-                            worst_normal = max(worst_normal, corr_db)
-
-                            # Flip correlation
-                            corr_f = np.correlate(pi, -pj, mode='full')
-                            max_corr_f = np.max(np.abs(corr_f))
-                            corr_f_db = 20 * np.log10(max_corr_f / pattern_length + 1e-10)
-                            worst_flip = max(worst_flip, corr_f_db)
-
-                            # Erasure correlation (multiple trials)
-                            for _ in range(3):
-                                erasure_db = test_with_erasure(pi, pj, 0.375)
-                                worst_erasure = max(worst_erasure, erasure_db)
-
-                    # Combined worst-case score: worst across all three criteria
-                    current_score = max(worst_normal, worst_flip, worst_erasure)
-
-                    # Track the best (lowest) score ever achieved
-                    best_score = min(best_score, current_score)
-
-                    # Update score history for convergence tracking
-                    score_history.append(best_score)
-
-                    # Log detailed scores for debugging
-                    with open(debug_file_path, 'a') as f:
-                        f.write(f"  Eval @ {current_iteration}: Normal={worst_normal:.2f}, "
-                               f"Flip={worst_flip:.2f}, Erasure={worst_erasure:.2f}, "
-                               f"Best={best_score:.2f} dB\n")
-                        f.flush()
-
-                current_iteration += 1
-
-                if current_iteration >= iterations:
-                    break
-
-            # Log progress periodically (every 10 seconds or every 1000 iterations)
-            current_time = time.time()
-            if current_iteration % 1000 == 0 or (current_time - last_log_time) >= 10:
+            # Logging and checkpointing
+            if current_generation % 100 == 0 or (current_time - last_log_time) >= 10:
                 elapsed = current_time - start_time
                 if elapsed > 0:
-                    iter_per_sec = (current_iteration - start_iteration) / elapsed
-                    speed_str = f"{iter_per_sec:.1f} iter/s"
+                    gen_per_sec = (current_generation - start_iteration // population_size) / elapsed
+                    iter_per_sec = current_iteration / elapsed if current_iteration > 0 else 0
+                    speed_str = f"{gen_per_sec:.2f} gen/s ({iter_per_sec:.1f} iter/s)"
                 else:
                     speed_str = "N/A"
 
+                # Population diversity
+                best_fitness = fitness_scores[0][0]
+                median_fitness = fitness_scores[population_size // 2][0]
+                worst_fitness = fitness_scores[-1][0]
+
                 with open(debug_file_path, 'a') as f:
-                    f.write(f"Progress: iteration {current_iteration}/{iterations}, "
-                           f"best_score={best_score:.2f} dB, "
-                           f"elapsed={elapsed:.1f}s, "
-                           f"speed={speed_str}\n")
+                    f.write(f"Generation {current_generation}/{total_generations}:\n")
+                    f.write(f"  Best: {best_fitness:.2f} dB, Median: {median_fitness:.2f} dB, "
+                           f"Worst: {worst_fitness:.2f} dB\n")
+                    f.write(f"  Overall best: {best_score:.2f} dB\n")
+                    f.write(f"  Elapsed: {elapsed:.1f}s, Speed: {speed_str}\n")
                     f.flush()
                 last_log_time = current_time
 
-            # Save checkpoint frequently for live dashboard updates
-            if current_iteration % 1000 == 0 or current_iteration >= iterations:
+            # Save checkpoint every 1000 iterations for live updates
+            if current_iteration % 1000 == 0 or current_generation >= total_generations:
                 checkpoint = {
-                    'pattern_set': pattern_set,
-                    'repetition_maps': repetition_maps,
+                    'pattern_set': pattern_set,  # Best pattern set (128-bit cores)
+                    'repetition_map': repetition_map,  # Single shared map
+                    'population': population,  # Full population for resume
+                    'fitness_scores': fitness_scores,  # Current fitness ranking
                     'iteration': current_iteration,
+                    'generation': current_generation,
                     'best_score': best_score,
                     'score_history': score_history,
                     'trial_id': trial_id,
@@ -562,11 +472,16 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         else:
             convergence_rate = 0.001
     
-        # Save final pattern set with repetition maps
+        # Save final pattern set with repetition map
         final_patterns_file = trial_checkpoint_dir / f"final_patterns_{current_iteration}.pkl"
+
+        # Create repetition_maps list for backward compatibility (all same)
+        repetition_maps = [repetition_map.copy() for _ in range(len(pattern_set))]
+
         final_data = {
             'patterns': pattern_set,  # 16 × 128 core patterns
-            'repetition_maps': repetition_maps,  # 16 × 512 expansion maps (same for all)
+            'repetition_map': repetition_map,  # Single shared 512-element map
+            'repetition_maps': repetition_maps,  # List format for compatibility
             'num_patterns': len(pattern_set),
             'pattern_core_length': len(pattern_set[0]) if pattern_set else 0,  # 128
             'pattern_full_length': 512,  # After expansion
@@ -575,7 +490,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             'best_score': best_score,
             'trial_id': trial_id,
             'seed': seed,
-            'iterations': current_iteration
+            'iterations': current_iteration,
+            'algorithm': 'genetic'
         }
         with open(final_patterns_file, 'wb') as f:
             pickle.dump(final_data, f)
@@ -788,6 +704,18 @@ class DynamicTournamentOptimizer:
                     trial.iterations = checkpoint['iteration']
                     trial.best_score = float(checkpoint.get('best_score', trial.best_score))
                     trial.current_score = trial.best_score
+
+                    # GA-specific stats (for display)
+                    if 'generation' in checkpoint:
+                        trial.generation = checkpoint['generation']
+                        trial.algorithm = 'GA'
+                    if 'fitness_scores' in checkpoint:
+                        # Extract population diversity
+                        fitness_scores = checkpoint['fitness_scores']
+                        if len(fitness_scores) >= 3:
+                            trial.ga_best = fitness_scores[0][0]
+                            trial.ga_median = fitness_scores[len(fitness_scores)//2][0]
+                            trial.ga_worst = fitness_scores[-1][0]
 
                     # Update progress
                     total_budget = trial.compute_budget + trial.bonus_budget

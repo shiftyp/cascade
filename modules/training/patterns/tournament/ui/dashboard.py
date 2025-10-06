@@ -108,14 +108,14 @@ class PatternGeneratorDashboard:
         )
 
         # Define columns
-        table.add_column("ID", style="cyan", width=4, justify="center")
-        table.add_column("Status", width=8, justify="center")
-        table.add_column("Core", width=8, justify="center")
-        table.add_column("Iteration", justify="right", width=10)
-        table.add_column("Best Score", justify="right", width=12)
-        table.add_column("Conv Rate", justify="right", width=10)
-        table.add_column("Progress", width=20)
-        table.add_column("ETA", width=8, justify="center")
+        table.add_column("ID", style="cyan", width=3, justify="center")
+        table.add_column("Status", width=7, justify="center")
+        table.add_column("Core", width=5, justify="center")
+        table.add_column("Gen/Iter", justify="right", width=11)
+        table.add_column("Best", justify="right", width=9)
+        table.add_column("Pop(B/M/W)", justify="center", width=15)  # Best/Median/Worst of population
+        table.add_column("Progress", width=16)
+        table.add_column("ETA", width=7, justify="center")
 
         if self.optimizer and self.optimizer.trials:
             for trial in self.optimizer.trials:
@@ -134,13 +134,25 @@ class PatternGeneratorDashboard:
                 else:
                     core_display = "-"
 
+                # Gen/Iter display (show generation if GA)
+                if hasattr(trial, 'generation') and hasattr(trial, 'algorithm') and trial.algorithm == 'GA':
+                    gen_iter_display = f"{trial.generation:,}g"
+                else:
+                    gen_iter_display = f"{trial.iterations:,}"
+
+                # Population diversity (GA only)
+                if hasattr(trial, 'ga_best') and hasattr(trial, 'ga_median') and hasattr(trial, 'ga_worst'):
+                    pop_display = f"{trial.ga_best:.1f}/{trial.ga_median:.1f}/{trial.ga_worst:.1f}"
+                else:
+                    pop_display = "-"
+
                 table.add_row(
                     str(trial.trial_id),
                     status_display,
                     core_display,
-                    f"{trial.iterations:,}",
-                    f"{trial.best_score:.2f} dB" if trial.best_score != float('inf') else "-",
-                    f"{trial.convergence_rate:.4f}",
+                    gen_iter_display,
+                    f"{trial.best_score:.2f}" if trial.best_score != float('inf') else "-",
+                    pop_display,
                     progress_bar,
                     trial.eta,
                     style=row_style
@@ -173,18 +185,37 @@ class PatternGeneratorDashboard:
             else:
                 best_score_str = f"{self.optimizer.global_best_score:.2f} dB"
 
-            stats_lines = [
-                f"[bold cyan]Active Trials:[/]    {active_count}",
-                f"[bold red]Eliminated:[/]       {eliminated_count}",
-                f"[bold yellow]Compute Used:[/]     {self.optimizer.compute_used:,}",
-                f"[bold green]Compute Left:[/]     {compute_remaining:,}",
-                "",
-                f"[bold]Best Score:[/]       {best_score_str}",
-                f"[bold]Best Trial:[/]       #{self.optimizer.global_best_trial_id or '-'}",
-                "",
-                f"[bold]Runtime:[/]          {runtime_str}",
-                f"[bold]Phase:[/]            {self.optimizer.current_phase.title()}"
-            ]
+            # Check if any trials are using GA
+            ga_trials = [t for t in self.optimizer.trials if hasattr(t, 'algorithm') and t.algorithm == 'GA']
+
+            if ga_trials:
+                # Show GA-specific stats
+                stats_lines = [
+                    f"[bold cyan]Algorithm:[/]        Genetic (Pop=32)",
+                    f"[bold cyan]Active Trials:[/]    {active_count}",
+                    f"[bold yellow]Compute Used:[/]     {self.optimizer.compute_used:,}",
+                    f"[bold green]Compute Left:[/]     {compute_remaining:,}",
+                    "",
+                    f"[bold]Best Score:[/]       {best_score_str}",
+                    f"[bold]Best Trial:[/]       #{self.optimizer.global_best_trial_id or '-'}",
+                    "",
+                    f"[bold]Runtime:[/]          {runtime_str}",
+                    f"[bold]Phase:[/]            {self.optimizer.current_phase.title()}"
+                ]
+            else:
+                # Original stats
+                stats_lines = [
+                    f"[bold cyan]Active Trials:[/]    {active_count}",
+                    f"[bold red]Eliminated:[/]       {eliminated_count}",
+                    f"[bold yellow]Compute Used:[/]     {self.optimizer.compute_used:,}",
+                    f"[bold green]Compute Left:[/]     {compute_remaining:,}",
+                    "",
+                    f"[bold]Best Score:[/]       {best_score_str}",
+                    f"[bold]Best Trial:[/]       #{self.optimizer.global_best_trial_id or '-'}",
+                    "",
+                    f"[bold]Runtime:[/]          {runtime_str}",
+                    f"[bold]Phase:[/]            {self.optimizer.current_phase.title()}"
+                ]
 
             stats_text = "\n".join(stats_lines)
         else:
