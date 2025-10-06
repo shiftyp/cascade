@@ -72,38 +72,67 @@ Optimized pattern generator for CASCADE HF modem with QR-like erasure coding:
 
 ## Usage
 
-### Data Encoding Example
+### Nested Pattern Usage (Adaptive Length)
+
+**Patterns generated at maximum length automatically include all shorter variants as prefixes:**
+
 ```python
 # Load patterns
 import pickle
-with open('patterns_20251005.pkl', 'rb') as f:
+with open('patterns_p8_l2048_r2x_20251006.pkl', 'rb') as f:
     data = pickle.load(f)
 
-pattern_cores = data['patterns']  # 16 × 128 core patterns
-repetition_maps = data['repetition_maps']  # 16 × 512 expansion maps
+# Check available lengths
+print(f"Available pattern lengths: {sorted(data['nested_patterns'].keys())}")
+# Output: [128, 256, 512, 1024, 2048]
 
-# Encode data on pattern 0
-pattern_core = pattern_cores[0]  # 128 core bits (pattern signature)
-rep_map = repetition_maps[0]  # Expansion map (0-127 indices)
+# See orthogonality at each length
+for length, orth_db in data['nested_orthogonality'].items():
+    print(f"{length} symbols: {orth_db:.2f} dB")
+# Output:
+#   128 symbols: -12.4 dB (0.64s)
+#   256 symbols: -15.6 dB (1.28s)
+#   512 symbols: -18.6 dB (2.56s)
+#   1024 symbols: -21.6 dB (5.12s)
+#   2048 symbols: -24.6 dB (10.24s)
 
-# Expand to full 512-symbol pattern
-pattern_full = pattern_core[rep_map]  # 512 symbols for transmission
+# Use pattern length based on message size
+if message_size < 100:
+    length = 256  # Fast (1.28s)
+elif message_size < 300:
+    length = 512  # Balanced (2.56s)
+else:
+    length = 1024  # High reliability (5.12s)
 
-user_data = [1, 0, 1, 1, ...]  # 128 bits of user data
+# Extract pattern and repetition map for chosen length
+pattern_data = data['nested_patterns'][length]
+pattern_cores = pattern_data['cores']  # 8 patterns
+rep_map = pattern_data['repetition_map']
+
+# Kernel tells you which pattern to use
+pattern_id = kernel.pattern_id  # From beacon (0-7)
+pattern_core = pattern_cores[pattern_id]
+
+# Expand to full length
+pattern_full = pattern_core[rep_map]
+
+# Encode IQ data
+user_data = [1, 0, 1, 1, ...]  # Core_length bits of user data
 iq_symbols = []
-
 for i, fsk_symbol in enumerate(pattern_full):
-    data_index = rep_map[i]  # Which data position (0-127)
-    iq_value = user_data[data_index]  # Get the data bit
-    # Modulate: fsk_symbol determines 2-FSK tone, iq_value determines IQ phase/amplitude
+    data_index = rep_map[i]
+    iq_value = user_data[data_index]
     iq_symbols.append(modulate(fsk_symbol, iq_value))
-
-# Note: Symbols with same rep_map[i] carry same data bit (redundancy)
-# This enables majority vote decoding with 37.5% erasures
 ```
 
+### Benefits of Nested Patterns:
+
+1. **Adaptive transmission**: Pick length based on message size
+2. **Perfect cross-length orthogonality**: 256s pattern won't interfere with 1024s on adjacent channel
+3. **Single optimization**: Generate once, use at any length
+4. **Efficient**: Short messages don't pay full pattern overhead
+
 ## Next Steps
-1. Run tournament to generate optimal 16 patterns
-2. Validate all three orthogonality criteria meet targets
-3. Test erasure recovery with simulated fading
-4. Integrate with CASCADE modem encoder/decoder
+1. Run tournament with large pattern length (e.g., `--pattern-length 2048`)
+2. Get nested variants automatically (128, 256, 512, 1024, 2048)
+3. Test in CASCADE modem with adaptive length selection

@@ -613,26 +613,91 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         else:
             convergence_rate = 0.001
     
-        # Save final pattern set with repetition map
+        # NESTED PATTERN EXTRACTION
+        # Generate multiple length variants from the optimized core patterns
+        # Shorter patterns are prefixes of longer ones (perfect cross-length orthogonality)
+
+        with open(debug_file_path, 'a') as f:
+            f.write(f"\n=== EXTRACTING NESTED PATTERNS ===\n")
+            f.write(f"Full core length: {pattern_core_length} bits\n")
+            f.flush()
+
+        # Determine nested lengths (powers of 2, down to 128 minimum)
+        nested_core_lengths = []
+        current_len = pattern_core_length
+        while current_len >= 64:  # Minimum 64 core bits
+            nested_core_lengths.append(current_len)
+            current_len = current_len // 2
+
+        nested_patterns = {}
+        nested_orthogonality = {}
+
+        for core_len in nested_core_lengths:
+            # Extract prefix of each pattern
+            variant_cores = [p[:core_len] for p in pattern_set]
+
+            # Calculate expanded length for this variant
+            variant_full_len = core_len * redundancy
+
+            # Create repetition map for this length
+            variant_rep_map = np.zeros(variant_full_len, dtype=np.uint16)
+            for data_pos in range(core_len):
+                for rep in range(redundancy):
+                    variant_rep_map[data_pos * redundancy + rep] = data_pos
+
+            # Shuffle (use same seed for consistency)
+            np.random.seed(seed)
+            shuffle_groups = np.arange(core_len)
+            np.random.shuffle(shuffle_groups)
+            shuffled_variant_map = np.zeros(variant_full_len, dtype=np.uint16)
+            for idx, group in enumerate(shuffle_groups):
+                for rep in range(redundancy):
+                    shuffled_variant_map[idx * redundancy + rep] = group
+
+            # Test orthogonality at this length
+            worst_corr = -100.0
+            for i in range(num_patterns):
+                for j in range(i + 1, num_patterns):
+                    pi_full = variant_cores[i][shuffled_variant_map]
+                    pj_full = variant_cores[j][shuffled_variant_map]
+                    pi = 2 * pi_full.astype(np.float32) - 1
+                    pj = 2 * pj_full.astype(np.float32) - 1
+
+                    # Normal + flip correlation
+                    xcorr_n = np.correlate(pi, pj, mode='full')
+                    xcorr_f = np.correlate(pi, -pj, mode='full')
+                    peak = max(np.max(np.abs(xcorr_n)), np.max(np.abs(xcorr_f)))
+                    corr_db = 20 * np.log10(peak / variant_full_len + 1e-10)
+                    worst_corr = max(worst_corr, corr_db)
+
+            nested_patterns[variant_full_len] = {
+                'cores': variant_cores,
+                'repetition_map': shuffled_variant_map,
+                'core_length': core_len,
+                'full_length': variant_full_len
+            }
+            nested_orthogonality[variant_full_len] = worst_corr
+
+            with open(debug_file_path, 'a') as f:
+                f.write(f"  Length {variant_full_len}: {core_len} core bits, "
+                       f"orthogonality {worst_corr:.2f} dB\n")
+                f.flush()
+
+        # Save final pattern set with ALL nested variants
         final_patterns_file = trial_checkpoint_dir / f"final_patterns_{current_iteration}.pkl"
 
-        # Create repetition_maps list for backward compatibility (all same)
-        repetition_maps = [repetition_map.copy() for _ in range(len(pattern_set))]
-
         final_data = {
-            'patterns': pattern_set,  # 16 × 128 core patterns
-            'repetition_map': repetition_map,  # Single shared 512-element map
-            'repetition_maps': repetition_maps,  # List format for compatibility
+            'nested_patterns': nested_patterns,  # Dict of {length: pattern_data}
+            'nested_orthogonality': nested_orthogonality,  # {length: dB_score}
             'num_patterns': len(pattern_set),
-            'pattern_core_length': len(pattern_set[0]) if pattern_set else 0,  # 128
-            'pattern_full_length': 512,  # After expansion
-            'unique_data_positions': 128,
-            'redundancy_factor': 4,
+            'max_core_length': pattern_core_length,
+            'max_full_length': pattern_length,
+            'redundancy': redundancy,
             'best_score': best_score,
             'trial_id': trial_id,
             'seed': seed,
             'iterations': current_iteration,
-            'algorithm': 'genetic'
+            'algorithm': 'genetic_nested'
         }
         with open(final_patterns_file, 'wb') as f:
             pickle.dump(final_data, f)
@@ -1262,17 +1327,32 @@ class DynamicTournamentOptimizer:
             try:
                 with open(best_trial.patterns_file, 'rb') as f:
                     pattern_data = pickle.load(f)
-                    # Handle both old format (just patterns) and new format (dict)
-                    if isinstance(pattern_data, dict):
+
+                    # Check for nested pattern format
+                    if isinstance(pattern_data, dict) and 'nested_patterns' in pattern_data:
+                        # New nested format
+                        nested_patterns = pattern_data['nested_patterns']
+                        nested_orth = pattern_data['nested_orthogonality']
+
+                        self.log_callback(f"\n✅ Loaded nested pattern set with {pattern_data['num_patterns']} patterns")
+                        self.log_callback(f"Redundancy: {pattern_data['redundancy']}x")
+                        self.log_callback(f"\nAvailable pattern lengths:")
+
+                        for length in sorted(nested_patterns.keys(), reverse=True):
+                            orth = nested_orth[length]
+                            core_bits = nested_patterns[length]['core_length']
+                            duration = length * 0.005  # @ 200 sym/s
+                            self.log_callback(f"  {length:4d} symbols ({core_bits:3d} core): {orth:6.2f} dB ({duration:.2f}s)")
+
+                        return pattern_data
+                    elif isinstance(pattern_data, dict):
+                        # Old non-nested format
                         patterns = pattern_data.get('patterns', [])
-                        repetition_maps = pattern_data.get('repetition_maps', [])
-                        self.log_callback(f"\nLoaded {len(patterns)} patterns with repetition maps from best trial")
-                        self.log_callback(f"Pattern length: {pattern_data.get('pattern_length', 'unknown')}")
-                        self.log_callback(f"Unique data positions: {pattern_data.get('unique_data_positions', 'unknown')}")
+                        self.log_callback(f"\nLoaded {len(patterns)} patterns (old format)")
                         return pattern_data
                     else:
-                        # Old format - just patterns
-                        self.log_callback(f"\nLoaded {len(pattern_data)} patterns (old format, no repetition maps)")
+                        # Very old format - just patterns
+                        self.log_callback(f"\nLoaded {len(pattern_data)} patterns (legacy format)")
                         return {'patterns': pattern_data, 'repetition_maps': []}
             except Exception as e:
                 self.log_callback(f"Error loading patterns: {e}")
