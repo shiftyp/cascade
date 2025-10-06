@@ -48,7 +48,6 @@ class TournamentRunner:
             'tournament': {
                 'initial_trials': 8,
                 'total_compute_budget': 4_800_000,
-                'min_iterations_before_elimination': 200_000,
                 'evaluation_interval': 50_000,
                 'checkpoint_dir': './checkpoints'
             },
@@ -163,11 +162,20 @@ class TournamentRunner:
 
         # Initialize optimizer with partitioned checkpoint_dir
         pattern_config = self.config.get('pattern', {})
+
+        # Handle generations parameter (preferred) or compute_budget (legacy)
+        if '_generations' in tournament_config:
+            total_generations = tournament_config['_generations']
+        elif 'total_generations' in tournament_config:
+            total_generations = tournament_config['total_generations']
+        else:
+            # Legacy: convert budget to generations
+            total_budget = tournament_config.get('total_compute_budget', 4_800_000)
+            total_generations = total_budget // 32  # population_size = 32
+
         self.optimizer = DynamicTournamentOptimizer(
-            total_compute_budget=tournament_config.get('total_compute_budget', 2_000_000),
+            total_generations=total_generations,
             num_initial_trials=tournament_config.get('initial_trials', 8),
-            min_iterations=tournament_config.get('min_iterations_before_elimination', 50_000),
-            eval_interval=tournament_config.get('evaluation_interval', 10_000),
             checkpoint_dir=checkpoint_dir,  # Already partitioned above
             log_callback=self.log_message,
             execution_mode=hardware_config.get('execution_mode', 'auto'),
@@ -361,33 +369,8 @@ def main():
         help='Additional iterations for deepening'
     )
 
-    # Elimination parameters
-    parser.add_argument(
-        '--min-iterations',
-        type=int,
-        default=200_000,
-        help='Minimum iterations before elimination'
-    )
-
-    parser.add_argument(
-        '--eval-interval',
-        type=int,
-        default=50_000,
-        help='Evaluation interval'
-    )
-
-    parser.add_argument(
-        '--aggressive-elimination',
-        action='store_true',
-        help='Use aggressive elimination criteria'
-    )
-
-    parser.add_argument(
-        '--min-survivors',
-        type=int,
-        default=2,
-        help='Minimum number of survivors'
-    )
+    # Elimination parameters (DISABLED - GA runs all trials to completion)
+    # Kept for backward compatibility but ignored
 
     # Pattern parameters
     parser.add_argument(
@@ -505,20 +488,8 @@ def main():
         elif args.budget != 4800000:
             runner.config.setdefault('tournament', {})['total_compute_budget'] = args.budget
 
-        if args.min_iterations != 50000:
-            runner.config.setdefault('tournament', {})['min_iterations_before_elimination'] = args.min_iterations
-
-        if args.eval_interval != 10000:
-            runner.config.setdefault('tournament', {})['evaluation_interval'] = args.eval_interval
-
         if args.checkpoint_dir != './checkpoints':
             runner.config.setdefault('tournament', {})['checkpoint_dir'] = args.checkpoint_dir
-
-        if args.aggressive_elimination:
-            runner.config.setdefault('elimination', {})['aggressive_mode'] = True
-
-        if args.min_survivors != 2:
-            runner.config.setdefault('elimination', {})['minimum_diversity'] = args.min_survivors
 
         if args.pattern_count != 16:
             runner.config.setdefault('pattern', {})['count'] = args.pattern_count

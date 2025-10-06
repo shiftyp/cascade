@@ -29,12 +29,15 @@ def simple_test_worker(x: int) -> int:
 
 def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                            checkpoint_dir: str, p_cores: List[int] = None,
-                           num_patterns: int = 16, pattern_length: int = 512) -> Dict[str, Any]:
+                           num_patterns: int = 16, pattern_length: int = 512,
+                           target_generations: int = None) -> Dict[str, Any]:
     """
     Standalone function to run a single trial in a subprocess.
     This must be a module-level function to be picklable.
 
     Args:
+        iterations: How many iterations to run THIS batch
+        target_generations: Total generations this trial should reach (absolute)
         num_patterns: Number of patterns to generate (default 16)
         pattern_length: Symbols per pattern after expansion (default 512)
     """
@@ -441,11 +444,19 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         mutation_rate = 0.10  # 10% of 128 bits = ~13 bits per mutation
         crossover_rate = 0.7  # 70% of offspring use crossover
 
-        # Calculate generations from iterations
-        # Each generation evaluates population_size sets
-        total_generations = iterations // population_size
+        # Calculate generations
+        # Use target_generations if provided (absolute target), else calculate from batch size
+        if target_generations is None:
+            # Legacy: calculate from iterations parameter
+            total_generations = iterations // population_size
+        else:
+            # New: use absolute target, run THIS batch worth of generations
+            batch_generations = iterations // population_size
+            total_generations = target_generations  # Absolute target for this trial
+
         current_iteration = start_iteration
         current_generation = start_iteration // population_size
+        batch_end_generation = min(current_generation + (iterations // population_size), total_generations)
 
         with open(debug_file_path, 'a') as f:
             f.write(f"Genetic algorithm parameters:\n")
@@ -462,8 +473,9 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         start_time = time.time()
         last_log_time = start_time
 
-        # Main genetic algorithm loop (runs for specified generations, no budget checks)
-        while current_generation < total_generations:
+        # Main genetic algorithm loop (runs THIS batch of generations, then returns)
+        # batch_end_generation tells us when to stop this batch
+        while current_generation < batch_end_generation:
             # SELECTION: Keep top performers
             elites = [population[fitness_scores[i][1]] for i in range(num_elites)]
 
@@ -670,20 +682,16 @@ class DynamicTournamentOptimizer:
 
     def __init__(
         self,
-        total_compute_budget: int = 4_800_000,
+        total_generations: int = 150_000,  # Total generations across all trials
         num_initial_trials: int = 8,
-        min_iterations: int = 200_000,
-        eval_interval: int = 50_000,
         checkpoint_dir: str = "./checkpoints",
         log_callback: Optional[Callable] = None,
         execution_mode: str = "auto",  # "process", "thread", "sequential", or "auto"
         num_patterns: int = 16,  # Number of patterns to generate
         pattern_length: int = 512  # Symbols per pattern (after 4x expansion)
     ):
-        self.total_budget = total_compute_budget
+        self.total_generations = total_generations
         self.num_initial_trials = num_initial_trials
-        self.min_iterations = min_iterations
-        self.eval_interval = eval_interval
         self.checkpoint_dir = Path(checkpoint_dir)
         self.log_callback = log_callback or print
         self.execution_mode = execution_mode
@@ -699,7 +707,8 @@ class DynamicTournamentOptimizer:
         self.active_trials: List[int] = []
 
         # Tracking
-        self.compute_used = 0
+        self.compute_used = 0  # Track iterations (for compatibility)
+        self.current_generation = 0  # Track total generations across trials
         self.global_best_score = float('inf')
         self.global_best_trial_id = None
         self.start_time = None
@@ -711,8 +720,7 @@ class DynamicTournamentOptimizer:
         """Initialize all trials"""
         self.trials = []
         # Calculate target generations per trial
-        total_generations = self.total_budget // 32  # population_size = 32
-        target_gens_per_trial = total_generations // self.num_initial_trials
+        target_gens_per_trial = self.total_generations // self.num_initial_trials
 
         for i in range(self.num_initial_trials):
             trial = Trial(
@@ -765,8 +773,8 @@ class DynamicTournamentOptimizer:
 
         self.log_callback("=" * 60)
         self.log_callback("Starting CASCADE Pattern Tournament")
-        self.log_callback(f"Total compute budget: {self.total_budget:,} iterations")
-        self.log_callback(f"Initial trials: {self.num_initial_trials}")
+        self.log_callback(f"Total generations: {self.total_generations:,}")
+        self.log_callback(f"Trials: {self.num_initial_trials} × {self.total_generations // self.num_initial_trials:,} generations each")
         self.log_callback("=" * 60)
 
         # Start background checkpoint monitoring for live updates
@@ -838,18 +846,16 @@ class DynamicTournamentOptimizer:
         return self._finalize_tournament()
 
     def _update_phase(self):
-        """Update optimization phase based on progress"""
-        # For GA: Use best trial's generation progress instead of compute budget
-        if self.trials and hasattr(self.trials[0], 'generation'):
-            # Use generation progress
+        """Update optimization phase based on generation progress"""
+        # Use best trial's generation progress
+        if self.trials:
             best_trial = min(self.trials, key=lambda t: t.best_score)
-            if hasattr(best_trial, 'generation'):
-                total_gens = self.total_budget // 32  # population_size
-                progress = best_trial.generation / total_gens if total_gens > 0 else 0
+            if hasattr(best_trial, 'target_generations'):
+                progress = (best_trial.iterations // 32) / best_trial.target_generations
             else:
-                progress = self.compute_used / self.total_budget
+                progress = 0
         else:
-            progress = self.compute_used / self.total_budget
+            progress = 0
 
         if progress < 0.25:
             new_phase = 'exploration'
@@ -1006,13 +1012,9 @@ class DynamicTournamentOptimizer:
                                 f.flush()
                             continue
 
-                        # Submit trial for execution
-                        if trial.iterations == 0:
-                            iterations_to_run = max(self.min_iterations, self.eval_interval)
-                        else:
-                            # Run until target, not budget
-                            remaining = trial.target_iterations - trial.iterations
-                            iterations_to_run = min(self.eval_interval, remaining)
+                        # Submit trial to run to completion (all remaining generations)
+                        # Workers save checkpoints every 1000 iterations for live UI updates
+                        iterations_to_run = trial.target_iterations - trial.iterations
 
                         with open(master_debug, 'a') as f:
                             f.write(f"Trial {trial_id}: Gen {current_gen_for_trial}/{total_generations_for_trial}, "
@@ -1038,7 +1040,8 @@ class DynamicTournamentOptimizer:
                             str(self.checkpoint_dir),
                             trial.p_cores,
                             self.num_patterns,
-                            self.pattern_length
+                            self.pattern_length,
+                            trial.target_generations
                         )
                         futures[future] = trial_id
 
@@ -1099,12 +1102,8 @@ class DynamicTournamentOptimizer:
                 trial.start()
 
                 try:
-                    # Run the trial directly (no parallelism)
-                    if trial.iterations == 0:
-                        iterations_to_run = max(self.min_iterations, self.eval_interval)
-                    else:
-                        remaining = trial.target_iterations - trial.iterations
-                        iterations_to_run = min(self.eval_interval, remaining)
+                    # Run the trial to completion (all remaining generations)
+                    iterations_to_run = trial.target_iterations - trial.iterations
 
                     result = run_single_trial_worker(
                         trial_id,
@@ -1113,7 +1112,8 @@ class DynamicTournamentOptimizer:
                         str(self.checkpoint_dir),
                         trial.p_cores,
                         self.num_patterns,
-                        self.pattern_length
+                        self.pattern_length,
+                        trial.target_generations
                     )
                     self._process_trial_result(trial_id, result)
                 except Exception as e:

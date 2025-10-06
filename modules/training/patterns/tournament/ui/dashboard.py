@@ -68,7 +68,6 @@ class PatternGeneratorDashboard:
     def generate_header(self) -> Panel:
         """Generate the header panel"""
         if self.optimizer:
-            compute_pct = (self.optimizer.compute_used / self.optimizer.total_budget * 100) if self.optimizer.total_budget > 0 else 0
             phase_color = {
                 'exploration': 'cyan',
                 'evaluation': 'yellow',
@@ -82,15 +81,14 @@ class PatternGeneratorDashboard:
             header_text.append(f"{self.optimizer.num_patterns}p × {self.optimizer.pattern_length}s", style="bold cyan")
             header_text.append(" | ", style="dim")
 
-            # Show generations if using GA
+            # Show generation progress
             ga_trial = next((t for t in self.optimizer.trials if hasattr(t, 'algorithm') and t.algorithm == 'GA'), None)
             if ga_trial and hasattr(ga_trial, 'generation'):
-                total_generations = self.optimizer.total_budget // 32  # population_size = 32
-                gen_pct = (ga_trial.generation / total_generations * 100) if total_generations > 0 else 0
-                header_text.append(f"Gen: {ga_trial.generation:,}/{total_generations:,} ({gen_pct:.1f}%)", style="bold green")
+                total_gens = self.optimizer.total_generations
+                gen_pct = (ga_trial.generation / total_gens * 100) if total_gens > 0 else 0
+                header_text.append(f"Gen: {ga_trial.generation:,}/{total_gens:,} ({gen_pct:.1f}%)", style="bold green")
             else:
-                header_text.append(f"Progress: {compute_pct:.1f}%", style="green")
-                header_text.append(f" ({self.optimizer.compute_used:,}/{self.optimizer.total_budget:,})", style="dim")
+                header_text.append(f"Generations: {self.optimizer.total_generations:,}", style="green")
 
             header_text.append(" | ", style="dim")
             header_text.append(f"Phase: {self.optimizer.current_phase.upper()}", style=f"bold {phase_color}")
@@ -179,8 +177,6 @@ class PatternGeneratorDashboard:
         if self.optimizer:
             # Calculate statistics
             active_count = len(self.optimizer.active_trials)
-            eliminated_count = len([t for t in self.optimizer.trials if t.eliminated])
-            compute_remaining = self.optimizer.total_budget - self.optimizer.compute_used
 
             # Runtime calculation
             if self.optimizer.start_time:
@@ -189,27 +185,25 @@ class PatternGeneratorDashboard:
             else:
                 runtime_str = "00:00"
 
-            # Create stats text
             # Format best score
             if self.optimizer.global_best_score == float('inf'):
                 best_score_str = "-"
             else:
                 best_score_str = f"{self.optimizer.global_best_score:.2f} dB"
 
-            # Check if any trials are using GA
-            ga_trials = [t for t in self.optimizer.trials if hasattr(t, 'algorithm') and t.algorithm == 'GA']
-
-            if ga_trials and hasattr(ga_trials[0], 'generation'):
-                # Show GA-specific stats with generation info
-                current_gen = ga_trials[0].generation
-                total_gen = self.optimizer.total_budget // 32  # population_size = 32
+            # Show GA stats with generation info
+            ga_trial = next((t for t in self.optimizer.trials if hasattr(t, 'algorithm') and t.algorithm == 'GA'), None)
+            if ga_trial and hasattr(ga_trial, 'generation'):
+                current_gen = ga_trial.generation
+                total_gen = self.optimizer.total_generations
                 gen_progress = (current_gen / total_gen * 100) if total_gen > 0 else 0
+                gens_per_trial = total_gen // self.optimizer.num_initial_trials
 
                 stats_lines = [
                     f"[bold cyan]Algorithm:[/]        Genetic (Pop=32)",
                     f"[bold cyan]Active Trials:[/]    {active_count}",
-                    f"[bold yellow]Generation:[/]       {current_gen:,}/{total_gen:,}",
-                    f"[bold green]Gen Progress:[/]     {gen_progress:.1f}%",
+                    f"[bold yellow]Total Gens:[/]       {total_gen:,}",
+                    f"[bold green]Per Trial:[/]        {gens_per_trial:,} gens",
                     "",
                     f"[bold]Best Score:[/]       {best_score_str}",
                     f"[bold]Best Trial:[/]       #{self.optimizer.global_best_trial_id or '-'}",
@@ -218,12 +212,10 @@ class PatternGeneratorDashboard:
                     f"[bold]Phase:[/]            {self.optimizer.current_phase.title()}"
                 ]
             else:
-                # Original stats
+                # Fallback stats
                 stats_lines = [
                     f"[bold cyan]Active Trials:[/]    {active_count}",
-                    f"[bold red]Eliminated:[/]       {eliminated_count}",
-                    f"[bold yellow]Compute Used:[/]     {self.optimizer.compute_used:,}",
-                    f"[bold green]Compute Left:[/]     {compute_remaining:,}",
+                    f"[bold yellow]Total Gens:[/]       {self.optimizer.total_generations:,}",
                     "",
                     f"[bold]Best Score:[/]       {best_score_str}",
                     f"[bold]Best Trial:[/]       #{self.optimizer.global_best_trial_id or '-'}",

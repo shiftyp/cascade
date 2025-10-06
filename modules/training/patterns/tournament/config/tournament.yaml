@@ -1,20 +1,12 @@
 # CASCADE Pattern Tournament Configuration
-# Optimized for Intel Core Ultra 7 265K with 8 P-cores
+# Genetic Algorithm with 32-member population per trial
 
 tournament:
-  initial_trials: 8              # Start with 8 scout trials
-  total_compute_budget: 4800000  # Total iterations across all trials (4.8M / 8 = 600k per trial avg)
-  min_iterations_before_elimination: 200000  # Give trials fair chance (200k before elimination)
-  evaluation_interval: 50000     # Check every 50k iterations
+  initial_trials: 8              # Number of parallel trials (different seeds)
+  total_generations: 150000      # Total generations (split across trials: 18,750 each)
   checkpoint_dir: ./checkpoints  # Where to save checkpoints
 
-elimination:
-  score_gap_threshold: 3.0       # Eliminate if >3 dB behind leader
-  stagnation_window: 100000      # Iterations without improvement (increased for 16 patterns)
-  convergence_threshold: 0.001   # Minimum convergence rate
-  protect_top_n: 2               # Always keep top 2 trials
-  minimum_diversity: 3           # Keep at least 3 trials
-  aggressive_mode: false         # Set true for faster elimination
+# Elimination disabled for GA - all trials run to completion
 
 pattern:
   count: 16                      # Number of patterns to generate
@@ -42,37 +34,3 @@ logging:
   ui_level: INFO                 # UI log level (important only)
   log_dir: ./logs                # Log directory
   save_stats: true               # Save statistics for analysis
-
-# Phase-specific overrides
-phases:
-  exploration:
-    elimination:
-      score_gap_threshold: 5.0
-      stagnation_window: 50000
-      protect_top_n: 3
-
-  evaluation:
-    elimination:
-      score_gap_threshold: 3.0
-      stagnation_window: 30000
-      protect_top_n: 2
-
-  exploitation:
-    elimination:
-      score_gap_threshold: 2.0
-      stagnation_window: 20000
-      protect_top_n: 1
-
-  refinement:
-    elimination:
-      score_gap_threshold: 1.0
-      stagnation_window: 10000
-      protect_top_n: 1
-
-# Scout-and-deepen specific settings
-scout_deepen:
-  scout_iterations: 100000       # Iterations for scout phase
-  finalist_count: 4              # Number of finalists to deepen
-  deepen_iterations: 300000      # Additional iterations for finalists
-  champion_count: 2              # Optional champion phase
-  champion_iterations: 400000    # Additional for champions
