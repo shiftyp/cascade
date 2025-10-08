@@ -16,8 +16,9 @@ from physics_coupling import (
     DerivedConditions, PropagationMode, QRNType
 )
 from scenarios import ScenarioLibrary, ScenarioType
-from src.signal_generator import SignalGenerator
-from src.channel_simulator import ChannelSimulator
+from modules.training.src.signal_generator.generator import SignalGenerator
+from modules.training.src.channel_simulator.multipath import apply_multipath_fading, MultipathProfile
+from modules.training.src.channel_simulator.awgn import generate_awgn
 
 
 @dataclass
@@ -35,8 +36,8 @@ class PhysicsBasedSample:
 
     # Ground truth labels
     message_bits: np.ndarray  # Transmitted bits
-    pattern_id: int  # Walsh-Hadamard pattern
-    frequency_pair: int  # Which frequency pair
+    pattern_id: int  # Ternary orthogonal pattern (0-3)
+    frequency_triple: int  # Which frequency triple (0-42)
     snr_db: float  # Actual SNR
 
     # Metadata
@@ -101,9 +102,6 @@ class PhysicsConstrainedDataset(Dataset):
         self.real_signals = None
         if enable_real_signal_augmentation and real_signal_path:
             self.real_signals = self._load_real_signals(real_signal_path)
-
-        # Channel simulator
-        self.channel_simulator = ChannelSimulator(sample_rate=sample_rate)
 
         print(f"✓ PhysicsConstrainedDataset initialized: {num_samples} samples")
         self._print_distribution_stats()
@@ -197,10 +195,10 @@ class PhysicsConstrainedDataset(Dataset):
             clean_signal = self._get_random_real_signal()
             message_bits = None  # Unknown for real signals
             pattern_id = None
-            frequency_pair = None
+            frequency_triple = None
         else:
             # Generate synthetic signal
-            message_bits, clean_signal, pattern_id, frequency_pair = self._generate_clean_signal(
+            message_bits, clean_signal, pattern_id, frequency_triple = self._generate_clean_signal(
                 drivers.frequency_mhz
             )
 
@@ -217,7 +215,7 @@ class PhysicsConstrainedDataset(Dataset):
             # Ground truth (for synthetic signals)
             'message_bits': message_bits,
             'pattern_id': pattern_id,
-            'frequency_pair': frequency_pair,
+            'frequency_triple': frequency_triple,
             'snr_db': conditions.effective_snr_db,
 
             # Physical state (for analysis/debugging)
@@ -247,25 +245,41 @@ class PhysicsConstrainedDataset(Dataset):
         """Generate a clean synthetic CASCADE signal."""
         # Random message (50-150 bytes)
         message_len = np.random.randint(50, 150)
-        message_bits = np.random.randint(0, 2, message_len * 8)
+        message_bytes = np.random.bytes(message_len)
 
-        # Random pattern and frequency pair
-        pattern_id = np.random.randint(0, 8)
+        # Convert to bits for labels
+        message_bits = np.unpackbits(np.frombuffer(message_bytes, dtype=np.uint8))
 
-        # Convert frequency to frequency pair (simplified)
-        # In real system, this would use actual frequency → pair mapping
-        frequency_pair = int((frequency_mhz - 0.3) / 0.02) // 2
-        frequency_pair = np.clip(frequency_pair, 0, 66)
+        # Random pattern ID (0-3 for 4 patterns with 3-FSK)
+        pattern_id = np.random.randint(0, 4)
 
-        # Generate signal using SignalGenerator
-        clean_signal = self.signal_generator.generate_cascade_signal(
-            message_bits=message_bits,
+        # Convert frequency to frequency triple (0-42)
+        # 129 channels / 3 = 43 triples (0-42)
+        # Simplified mapping from frequency_mhz to triple
+        frequency_triple = int((frequency_mhz - 0.3) / 0.02) // 3
+        frequency_triple = np.clip(frequency_triple, 0, 42)
+
+        # Select modulation and symbol rate based on expected SNR
+        # (simplified - in real system would come from kernel)
+        modulation_scheme = 'QPSK'  # Default
+        polar_rate = (2, 3)  # Rate 2/3
+        data_symbol_rate = 150  # Default 150 sym/s
+
+        # Generate signal using correct SignalGenerator API
+        clean_iq_signal, metadata = self.signal_generator.generate(
             pattern_id=pattern_id,
-            frequency_pair=frequency_pair,
-            sample_rate=self.sample_rate
+            frequency_triple=frequency_triple,
+            modulation_scheme=modulation_scheme,
+            polar_rate=polar_rate,
+            data_symbol_rate=data_symbol_rate,
+            message=message_bytes,
+            seed=None
         )
 
-        return message_bits, clean_signal, pattern_id, frequency_pair
+        # Extract IQ samples from CleanIQSignal dataclass
+        clean_signal = clean_iq_signal.iq_samples
+
+        return message_bits, clean_signal, pattern_id, frequency_triple
 
     def _get_random_real_signal(self) -> np.ndarray:
         """Get a random real signal from loaded recordings."""
@@ -316,35 +330,47 @@ class PhysicsConstrainedDataset(Dataset):
             return signal
 
         elif mode == PropagationMode.RAYLEIGH:
-            # Rayleigh fading
-            return self.channel_simulator.apply_rayleigh_fading(
-                signal,
-                doppler_hz=conditions.doppler_spread_hz
+            # Rayleigh fading (single path with fading)
+            profile = MultipathProfile(
+                delays=[0.0],
+                powers=[1.0],
+                doppler_spreads=[conditions.doppler_spread_hz]
             )
+            return apply_multipath_fading(signal, profile, self.sample_rate)
 
         elif mode == PropagationMode.RICIAN:
-            # Rician fading
-            return self.channel_simulator.apply_rician_fading(
-                signal,
-                k_factor_db=conditions.rician_k_factor,
-                doppler_hz=conditions.doppler_spread_hz
+            # Rician fading (dominant path + scattered component)
+            # K-factor determines ratio of LOS to scattered power
+            k_linear = 10 ** (conditions.rician_k_factor / 10)
+            los_power = k_linear / (k_linear + 1)
+            scattered_power = 1 / (k_linear + 1)
+
+            profile = MultipathProfile(
+                delays=[0.0, 0.0],  # Both at same delay (LOS + scatter)
+                powers=[los_power, scattered_power],
+                doppler_spreads=[0.0, conditions.doppler_spread_hz]  # LOS stable, scatter fades
             )
+            return apply_multipath_fading(signal, profile, self.sample_rate)
 
         elif mode == PropagationMode.MULTIPATH_SPARSE:
             # Sparse multipath (2-3 paths)
-            return self.channel_simulator.apply_multipath(
-                signal,
+            # Create simple 2-path Watterson model
+            from modules.training.src.channel_simulator.multipath import watterson_hf_profile
+            profile = watterson_hf_profile(
                 delay_spread_ms=conditions.multipath_delay_spread_ms,
-                num_paths=3
+                doppler_spread_hz=conditions.doppler_spread_hz
             )
+            return apply_multipath_fading(signal, profile, self.sample_rate)
 
         elif mode == PropagationMode.MULTIPATH_DENSE:
             # Dense multipath (4+ paths)
-            return self.channel_simulator.apply_multipath(
-                signal,
-                delay_spread_ms=conditions.multipath_delay_spread_ms,
-                num_paths=6
+            from modules.training.src.channel_simulator.multipath import severe_multipath_profile
+            profile = severe_multipath_profile(
+                num_paths=6,
+                max_delay_ms=conditions.multipath_delay_spread_ms,
+                max_doppler_hz=conditions.doppler_spread_hz
             )
+            return apply_multipath_fading(signal, profile, self.sample_rate)
 
         return signal
 
@@ -484,14 +510,14 @@ class PhysicsConstrainedDataset(Dataset):
 
 def demo_physics_constrained_dataset():
     """Demonstrate physics-constrained dataset generation."""
-    from src.signal_generator import SignalGenerator
+    from modules.training.src.signal_generator.generator import SignalGenerator
 
     print("=" * 80)
     print("PHYSICS-CONSTRAINED DATASET DEMONSTRATION")
     print("=" * 80)
 
-    # Create signal generator (simplified - assumes it exists)
-    signal_gen = SignalGenerator(sample_rate=48000)
+    # Create signal generator
+    signal_gen = SignalGenerator()
 
     # Create dataset
     dataset = PhysicsConstrainedDataset(
