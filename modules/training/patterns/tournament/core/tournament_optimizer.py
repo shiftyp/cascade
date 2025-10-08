@@ -818,6 +818,25 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     # Use pattern_set which is the historically best (never gets worse)
                     _, detailed_metrics = evaluate_fitness(pattern_set, use_sampling=False, return_details=True)
 
+                    # Verify weighted score calculation for debugging
+                    wm = detailed_metrics['window_metrics']
+                    ws_keys = sorted(wm.keys(), reverse=True)
+                    if len(ws_keys) >= 3:
+                        small = max(wm[ws_keys[2]]['normal'], wm[ws_keys[2]]['flip'])
+                        med = max(wm[ws_keys[1]]['normal'], wm[ws_keys[1]]['flip'])
+                        large = max(wm[ws_keys[0]]['normal'], wm[ws_keys[0]]['flip'])
+                        calc_weighted = (3.0*small + 2.0*med + 1.0*large) / 6.0
+                        stored_weighted = detailed_metrics.get('weighted_score', best_score)
+
+                        with open(debug_file_path, 'a') as f:
+                            f.write(f"  Weighted score verification:\n")
+                            f.write(f"    S={small:.2f}, M={med:.2f}, L={large:.2f}\n")
+                            f.write(f"    Calculated: {calc_weighted:.2f} dB\n")
+                            f.write(f"    Stored: {stored_weighted:.2f} dB\n")
+                            if abs(calc_weighted - stored_weighted) > 0.1:
+                                f.write(f"    WARNING: Mismatch detected!\n")
+                            f.flush()
+
                     checkpoint = {
                         'pattern_set': pattern_set,  # Best pattern set (128-bit cores)
                         'repetition_map': repetition_map,  # Single shared map
