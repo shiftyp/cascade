@@ -125,7 +125,7 @@ class PatternGeneratorDashboard:
         table.add_column("Core", width=5, justify="center")
         table.add_column("Gen/Iter", justify="right", width=11)
         table.add_column("Best", justify="right", width=9)
-        table.add_column("Pop(B/M/W)", justify="center", width=15)  # Best/Median/Worst of population
+        table.add_column("Win(S/M/L)", justify="center", width=15)  # Window orthogonality (Small/Med/Large)
         table.add_column("Progress", width=16)
         table.add_column("ETA", width=7, justify="center")
 
@@ -152,11 +152,29 @@ class PatternGeneratorDashboard:
                 else:
                     gen_iter_display = f"{trial.iterations:,}"
 
-                # Population diversity (GA only)
-                if hasattr(trial, 'ga_best') and hasattr(trial, 'ga_median') and hasattr(trial, 'ga_worst'):
-                    pop_display = f"{trial.ga_best:.1f}/{trial.ga_median:.1f}/{trial.ga_worst:.1f}"
+                # Window orthogonality (Small/Medium/Large)
+                if hasattr(trial, 'window_metrics') and trial.window_metrics:
+                    # Get window sizes (should be sorted largest to smallest)
+                    window_sizes = sorted(trial.window_metrics.keys(), reverse=True)
+                    if len(window_sizes) >= 3:
+                        # Large (25%), Medium (12.5%), Small (6.25%)
+                        large_ws = window_sizes[0]
+                        med_ws = window_sizes[1]
+                        small_ws = window_sizes[2]
+
+                        # Get worst (max of normal and flip) for each window
+                        small_worst = max(trial.window_metrics[small_ws]['normal'],
+                                         trial.window_metrics[small_ws]['flip'])
+                        med_worst = max(trial.window_metrics[med_ws]['normal'],
+                                       trial.window_metrics[med_ws]['flip'])
+                        large_worst = max(trial.window_metrics[large_ws]['normal'],
+                                         trial.window_metrics[large_ws]['flip'])
+
+                        window_display = f"{small_worst:.1f}/{med_worst:.1f}/{large_worst:.1f}"
+                    else:
+                        window_display = "-"
                 else:
-                    pop_display = "-"
+                    window_display = "-"
 
                 table.add_row(
                     str(trial.trial_id),
@@ -164,7 +182,7 @@ class PatternGeneratorDashboard:
                     core_display,
                     gen_iter_display,
                     f"{trial.best_score:.2f}" if trial.best_score != float('inf') else "-",
-                    pop_display,
+                    window_display,
                     progress_bar,
                     trial.eta,
                     style=row_style

@@ -348,14 +348,24 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
             # Window sizes to test (scaled to pattern length)
             # Test 25%, 12.5%, and 6.25% of full pattern length
+            # Smaller windows weighted more heavily (prioritize short-burst detection)
             window_sizes = [
                 pattern_length // 4,   # 25% window (e.g., 512 for 2048)
                 pattern_length // 8,   # 12.5% window (e.g., 256 for 2048)
                 pattern_length // 16   # 6.25% window (e.g., 128 for 2048)
             ]
+            # Weights: prioritize smaller windows
+            window_weights = {
+                pattern_length // 16: 3.0,  # 128-bit (6.25%): highest weight
+                pattern_length // 8: 2.0,   # 256-bit (12.5%): medium weight
+                pattern_length // 4: 1.0    # 512-bit (25%): lowest weight
+            }
             num_windows_per_size = 5  # Sample 5 random windows per size
 
             # Track per-window metrics if details requested
+            # Also track weighted scores for each window
+            window_scores = {ws: {'normal': -100.0, 'flip': -100.0} for ws in window_sizes}
+
             if return_details:
                 window_metrics = {ws: {'normal': -100.0, 'flip': -100.0} for ws in window_sizes}
                 global_metrics = {'normal': -100.0, 'flip': -100.0}
@@ -385,6 +395,9 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 for window_size in window_sizes:
                     # Normal correlation on windows
                     corr_db = windowed_correlation(pi, pj, window_size, num_windows_per_size)
+                    window_scores[window_size]['normal'] = max(
+                        window_scores[window_size]['normal'], corr_db
+                    )
                     worst_normal = max(worst_normal, corr_db)
                     if return_details:
                         window_metrics[window_size]['normal'] = max(
@@ -393,6 +406,9 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
                     # Flip correlation on windows
                     corr_f_db = windowed_correlation(pi, -pj, window_size, num_windows_per_size)
+                    window_scores[window_size]['flip'] = max(
+                        window_scores[window_size]['flip'], corr_f_db
+                    )
                     worst_flip = max(worst_flip, corr_f_db)
                     if return_details:
                         window_metrics[window_size]['flip'] = max(
@@ -415,8 +431,23 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     global_flip = 20 * np.log10(peak_global_f / len(pi) + 1e-10)
                     global_metrics['flip'] = max(global_metrics['flip'], global_flip)
 
-            # Return worst-case (higher/less negative is worse)
-            worst_case = max(worst_normal, worst_flip, worst_erasure)
+            # Calculate weighted fitness (prioritize smaller windows)
+            # Weighted sum: each window's worst correlation weighted by importance
+            weighted_sum = 0.0
+            total_weight = 0.0
+
+            for window_size in window_sizes:
+                weight = window_weights[window_size]
+                worst_window = max(window_scores[window_size]['normal'],
+                                  window_scores[window_size]['flip'])
+                weighted_sum += weight * worst_window
+                total_weight += weight
+
+            weighted_score = weighted_sum / total_weight if total_weight > 0 else -100.0
+
+            # Return weighted score (higher/less negative is worse)
+            # Still consider erasure, but weighted score is primary
+            worst_case = max(weighted_score, worst_erasure)
 
             if return_details:
                 details = {
