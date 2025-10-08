@@ -1,0 +1,3 @@
+[console_scripts]
+cascade-orchestrator = channel_simulator.cli:main
+cascade-signal = signal_generator.cli:main

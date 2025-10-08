@@ -1,236 +1,315 @@
-# CASCADE Hardware Requirements and Deployment Tiers
+# CASCADE Hardware Requirements (V2)
 
-CASCADE is designed to run on a range of hardware from embedded devices to servers, with performance scaling gracefully based on available compute resources. All tiers are fully interoperable - differences affect only local decode capacity and latency, not protocol compatibility.
+CASCADE V2 is designed to run on **minimal hardware** thanks to kernel-assisted detection eliminating the need for blind pattern correlation.
 
-## Hardware Tiers
+**Key simplification:** Kernel provides pattern ID, so no expensive 128-pattern correlation needed. Raspberry Pi 4 CPU-only is sufficient!
 
-### Tier 1: Raspberry Pi 4 (Entry Level)
+---
 
-**Hardware**:
-- Raspberry Pi 4 Model B (4GB+ RAM)
-- Standard USB sound card or hat (48 kHz)
-- Cost: ~$35-55 (RPi) + $10-30 (sound interface) = **$45-85 total**
+## Recommended Configuration
 
-**Performance**:
-- **Inference latency**: 20-30ms per symbol
-- **User capacity**: 10-20 simultaneous users decoded
-- **Shannon efficiency**: 27% (hardware-limited, not protocol-limited)
-- **Throughput**: ~3,000-5,000 bps aggregate (what this station receives)
+### Raspberry Pi 4 (CPU-Only)
 
-**Use cases**:
+**Hardware:**
+- Raspberry Pi 4 Model B (2GB+ RAM sufficient)
+- USB sound card (44.1-48 kHz sampling)
+- Cost: $50 (RPi) + $15 (sound card) = **$65 total**
+
+**Performance:**
+- **Decoding**: Kernel-assisted (correlate vs 1 pattern, not 8)
+- **Encoding**: <5ms (select pattern, encode IQ data)
+- **User capacity**: 40-45 simultaneous users
+- **Power**: 8W (ultra-portable, 12+ hours on 100Wh battery)
+
+**Use cases:**
+- Full CASCADE experience
 - Portable/emergency operations
-- Small nets (5-15 stations)
-- Casual QSOs and DX
-- Entry-level CASCADE experience
+- Nets and contests
+- All message types (beacon to large messages)
 
-**Limitations**:
-- Cannot decode all users in high-traffic scenarios (contests)
-- Sees only strongest 10-20 signals
-- Still fully interoperable (just hears less)
+**Why CPU-only works:**
+- Kernel tells you which pattern (no blind search)
+- Simple 2-FSK detection + IQ demodulation
+- No expensive correlation matrix
+- 8 patterns (not 128) if fallback needed
 
-### Tier 2: Raspberry Pi 4 + Coral TPU (Recommended)
+---
 
-**Hardware**:
-- Raspberry Pi 4 Model B (4GB+ RAM)
-- Google Coral USB Accelerator or M.2/PCIe
-- USB sound card (48 kHz) or GPS-disciplined SDR
-- Cost: $35-55 (RPi) + $60-75 (Coral) + $10-50 (audio) = **$105-180 total**
+## Alternative Platforms
 
-**Performance**:
-- **Inference latency**: 2-5ms per symbol
-- **User capacity**: 50-80 simultaneous users decoded
-- **Shannon efficiency**: 85-95% (approaching theoretical limit)
-- **Throughput**: ~10,000-12,000 bps aggregate
+### Desktop/Laptop
 
-**Use cases**:
-- **Recommended baseline** for full CASCADE experience
-- Medium to large nets (20-60 stations)
+**Hardware:**
+- Modern x86 CPU (4+ cores)
+- Built-in or USB sound card
+- Cost: $0 (use existing computer)
+
+**Performance:**
+- Faster than RPi4 (more cores, higher clock)
+- Can handle 100+ users if needed
+- Overkill for CASCADE but works great
+
+**Use cases:**
+- Development
+- High-capacity nets
 - Contest operations
-- Emergency coordination networks
-- Excellent cost/performance ratio
+- Base station
 
-**Advantages**:
-- 2000× faster inference vs CPU-only
-- Decodes nearly all active users
-- <2W additional power consumption
-- Compact form factor (still portable)
+### Embedded Linux (Advanced)
 
-### Tier 3: Desktop/Laptop CPU
+**Hardware:**
+- Orange Pi, Rock Pi, or similar SBC
+- 1GB+ RAM
+- Sound interface
+- Cost: $30-60
 
-**Hardware**:
-- Modern desktop CPU (Intel i5/i7, AMD Ryzen 5/7)
-- Existing ham radio computer
-- Standard sound card interface
-- Cost: **$0** (uses existing equipment)
+**Performance:**
+- Varies by platform
+- Most ARM64 boards adequate
+- Test before deployment
 
-**Performance**:
-- **Inference latency**: 10-15ms per symbol
-- **User capacity**: 25-40 simultaneous users decoded
-- **Shannon efficiency: 75%
-- **Throughput**: ~6,000-8,000 bps aggregate
+---
 
-**Use cases**:
-- Home station operations
-- Users with existing shack PC
-- Development and testing
-- Medium-sized nets
+## Radio Requirements
 
-**Advantages**:
-- No additional hardware purchase
-- Familiar desktop environment
-- Easy debugging and monitoring
+### SSB Transceiver
 
-### Tier 4: Desktop GPU or Server
+**Requirements:**
+- **SSB mode** (USB or LSB, 2.7 kHz bandwidth)
+- **Sound card interface** (CAT control optional but helpful)
+- **Power**: 5W minimum (QRP works!), 50-100W recommended
 
-**Hardware**:
-- NVIDIA GPU (GTX 1060+, RTX series)
-- Or dedicated server CPU (Xeon, EPYC)
-- Professional sound interface or SDR
-- Cost: **$200-500+** (GPU) or **$0** (existing gaming PC)
+**Examples:**
+- QRP: QMX, (tr)uSDX ($50-200, 5W)
+- Modern: IC-7300, FT-991A ($800-1200, 100W)
+- Classic: FT-857D, IC-706 ($400-600 used, 100W)
+- Any SSB-capable rig works!
 
-**Performance**:
-- **Inference latency**: 2-5ms per symbol
-- **User capacity**: 100+ simultaneous users decoded
-- **Shannon efficiency**: 90-97% (limited only by FEC overhead)
-- **Throughput**: ~15,000+ bps aggregate
+**No GPS required:**
+- Differential encoding handles ±10 Hz drift
+- Sound card clock sufficient
+- GPS optional for precision timing
 
-**Use cases**:
-- Club stations
-- Contest super-stations
-- Emergency operations centers
-- Gateway/relay stations
-- Mesh network hubs
+### Sound Card Interface
 
-**Advantages**:
-- Maximum capacity
-- Lowest latency
-- Can handle extreme contest conditions (100+ simultaneous)
+**Minimum specs:**
+- 44.1 kHz sampling (48 kHz also fine)
+- 16-bit resolution
+- Stereo (I/Q if SDR, or dual mono for rig interface)
+- <50ms latency
 
-## Recommended Deployment
+**Options:**
+- USB sound card: $10-30 (Behringer UCA202, etc.)
+- SignaLink USB: $120 (integrated interface, plug-and-play)
+- DigiRig: $80 (modern, compact)
+- Built-in sound card: $0 (works for testing)
 
-**For individual operators**: Tier 2 (RPi 4 + Coral) - **$120-180**
-- Best cost/performance balance
-- Achieves 75% Shannon efficiency (realistic for async multi-user)
-- Handles typical amateur radio scenarios
-- Portable for emergency/field use
+---
 
-**For club stations**: Tier 4 (GPU/Server)
-- Maximizes network capacity
-- Serves as hub for weaker stations
-- Typically already have suitable hardware
+## Software Requirements
 
-**For emergency/portable**: Tier 1 (RPi 4 only) acceptable
-- Still 24× faster than FT8
-- Hears strong signals reliably
-- Minimal power consumption (<15W)
+### Operating System
 
-## Model Deployment Across Tiers
+**Recommended:**
+- Raspberry Pi OS (64-bit) on RPi4
+- Ubuntu 22.04+ on desktop
+- Any modern Linux works
 
-**All tiers use the same model**, just different quantization:
+**Also supported:**
+- macOS (development)
+- Windows via WSL2 (development)
 
-| Tier | Quantization | Model Size | Notes |
-|------|--------------|------------|-------|
-| Tier 1 (RPi 4) | INT8 | ~10MB | Maximum compression |
-| Tier 2 (RPi+Coral) | INT8 | ~10MB | Optimized for Edge TPU |
-| Tier 3 (Desktop) | FP16 or INT8 | ~17MB or ~10MB | User choice |
-| Tier 4 (GPU) | FP32 or FP16 | ~34MB or ~17MB | Maximum precision |
+### Dependencies
 
-**Interoperability**: All use identical 128 patterns (48 beacon + 80 message) (protocol-defined), so all tiers communicate perfectly regardless of quantization.
-
-## Network Effects with Mixed Hardware
-
-**Realistic scenario: 50 users on air with mixed hardware**
-
-```
-10 stations on RPi only (Tier 1):
-  - Each decodes ~12 users (strongest signals)
-  - See ~6,000 bps throughput each
-
-30 stations on RPi + Coral (Tier 2):
-  - Each decodes ~50 users (nearly everyone)
-  - See ~12,000 bps throughput each
-
-10 stations on Desktop/GPU (Tier 3-4):
-  - Each decodes 50-80 users (everyone + weak signals)
-  - See ~15,000 bps throughput each
-
-Network behavior:
-- Strong transmissions reach all 50 stations (100% connectivity)
-- Medium transmissions reach 40 stations (80% connectivity)
-- Weak transmissions reach 10-20 stations (20-40% connectivity)
-
-This is Shannon-optimal: Strong signals get more capacity naturally!
+**Python 3.11+:**
+```bash
+pip install numpy scipy psutil rich pyyaml
 ```
 
-**Emergency priority**: High-power emergency transmissions reach even Tier 1 hardware (100% penetration).
+**Optional:**
+```bash
+pip install sounddevice  # Audio I/O
+pip install pyaudio      # Alternative audio
+```
 
-## Sound Card Requirements
+**No deep learning framework needed!**
+- No TensorFlow/PyTorch at runtime
+- Pattern selection via lookup table
+- IQ encoding via simple math
+- Decoding via kernel-assisted correlation
 
-**All tiers**:
-- Sample rate: 48 kHz minimum (96 kHz better for frequency stability)
-- Bit depth: 16-bit minimum
-- Interface: USB audio, sound card, or SDR direct sampling
-- Latency: <20ms preferred (not critical - 50ms symbol duration has margin)
+---
 
-**For 50+ user capacity (Tier 2+)**:
-- GPS-disciplined oscillator preferred (±0.1 Hz vs ±50 Hz)
-- Reduces frequency uncertainty, improves multi-user separation
-- Not required, but improves performance
+## Performance by Hardware
 
-**Compatible interfaces**:
-- SignaLink USB
-- Digirig
-- Built-in sound card (adequate for Tier 1)
-- SDR direct (RTLSDR, Airspy, etc.)
+### Pattern Detection (Kernel-Assisted)
+
+| Hardware | Detection Time | Users Supported | Power |
+|----------|----------------|-----------------|-------|
+| RPi 4 | <5ms | 40-45 | 8W |
+| Desktop i5 | <2ms | 100+ | 35W |
+| Desktop i7 | <1ms | 200+ | 65W |
+
+**All adequate** - V2 is not compute-intensive!
+
+### Encoding
+
+**All platforms:** <1ms
+- Select pattern from kernel
+- Encode IQ data (simple constellation mapping)
+- No NN inference needed
+
+---
+
+## Network Scaling
+
+### Single Station
+
+**With RPi4:**
+- Decode: 40-45 users
+- Encode: Unlimited (trivial computation)
+- Transmit: 1 pattern typical, up to 8 for high-power stations
+
+### Multiple Stations (Mesh)
+
+**Network capacity scales with stations:**
+- 10 stations: 40-45 active users total (each decodes all)
+- 50 stations: 40-45 active users total (distributed decode)
+- 100+ stations: 40-45 active users total (high redundancy)
+
+**Decoding is distributed:**
+- Each station decodes what it can hear
+- Strong signals decoded by all
+- Weak signals decoded by nearby/powerful stations
+- Mesh routing finds paths
+
+---
+
+## Cost Comparison
+
+| Configuration | Cost | Power | Users | Use Case |
+|--------------|------|-------|-------|----------|
+| **RPi4 + Sound** | **$65** | **8W** | **40-45** | **Recommended** |
+| QMX + RPi4 | $250 | 13W | 40-45 | Portable QRP |
+| Desktop (existing) | $15 | 35W | 100+ | Base station |
+| IC-7300 + RPi4 | $865 | 28W | 40-45 | Modern shack |
+
+**V2 dramatically reduces hardware requirements vs V1:**
+- V1: Required Coral TPU ($60) for 128-pattern blind detection
+- V2: CPU-only sufficient with kernel-assisted detection
+- Savings: $60 + simpler software
+
+---
+
+## Storage Requirements
+
+### Pattern Files
+
+**Generated once, used forever:**
+```
+patterns_p8_l2048_r2x.pkl: ~50 KB
+```
+
+Negligible storage - patterns fit in RAM.
+
+### Message Database
+
+**For 1 year of operation:**
+- 100 messages/day × 365 days × 200 bytes avg = 7.3 MB
+- SQLite database adequate
+- No large storage needed
+
+### Logs (Optional)
+
+**IQ recordings for debugging:**
+- 1 hour @ 12 kHz = ~90 MB (compressed)
+- Typically not needed in production
+- Optional for troubleshooting
+
+---
 
 ## Power Consumption
 
-| Tier | Idle | Receiving | Transmitting | Total (with radio) |
-|------|------|-----------|--------------|-------------------|
-| RPi 4 only | 3W | 4W | 5W | ~55W |
-| RPi + Coral | 3W | 6W | 7W | ~57W |
-| Desktop | 50W | 80W | 100W | ~150W |
-| GPU | 100W | 250W | 300W | ~350W |
+### Portable Operation
 
-Tier 2 (RPi + Coral) adds only ~2W for 2000× compute improvement - excellent efficiency!
+| Component | Power | Battery Life (100Wh) |
+|-----------|-------|---------------------|
+| RPi 4 | 8W | 12.5 hours |
+| USB sound | 0.5W | - |
+| QMX (5W TX, 50% duty) | 2.5W avg | - |
+| **Total** | **11W** | **9 hours** |
 
-## Deployment Recommendations by Scenario
+### Base Station
 
-**Portable/Emergency Operations**: Tier 1 or 2
-- Low power
-- Compact
-- Battery-friendly
-- Trade capacity for portability
+| Component | Power | Notes |
+|-----------|-------|-------|
+| Desktop PC | 35W | Idle, spikes during TX |
+| IC-7300 (50W TX) | 25W avg | 50% duty cycle |
+| **Total** | **60W** | Easily powered from mains |
 
-**Home Station**: Tier 2 or 3
-- Tier 2 if dedicated CASCADE hardware
-- Tier 3 if using existing shack PC
+---
 
-**Contest/Club Station**: Tier 4
-- Maximum capacity needed
-- Existing infrastructure typically sufficient
+## Deployment Scenarios
 
-**Mesh Gateway/Relay**: Tier 4
-- Serves multiple users
-- Needs maximum decode capacity
-- Often has power available
+### Emergency/Portable (RPi4 + QMX)
 
-## Future-Proofing
+**Configuration:**
+- RPi4 + QMX + battery
+- Weight: <2 lbs
+- Power: 11W (9 hours on 100Wh)
+- Cost: $250
 
-**Compute requirements stable**: CASCADE's 8.4M parameter model won't grow significantly (architectural constraint for interoperability)
+**Performance:**
+- 5W transmit (QRP)
+- 40-45 user network
+- Full protocol support
 
-**Hardware improvements benefit performance**:
-- Coral TPU v2: 2× faster → 100+ user capacity on embedded
-- Next-gen RPi: More users on Tier 1
-- Software optimization: May reduce latency 20-30%
+### Home Station (Desktop + Modern Rig)
 
-**Upgrade path**:
-- Start: Tier 1 (RPi only) - works, limited capacity
-- Upgrade: Add Coral TPU - 5× user capacity for $60
-- Ultimate: GPU desktop - maximum capacity
+**Configuration:**
+- Desktop PC (existing) + IC-7300
+- Always-on base station
+- AC powered
 
-## See Also
+**Performance:**
+- 100W transmit
+- 100+ user decode capacity
+- Net control capable
 
-- **[Signal Specification](../protocol/signal_specification.md)** - Protocol layer parameters
-- **[Model Architecture](../model/README.md)** - How model adapts within protocol constraints
-- **[Training Strategy](../training/README.md)** - Training for heterogeneous hardware
+### Mobile (Laptop + FT-857D)
+
+**Configuration:**
+- Laptop + FT-857D in vehicle
+- 12V powered
+- Mobile operations
+
+**Performance:**
+- 50-100W transmit
+- Full CASCADE capability
+- Contest/field day ready
+
+---
+
+## No Special Hardware Needed!
+
+**V2 eliminates:**
+- ❌ Coral Edge TPU ($60)
+- ❌ GPU ($200-800)
+- ❌ GPS receiver ($30-80)
+- ❌ High-end CPU
+- ❌ Large RAM
+
+**V2 runs on:**
+- ✅ Raspberry Pi 4 CPU ($ 50)
+- ✅ Any SSB transceiver
+- ✅ Basic USB sound card ($15)
+- ✅ **Total: $65** for full implementation!
+
+---
+
+## Archived Documentation
+
+**V1 (Coral TPU required):** See `hardware_requirements_v1_archived.md`
+
+V1 required Coral TPU for blind 128-pattern detection.
+V2 uses kernel-assisted detection, runs on CPU-only.

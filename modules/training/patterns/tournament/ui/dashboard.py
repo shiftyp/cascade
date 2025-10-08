@@ -124,8 +124,7 @@ class PatternGeneratorDashboard:
         table.add_column("Status", width=7, justify="center")
         table.add_column("Core", width=5, justify="center")
         table.add_column("Gen/Iter", justify="right", width=11)
-        table.add_column("Best", justify="right", width=9)
-        table.add_column("Win(S/M/L)", justify="center", width=15)  # Window orthogonality (Small/Med/Large)
+        table.add_column("Win(S/M/L/F)", justify="center", width=20)  # Window orthogonality (Small/Med/Large/Full)
         table.add_column("Progress", width=16)
         table.add_column("ETA", width=7, justify="center")
 
@@ -152,7 +151,7 @@ class PatternGeneratorDashboard:
                 else:
                     gen_iter_display = f"{trial.iterations:,}"
 
-                # Window orthogonality (Small/Medium/Large)
+                # Window orthogonality (Small/Medium/Large/Full)
                 if hasattr(trial, 'window_metrics') and trial.window_metrics:
                     # Get window sizes (should be sorted largest to smallest)
                     window_sizes = sorted(trial.window_metrics.keys(), reverse=True)
@@ -170,7 +169,13 @@ class PatternGeneratorDashboard:
                         large_worst = max(trial.window_metrics[large_ws]['normal'],
                                          trial.window_metrics[large_ws]['flip'])
 
-                        window_display = f"{small_worst:.1f}/{med_worst:.1f}/{large_worst:.1f}"
+                        # Get full pattern orthogonality
+                        if hasattr(trial, 'global_metrics') and trial.global_metrics:
+                            full_worst = max(trial.global_metrics['normal'],
+                                           trial.global_metrics['flip'])
+                            window_display = f"{small_worst:.1f}/{med_worst:.1f}/{large_worst:.1f}/{full_worst:.1f}"
+                        else:
+                            window_display = f"{small_worst:.1f}/{med_worst:.1f}/{large_worst:.1f}/-"
                     else:
                         window_display = "-"
                 else:
@@ -181,7 +186,6 @@ class PatternGeneratorDashboard:
                     status_display,
                     core_display,
                     gen_iter_display,
-                    f"{trial.best_score:.2f}" if trial.best_score != float('inf') else "-",
                     window_display,
                     progress_bar,
                     trial.eta,
@@ -189,7 +193,7 @@ class PatternGeneratorDashboard:
                 )
         else:
             # Empty table
-            table.add_row("-", "-", "-", "-", "-", "-", "-", "-", style="dim")
+            table.add_row("-", "-", "-", "-", "-", "-", "-", style="dim")
 
         return Panel(table, border_style="bright_blue", padding=(0, 1))
 
@@ -206,16 +210,18 @@ class PatternGeneratorDashboard:
             else:
                 runtime_str = "00:00"
 
-            # Format best score
-            if self.optimizer.global_best_score == float('inf'):
-                best_score_str = "-"
-            else:
-                best_score_str = f"{self.optimizer.global_best_score:.2f} dB"
-
-            # Get best trial for window metrics
+            # Get best trial for metrics
             best_trial = None
             if self.optimizer.global_best_trial_id is not None:
                 best_trial = next((t for t in self.optimizer.trials if t.trial_id == self.optimizer.global_best_trial_id), None)
+
+            # Format weighted score (use from best trial if available)
+            if best_trial and hasattr(best_trial, 'weighted_score') and best_trial.weighted_score is not None:
+                weighted_score_str = f"{best_trial.weighted_score:.2f} dB"
+            elif self.optimizer.global_best_score != float('inf'):
+                weighted_score_str = f"{self.optimizer.global_best_score:.2f} dB"
+            else:
+                weighted_score_str = "-"
 
             # Show GA stats with generation info
             ga_trial = next((t for t in self.optimizer.trials if hasattr(t, 'algorithm') and t.algorithm == 'GA'), None)
@@ -231,7 +237,7 @@ class PatternGeneratorDashboard:
                     f"[bold yellow]Total Gens:[/]       {total_gen:,}",
                     f"[bold green]Per Trial:[/]        {gens_per_trial:,} gens",
                     "",
-                    f"[bold]Best Score:[/]       {best_score_str}",
+                    f"[bold]Weighted Score:[/]   {weighted_score_str}",
                     f"[bold]Best Trial:[/]       #{self.optimizer.global_best_trial_id or '-'}",
                     "",
                     f"[bold]Runtime:[/]          {runtime_str}",
@@ -275,7 +281,7 @@ class PatternGeneratorDashboard:
                     f"[bold cyan]Active Trials:[/]    {active_count}",
                     f"[bold yellow]Total Gens:[/]       {self.optimizer.total_generations:,}",
                     "",
-                    f"[bold]Best Score:[/]       {best_score_str}",
+                    f"[bold]Weighted Score:[/]   {weighted_score_str}",
                     f"[bold]Best Trial:[/]       #{self.optimizer.global_best_trial_id or '-'}",
                     "",
                     f"[bold]Runtime:[/]          {runtime_str}",

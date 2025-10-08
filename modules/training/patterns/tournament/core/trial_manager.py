@@ -69,6 +69,7 @@ class Trial:
         self.window_metrics = None
         self.global_metrics = None
         self.erasure_metrics = None
+        self.weighted_score = None
 
     def start(self):
         """Start the trial"""

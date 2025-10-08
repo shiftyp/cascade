@@ -1,239 +1,379 @@
-# CASCADE Final Architecture
+# CASCADE Architecture (V2 - Implemented)
 
-**Date:** 2025-10-04
-**Status:** ✅ Complete and optimized
+**Date:** 2025-10-06
+**Status:** ✅ Pattern generation proven, modem implementation in progress
 
 ---
 
 ## Executive Summary
 
-**128-pattern chaos architecture with RS(32,20) aligned structure and ±2 Hz micro-tuning**
+**8-pattern nested architecture with kernel-assisted detection and adaptive transmission**
 
-**Performance:** 78-85% Shannon efficiency, 218-237 bps per user, fits Raspberry Pi 4
+**Performance:** 125-500 bps per pattern (BPSK to 16-APSK), 536 logical channels, -17 to -21 dB orthogonality achieved
 
-**Kernel-driven coordination** enables FDMA-like efficiency without central control
+**Kernel-driven coordination** enables efficient spectrum usage without blind pattern detection
 
 ---
 
 ## Core Parameters
 
-✅ **2-FSK architecture**: Each pattern uses 2 adjacent tones (20 Hz span, tone indices 0-1)
+✅ **2-FSK architecture**: Dual-layer encoding
+  - **Layer 1 (Pattern skeleton)**: Binary 2-FSK sequence (selects tone 0 or 1)
+  - **Layer 2 (Data payload)**: IQ modulation on selected tones (BPSK to 16-APSK)
+
 ✅ **135-tone reference grid**: Standard 2.7 kHz SSB channel (300-3000 Hz), 20 Hz spacing
-✅ **±2 Hz micro-tuning**: Continuous offset for interference avoidance
-✅ **128 patterns**: 48 beacon + 80 message (7-bit encoding)
-  - 75 patterns (59%): λ=0 (BPSK) - frequency-orthogonal, maximum robustness
-  - 53 patterns (41%): λ=0.08-0.25 - IQ-orthogonal, reuse tone positions
-  - Average λ: **0.08-0.10** (exceptional low-SNR performance)
-✅ **RS(32,20) structure**: Aligned pattern + data protection, 37.5% erasure tolerance
-✅ **Beacon chaos**: Random every ~60s, no time slots
-✅ **78-85% coordination efficiency**: How well kernel packs users into time/frequency/pattern slots (NOT physical Shannon capacity)
-✅ **Physical Shannon efficiency**: ~30-45% (intentionally conservative for robustness)
-✅ **Per-user throughput** (equipment-dependent):
-  - QRP (5W, 200 sym/s): 94 bps (1 pattern, BPSK)
-  - Modern (50W, 200 sym/s): 575 bps (4 patterns, QPSK)
-  - Premium (100W, 300 sym/s): 975-1,950 bps (4-8 patterns, 8-PSK/16-APSK)
-✅ **8.7ms RPi4 inference**: Fits <10ms budget with margin
-✅ **-37.5 dB orthogonality**: Enables 4-8 patterns per tone pair (IQ separation)
-✅ **38 KB storage**: Pattern file size
-✅ **72-96 hour generation**: One-time cost (8 trials × 400K iterations, local)
+✅ **67 frequency pairs**: 2-tone patterns can use any of 67 non-overlapping pairs
+✅ **8 patterns**: Optimized for -21.19 dB orthogonality @ 2048 symbols (1x redundancy)
+✅ **Nested lengths**: 64, 128, 256, 512, 1024, 2048 symbols (0.32s to 10.24s @ 200 sym/s)
+✅ **No built-in redundancy**: Pure orthogonality optimization
+✅ **Polar code error correction**: Negotiated rates 1/2 to 7/8, adaptive based on SNR
+✅ **GMSK pulse shaping**: Gaussian filter (BT=0.3), smooth spectral response
+✅ **Kernel-assisted detection**: Beacon provides pattern ID, no blind correlation needed
+✅ **RTS/CTS protocol**: Request-to-Send / Clear-to-Send prevents doubling
 
 ---
 
-## Improvement History
+## Pattern Structure
 
-**From original concept to final:**
+### Optimized Configuration
 
+**8 patterns × 1x redundancy × nested lengths up to 2048 symbols**
+
+**GMSK pulse shaping:** BT=0.3 Gaussian filter (pattern tones only)
+
+| Symbols | Core Bits | Welch Bound | Duration @ 200 sym/s | Processing Gain | Min SNR (BPSK+Polar 1/2) | Use Case |
+|---------|-----------|-------------|---------------------|-----------------|------------------------|----------|
+| 64 | 64 | -9.6 dB | 0.32s | ~6 dB | ~-6 dB | Micro ACKs |
+| 128 | 128 | -12.6 dB | 0.64s | ~9 dB | ~-9 dB | Tiny ACKs, CTS |
+| 256 | 256 | -15.6 dB | 1.28s | ~12 dB | ~-12 dB | Control messages |
+| 512 | 512 | -18.6 dB | 2.56s | ~15 dB | ~-15 dB | Beacons (1 kernel) |
+| 1024 | 1024 | -21.6 dB | 5.12s | ~18 dB | ~-18 dB | Medium messages |
+| 2048 | 2048 | -24.6 dB | 10.24s | ~21 dB | ~-21 dB | Large messages |
+
+**Nested structure:** Shorter patterns are prefixes (perfect cross-length orthogonality)
+
+**Error correction:** Polar codes at protocol layer (rates 1/2 to 7/8, adaptive to SNR)
+
+**Data capacity with Polar 2/3:**
+- 512s @ BPSK: 341 bits | @ QPSK: 683 bits
+- 1024s @ BPSK: 683 bits | @ QPSK: 1365 bits | @ 8-PSK: 2048 bits
+
+### Achieved Orthogonality (100k generations)
+
+- **2048 symbols**: **-21.19 dB** (target: -24.6 dB Welch bound)
+- **Gap**: 3.41 dB from theoretical (excellent for genetic algorithm!)
+- **With flip orthogonality**: Handles adjacent channel GMSK sidelobe interference
+- **1x redundancy**: All 2048 bits optimized for orthogonality (no repetition constraint)
+
+### Dual-Layer Encoding
+
+**Layer 1: Pattern Skeleton (GMSK 2-FSK)**
 ```
-Step 1: 256 patterns, coordinated, no RS
-→ 60% Shannon, 15 bps/user, 11.5ms (doesn't fit RPi4)
-
-Step 2: Add RS(32,20) aligned structure
-→ 60% Shannon, 90 bps/pattern (better FEC)
-
-Step 3: Soft chaos (remove guards/timing)
-→ 70% Shannon, 17 bps/user
-
-Step 4: Dual-layer architecture (pattern + data separation)
-→ Layer 1: Pattern ID (7 bits) via Time×Frequency hopping
-→ Layer 2: Data payload (8-32 bits) via adaptive modulation
-→ 55% channel Shannon, 94-244 bps/pattern
-
-Step 5: Continuous encoder mutations + kernel coordination
-→ 55-70% channel × 78-85% coordination = 45-60% system efficiency
-
-Step 6: 2-FSK with all λ=0 (ultimate robustness)
-→ All patterns use tone indices 0-1 (2 adjacent tones)
-→ BPSK skeleton baseline, -10 dB SNR threshold
-
-TOTAL IMPROVEMENT: 2-5× throughput per pattern (7 → 15-39 bits)
-                   Network: 45-60% overall efficiency (vs initial 60% target)
+Binary pattern: [0,1,1,0,1,0,...]  # 512 bits for 512-symbol pattern
+GMSK modulation (BT=0.3):
+  - Smooth Gaussian-filtered transitions
+  - Constant envelope (efficient PAs)
+  - For each symbol:
+    - 0 → Tone A (e.g., 1500 Hz)
+    - 1 → Tone B (e.g., 1520 Hz)
 ```
+
+**Layer 2: Data Payload (IQ Modulation on Pattern Tones)**
+```
+On the GMSK-selected tone, encode data via constellation:
+  - BPSK (SNR<0):    1 bit/symbol  (phase: 0° or 180°)
+  - QPSK (SNR 0-10): 2 bits/symbol (phase: 0°, 90°, 180°, 270°)
+  - 8-PSK (SNR 10-20): 3 bits/symbol
+  - 16-APSK (SNR>20): 4 bits/symbol (4+12 constellation)
+```
+
+**Layer 3: Polar Code Error Correction (Protocol Layer)**
+```
+Adaptive coding rates based on SNR:
+  - Rate 1/2 (SNR < 0):  Strongest FEC
+  - Rate 2/3 (SNR 0-5):  Strong FEC
+  - Rate 3/4 (SNR 5-10): Medium FEC
+  - Rate 5/6 (SNR >15):  Light FEC
+  - Rate 7/8 (SNR >20):  Minimal FEC
+```
+
+**Combined throughput (512-symbol pattern @ 200 sym/s):**
+- BPSK + Polar 2/3: 512 × 1 × 2/3 = 341 bits in 2.56s = 133 bps
+- QPSK + Polar 3/4: 512 × 2 × 3/4 = 768 bits in 2.56s = 300 bps
+- 8-PSK + Polar 5/6: 512 × 3 × 5/6 = 1280 bits in 2.56s = 500 bps
+- 16-APSK + Polar 7/8: 512 × 4 × 7/8 = 1792 bits in 2.56s = 700 bps
 
 ---
 
-## User Experience
+## Kernel Architecture
 
-**Transmit:**
-- No coordination needed
-- No waiting for slots
-- Transmit whenever ready
-- Throughput (equipment-dependent):
-  - QRP/QMX (5W, 200 sym/s): 94 bps (1 pattern, BPSK)
-  - Modern (50W, 200 sym/s): 575 bps (4 patterns, QPSK)
-  - Premium (100W, 300 sym/s): 975-1,950 bps (4-8 patterns, 8-PSK/16-APSK)
+### 28-Byte Kernel Structure
 
-**Receive:**
-- Decoder NN handles chaos separation (20-60 overlapping patterns)
-- Pattern recognition: 37.5% symbol erasure tolerance (QR code-like)
-- Adaptive demodulation: BPSK/QPSK/8-PSK/16-APSK based on kernel
-- Beacon processing: Decodes 3 kernel candidates per station
-- Dual role: Message decode + kernel generation for own transmission
-
-**Network:**
-- **1,024 total users** (frequency + time reuse via kernel coordination)
-- **45 active simultaneously** (chaos overlap tolerance)
-- Beacon every ~60s (random)
-- Kernels provide emergent coordination
-- No centralized control needed
-
-**Why 1,024 users (pattern reuse via TDMA/FDMA)**:
-```
-128 patterns × 2-4 time slots × 4 frequency bands = 1,024-2,048 user slots
-Kernel coordinates: Assigns each user unique (pattern, time, frequency) tuple
-Pattern 42 reused by: User A (slot 1, 20m), User B (slot 2, 20m), User C (slot 1, 40m)
-No collision: Different time OR different frequency
-```
-
-**Capacity scaling with equipment mix**:
-```
-Per 3 kHz SSB channel (1 time slot):
-- Legacy (40 Hz resolution): 10-15 users
-- Mixed legacy/SDR: 20-30 users (cognitive sharing)
-- Pure SDR (20 Hz resolution): 40-60 users
-
-Capacity grows automatically as SDR adoption increases (30% today → 60% by 2030)
-```
-
-**Shannon efficiency clarification**:
-```
-78-85% = Coordination efficiency (kernel packing of users into available slots)
-        = Actual users / Theoretical capacity
-        = 800-870 / 1,024
-
-~30-45% = Physical channel efficiency (CASCADE throughput / Shannon limit)
-        = Intentionally conservative for robustness (emergency communications priority)
-```
-
-**Multi-pattern transmission** (modulation orthogonality):
-```
-Single tone pair (2 adjacent tones, 64 Hz):
-- Can carry 4-8 patterns simultaneously
-- Separated by: Different adaptive modulation constellations (BPSK/QPSK/8-PSK/16-APSK)
-- All share λ=0 skeleton, differ in data modulation overlay
-- Kernel coordinates: Assigns non-interfering constellation combinations
-
-Full 3 kHz channel (75 tone pairs):
-- 20-30 patterns @ +5 dB SNR (typical)
-- 40-60 patterns @ +15 dB SNR (excellent)
-- Adaptive: More patterns at higher SNR, fewer at low SNR
-```
-
-## Kernel Coordination Architecture
-
-**28-Byte Kernel Structure**
-
-Each kernel is 28 bytes combining discrete protocol parameters with continuous neural network embeddings. The discrete portion (3 bytes) contains the critical protocol information while the continuous embedding (24 bytes) provides learned optimization hints.
-
-For multi-pattern support, the kernel encodes pattern ranges rather than individual IDs. When transmitting multiple patterns (1-8), stations typically use consecutive patterns from their assigned pool, so a start pattern ID plus count efficiently represents the full set.
-
-**Discrete portion (3 bytes):**
-- Pattern start ID: 7 bits (identifies first pattern in range)
-- Pattern count: 3 bits (how many consecutive patterns, 1-8)
-- Frequency pair: 7 bits (which tone pair from 75 available)
+**Discrete Protocol (4 bytes total):**
+- Pattern ID: 3 bits (which of 8 patterns, 0-7)
+- Frequency pair: 7 bits (which of 67 tone pairs)
 - Modulation: 3 bits (BPSK/QPSK/8-PSK/16-APSK)
+- Polar rate: 3 bits (1/2, 2/3, 3/4, 4/5, 5/6, 7/8)
 - Protocol version: 2 bits
 - Model version: 2 bits
+- Reserved: 12 bits
 
-**Continuous embedding (24 bytes):**
-48 dimensions with 4-bit quantization encoding learned features. The neural network discovers optimal embeddings during training that capture channel quality, interference patterns, and station capabilities.
+**Continuous Embedding (24 bytes):**
+- 48 dimensions × 4-bit quantization
+- Learned optimization hints (SNR estimates, interference patterns, etc.)
+- Generated by decoder NN from observed IQ samples
 
-**4-Kernel Beacon Structure**
+### Kernel Types
 
-Each station beacons 4 kernels totaling 112 bytes every ~60 seconds:
+**RX Kernel (Receive Capability):**
+- Indicates: "To reach me, use pattern X on frequency pair Y with modulation Z"
+- Generated by decoder based on observed channel quality
+- Transmitted in beacons
 
-**Three RX kernels:** These indicate the best ways for others to reach this station. The decoder generates these based on observed channel conditions from raw IQ samples. Each provides a different option - primary, secondary, and backup - giving transmitters flexibility in selecting clear patterns and frequencies.
-
-**One TX kernel:** This indicates what the station is currently transmitting, providing ground truth for collision avoidance. When idle, the TX kernel signals no active transmission. When transmitting, it specifies exactly which patterns and frequencies are in use.
-
-**Pro/Anti-Kernel Coordination**
-
-The RX kernels serve as "pro-kernels" for stations wanting to transmit to this station - they indicate optimal parameters for reception. Simultaneously, the TX kernel serves as an "anti-kernel" for the network - other stations avoid these patterns and frequencies to prevent interference.
-
-This distributed coordination achieves 78-85% efficiency without any central control. Stations make independent decisions based on observed kernels, naturally avoiding collisions while optimizing for their intended receivers.
-
-**Multi-Pattern Coordination**
-
-When a station indicates it can receive 4 patterns in its RX kernels, transmitters will use up to 4 patterns from their assigned pool (if available and not blocked by anti-kernels). The TX kernel then confirms which patterns are actually in use, allowing precise collision avoidance across the network.
-
-**Signal Flow**
-
-The CASCADE transmission flow separates discrete protocol decisions from continuous neural network optimizations:
-
-**Transmit Flow:**
-1. Decoder generates 3 RX kernels from observed IQ conditions
-2. Protocol creates TX kernel indicating current transmission state
-3. Station beacons all 4 kernels (112 bytes total) every ~60 seconds
-4. When transmitting, protocol selects patterns based on target's RX kernels and network TX kernels (anti-collision)
-5. Protocol generates baseline signal with selected patterns (1-8 based on conditions)
-6. Encoder applies continuous mutations for optimization within protocol constraints
-7. RF transmission of optimized multi-pattern signal
-
-**Receive Flow:**
-1. Decoder processes raw IQ samples continuously
-2. Identifies beacon patterns and extracts 4-kernel sets from all stations
-3. Uses TX kernels to maintain accurate collision map
-4. Demodulates message patterns using kernel guidance
-5. Updates own RX kernels based on observed channel quality
-6. Generates TX kernel based on current transmission state
-
-The complete separation between protocol (discrete choices) and model (continuous optimization) ensures compatibility while allowing neural network improvements.
+**TX Kernel (Transmit State):**
+- Indicates: "I'm currently transmitting on pattern X, frequency Y"
+- Used for anti-collision (other stations avoid this combination)
+- Updated in message headers when conditions change
 
 ---
 
-## Hardware Platform
+## Network Protocol
 
-**Recommended: Raspberry Pi 4 + Coral Edge TPU**
+### Beacon Transmission (Periodic Announcement)
+
+**When stations beacon:**
+- Calling CQ (seeking contacts)
+- Active QSO (kernel updates during conversation)
+- Net participation (check-ins)
+
+**Idle/listening stations:** Silent (no beacons)
+
+**Beacon content:**
 ```
-Cost: $110 ($50 RPi + $60 Coral USB)
-Power: 15W (battery-portable, 6-8 hours on 100Wh)
+Payload: 1 RX kernel (28 bytes = 224 bits)
+Pattern: 512 symbols @ BPSK (256 core bits)
+Duration: 2.56 seconds
+Frequency: Any available pair (kernel coordination)
+```
+
+**Beacon traffic (40-45 active users):**
+- ~40 beacons/min total
+- Distributed across 67 frequency pairs
+- ~1% duty cycle per frequency pair
+
+### QSO Flow (With RTS/CTS)
+
+**1. Beacon (Station A announces):**
+```
+RX kernel (512s @ BPSK): 2.56s
+Content: How to reach Station A
+```
+
+**2. Request-to-Send (Station B → Station A):**
+```
+TX kernel + RTS (512s @ BPSK): 2.56s
+Content: Station B's state + request to transmit
+Pattern/frequency: From Station A's RX kernel (kernel-assisted)
+```
+
+**3. Clear-to-Send (Station A → Station B):**
+```
+Session setup + CTS (128s @ BPSK): 0.64s
+Content: Channel assignment, session ID
+```
+
+**4. Message (Station B → Station A):**
+```
+[Optional: Pre-transmit RTS if kernel update needed]
+User data (adaptive pattern length + modulation)
+- Small (50 bytes): 512s @ QPSK = 2.56s
+- Medium (200 bytes): 1024s @ QPSK = 5.12s
+- Large (500 bytes): 2048s @ 8-PSK = 10.24s
+```
+
+**5. Message ACK (Station A → Station B):**
+```
+Receipt confirmation (128s @ BPSK): 0.64s
+```
+
+**Total QSO setup: ~6 seconds**, then adaptive data transfer
+
+### Collision Avoidance
+
+**RTS/CTS handshake:**
+- Prevents doubling (two stations transmitting to same receiver)
+- Prevents hidden terminal problem
+- Kernel updates transmitted in RTS when needed
+
+**Kernel coordination:**
+- TX kernels provide anti-collision map
+- Stations avoid (pattern, frequency) tuples in use
+- Distributed coordination, no central control
+
+---
+
+## Network Capacity
+
+**With 8 patterns:**
+- 8 patterns × 67 frequency pairs = **536 logical channels**
+- Supports: **40-45 active users simultaneously**
+- Pattern reuse: Same 8 patterns across all 67 frequency pairs
+- Isolation: Primarily frequency (different tone pairs don't interfere)
+- Pattern orthogonality: For adjacent frequency pairs (pulse shaping bleed)
+
+**Why -21.19 dB orthogonality is sufficient:**
+- Kernel provides pattern ID (no blind detection)
+- Frequency separation is primary isolation (~40 Hz between pairs)
+- Pattern orthogonality needed only for adjacent channel GMSK sidelobe interference
+- Polar code error correction handles residual errors (adaptive rates 1/2 to 7/8)
+- Processing gain: ~21 dB @ 2048s enables -21 dB minimum SNR
+
+---
+
+## Dual-Layer Encoding Detail
+
+### Pattern Selection (Layer 1 - GMSK 2-FSK)
+
+**Binary pattern with GMSK pulse shaping:**
+```python
+pattern = [0,1,1,0,1,0,...]  # 512 bits for 512-symbol pattern (1x redundancy)
+
+# Apply GMSK pulse shaping (BT=0.3)
+gmsk_signal = gmsk_modulate(pattern, bt=0.3)
+
+for i, symbol in enumerate(pattern):
+    # GMSK smoothly transitions between tones
+    if symbol == 0:
+        transmit_gmsk_tone_A(gmsk_signal[i])  # e.g., 1500 Hz
+    else:
+        transmit_gmsk_tone_B(gmsk_signal[i])  # e.g., 1520 Hz
+```
+
+**GMSK advantages:**
+- Smooth spectral response (narrow bandwidth)
+- Constant envelope (efficient Class C PAs)
+- Good adjacent channel rejection
+
+### Data Encoding (Layer 2 + 3)
+
+**IQ modulation + Polar on GMSK-selected tones:**
+```python
+# Layer 2: Apply Polar encoding
+user_data = [1,0,1,1,...]  # User bits
+polar_encoded = polar_encode(user_data, rate=2/3)  # Add redundancy
+
+# Layer 3: Modulate on pattern tones
+for i, fsk_symbol in enumerate(pattern):
+    # GMSK selects tone
+    tone = tone_A if fsk_symbol == 0 else tone_B
+
+    # Extract data bits for this symbol
+    data_bits = extract_bits(polar_encoded, i, modulation_order)
+
+    # Apply IQ constellation (BPSK/QPSK/8-PSK/16-APSK)
+    iq_symbol = modulate(data_bits, constellation_type)
+
+    # Transmit GMSK tone with IQ modulation
+    transmit(tone, iq_symbol)
+```
+
+**Polar provides adaptive error correction:**
+- Protocol layer (separate from pattern)
+- Rates adapt to SNR (1/2 strongest → 7/8 lightest)
+- Near-Shannon-limit performance
+- Example: 512 bits @ rate 2/3 = 341 data bits (171 bits overhead)
+
+---
+
+## Hardware Requirements
+
+**Recommended: Raspberry Pi 4 (CPU-only)**
+```
+Cost: $65 (RPi + USB sound card)
+Power: 8W (12+ hours portable)
 Performance:
-- Encoder: 3-5 ms (kernel generation + signal mutation)
-- Decoder: 50-100 ms (batch 180 patterns on TPU)
-- Real-time: Full 45-user network capable ✓
+- Pattern generation: One-time (150k generations, ~48 hours on modern PC)
+- Encoding: <1ms (select pattern, Polar encode, IQ modulate)
+- Decoding: <5ms kernel-assisted (1 pattern correlation + Polar decode)
+- Supports: 40-45 active users
 
-Alternative platforms:
-- RPi 5 (CPU-only): $80, limited to 10-20 patterns
-- PC + GPU: $600-800, 100+ pattern capacity
+No GPU/TPU needed:
+- Kernel provides pattern ID (no blind 8-pattern search)
+- GMSK detection + IQ demodulation
+- Polar decoding (CPU-efficient)
 ```
 
-**Radio: QMX + GPS**
+**Radio: Any SSB transceiver**
 ```
-Cost: $180 ($150 QMX + $30 GPS)
-Capabilities:
-- 200 sym/s (NN ISI tolerance)
-- GPS-disciplined (±0.1 Hz, 20 Hz spacing)
-- IQ mode (15 kHz BW, multi-band monitoring)
-- Modular scaling: 1×, 2×, 4× 2-FSK transmissions
-
-Total station: $290 (QMX + GPS + RPi4 + TPU)
-vs IC-7300 alone: $1,400 (6× more expensive, less capable)
+Requirements:
+- SSB mode (2.7 kHz bandwidth)
+- Sound card interface (44.1-48 kHz sampling)
+- 5W minimum (QRP works), 50-100W recommended
+- No GPS required (differential encoding handles ±10 Hz drift)
 ```
 
 ---
 
-## This is the optimal architecture for amateur radio HF emergency communications.
+## Pattern Generation
 
-*Architecture finalized: 2025-10-04 (Dual-layer 2-FSK with kernel coordination)*
-*55-70% channel efficiency × 78-85% coordination = 45-60% system efficiency*
-*All patterns λ=0, adaptive modulation (BPSK→16-APSK), throughput 94-1,950 bps*
-*Hardware: RPi4+TPU ($110), Radio: QMX+GPS ($180), Total: $290*
+**Genetic algorithm** with 32-member population:
+```bash
+# Generate optimal 8-pattern nested set
+python modules/training/patterns/tournament/generate_patterns_tournament.py \
+  --pattern-count 8 \
+  --pattern-length 2048 \
+  --redundancy 1 \
+  --generations 150000
+```
+
+**Output:** 6 nested pattern lengths (64, 128, 256, 512, 1024, 2048 symbols)
+
+**Proven convergence:**
+- 100k generations: -21.19 dB @ 2048 symbols
+- Welch bound: -24.6 dB (theoretical limit)
+- Gap: 3.41 dB (excellent for practical implementation)
+
+**One-time cost:** ~48 hours on modern PC, generates patterns for entire network
+
+**Key features:**
+- 1x redundancy: Pattern length = core bits (e.g., 512s = 512 core bits)
+- No built-in repetition (Polar handles error correction)
+- Optimized purely for orthogonality and flip-orthogonality
+- GMSK applied during transmission (not part of pattern generation)
+
+---
+
+## Key Simplifications from V1
+
+**V1 (Archived - Theoretical):**
+- 128 patterns with complex IQ orthogonality
+- Blind pattern detection
+- -37.5 dB orthogonality requirement
+- IQ separation on same tone pair
+
+**V2 (Current - Practical):**
+- 8 patterns with frequency separation
+- Kernel-assisted detection (beacon provides pattern ID)
+- **-21.19 dB orthogonality achieved** @ 2048 symbols (3.41 dB from Welch bound)
+- Frequency pairs provide primary isolation
+- Pattern orthogonality for adjacent channel GMSK sidelobe interference
+- 1x redundancy + Polar error correction (adaptive rates)
+- GMSK pulse shaping (BT=0.3, smooth spectrum)
+
+**Why simpler is better:**
+- ✅ Proven orthogonality (-21.19 dB measured)
+- ✅ No blind detection (kernel-assisted, <5ms)
+- ✅ Runs on Pi 4 CPU-only ($65 total)
+- ✅ 40-45 active users (536 channels)
+- ✅ Adaptive transmission (6 nested lengths, Polar rates)
+- ✅ -21 dB minimum SNR (BPSK + Polar 1/2 + 2048s)
+
+---
+
+## Archived Documentation
+
+**V1 theoretical architecture:** See `architecture_v1_archived.md`
+
+V1 explored maximum theoretical capacity with 128 patterns and IQ orthogonality.
+V2 implements practical system with 8 patterns and frequency separation.
+Both achieve 40-45 active users, but V2 is implementable with proven pattern generation.

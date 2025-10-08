@@ -1,0 +1,152 @@
+[
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": -10.430864718179595,
+    "signal_power": 11.96859359741211,
+    "peak_amplitude": 11.223306655883789,
+    "signal_index": 0
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": 14.10103837855496,
+    "signal_power": 1.0386441946029663,
+    "peak_amplitude": 1.5589848756790161,
+    "signal_index": 1
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": 5.025781925319912,
+    "signal_power": 1.3255481719970703,
+    "peak_amplitude": 2.5559704303741455,
+    "signal_index": 2
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": -0.2319027521037107,
+    "signal_power": 2.0422096252441406,
+    "peak_amplitude": 3.922736406326294,
+    "signal_index": 3
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": 16.614371448034902,
+    "signal_power": 1.0215957164764404,
+    "peak_amplitude": 1.397024154663086,
+    "signal_index": 4
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": -1.7867481478653424,
+    "signal_power": 2.5046420097351074,
+    "peak_amplitude": 4.426600456237793,
+    "signal_index": 5
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": 13.691626324043426,
+    "signal_power": 1.0453987121582031,
+    "peak_amplitude": 1.5723098516464233,
+    "signal_index": 6
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": -8.241546897435782,
+    "signal_power": 7.658027172088623,
+    "peak_amplitude": 8.841733932495117,
+    "signal_index": 7
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": -6.501019972408017,
+    "signal_power": 5.496095180511475,
+    "peak_amplitude": 7.705948829650879,
+    "signal_index": 8
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": -8.307304071649707,
+    "signal_power": 7.806168556213379,
+    "peak_amplitude": 9.126825332641602,
+    "signal_index": 9
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": 11.178923227670786,
+    "signal_power": 1.0760573148727417,
+    "peak_amplitude": 1.816512942314148,
+    "signal_index": 10
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": 17.87362692389297,
+    "signal_power": 1.016849160194397,
+    "peak_amplitude": 1.3453601598739624,
+    "signal_index": 11
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": -0.7895279125322858,
+    "signal_power": 2.210038185119629,
+    "peak_amplitude": 4.485036849975586,
+    "signal_index": 12
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": 19.845929687065066,
+    "signal_power": 1.0100535154342651,
+    "peak_amplitude": 1.2912238836288452,
+    "signal_index": 13
+  },
+  {
+    "expert_type": "awgn",
+    "effects_applied": [
+      "awgn"
+    ],
+    "snr_db": 13.988155493683713,
+    "signal_power": 1.0400184392929077,
+    "peak_amplitude": 1.5572636127471924,
+    "signal_index": 14
+  }
+]

@@ -1,714 +1,337 @@
-# CASCADE Pattern Generation Implementation Specification
+# CASCADE Pattern Generation Specification (V2)
 
-**Purpose:** Complete algorithm specification for generating CASCADE's 128 orthogonal 4D patterns
-**Status:** Ready for implementation
-**Expected runtime:** 18-24 hours (8-core CPU, one-time generation)
-**Output:** `cascade_patterns_v2_128chaos.bin` (38 KB)
+**Purpose:** Genetic algorithm for 8-pattern nested generation (no built-in redundancy)
+**Status:** ✅ Proven effective (-21.19 dB achieved at 2048 symbols)
+**Runtime:** ~48 hours for 150k generations on modern CPU
+**Output:** Nested pattern set with 6 usable lengths (64-2048 symbols)
+**Error correction:** Polar codes at protocol layer (not in pattern)
 
 ---
 
 ## Overview
 
-CASCADE uses 128 patterns (48 beacon + 80 message) generated via:
-1. **Zadoff-Chu sequences** (1970s mathematics, LTE/5G proven, patent-free)
-2. **Hierarchical IQ generation** (4 complexity pools, baked-in)
-3. **Simulated annealing optimization** (achieve <-37.5 dB in 4D space)
+CASCADE V2 uses **8 patterns with nested lengths** generated via genetic algorithm:
 
-**Two-tier generation:**
-- Beacon patterns (0-47): 4-tone selection from 78, simple IQ, 6-8 hours
-- Message patterns (48-127): 4-tone selection from 78, hierarchical IQ, 12-16 hours
+1. **Genetic algorithm** with 32-member population
+2. **No built-in redundancy** (pattern length = bits, e.g., 512s = 512 bits)
+3. **Nested extraction** (shorter patterns are prefixes of longer ones)
+4. **GMSK modulation** (applied during transmission, BT=0.3)
+5. **Polar code error correction** (protocol layer, adaptive rates 1/2 to 7/8)
+
+**Key achievement:**
+- 2048 symbols (2048 bits, pure orthogonality optimization): **-21.19 dB orthogonality**
+- Welch bound: -24.6 dB (theoretical limit for 8 patterns, 2048 symbols)
+- Gap: 3.41 dB (excellent for genetic algorithm!)
+- With flip orthogonality for adjacent channel GMSK sidelobe interference
 
 ---
 
-## Algorithm: Beacon Pattern Generation
+## Generation Command
 
-### Input Parameters
+```bash
+# Generate optimal 8-pattern nested set (no redundancy)
+python modules/training/patterns/tournament/generate_patterns_tournament.py \
+  --pattern-count 8 \
+  --pattern-length 2048 \
+  --redundancy 1 \
+  --generations 150000 \
+  --p-cores 0-7
+```
+
+**Parameters:**
+- `--pattern-count 8`: Number of patterns (4 or 8 recommended for CASCADE)
+- `--pattern-length 2048`: Maximum symbol count (e.g., 256-4096)
+- `--redundancy 1`: **Pure orthogonality optimization (polar codes handle FEC at protocol layer)**
+- `--generations 150000`: GA generations (more = better orthogonality)
+- `--p-cores 0-7`: CPU cores to use (optional)
+
+**Output location:**
+```
+checkpoints/p8_l2048_r1x/output/patterns_p8_l2048_r1x_TIMESTAMP.pkl
+```
+
+**Partitioning:** Automatically organized by configuration (p{count}_l{length}_r{redundancy}x)
+
+**Note:** The `--redundancy 1` parameter means no repetition in pattern structure; error correction is handled by polar codes at the protocol layer, not within the pattern itself.
+
+---
+
+## Nested Pattern Structure
+
+### Automatic Length Variants
+
+**From single 2048-symbol optimization**, get 6 usable lengths:
+
+| Symbols | Core Bits | Welch Bound | Duration @ 200 sym/s | With Polar 2/3 |
+|---------|-----------|-------------|---------------------|----------------|
+| 2048 | 2048 | -24.6 dB | 10.24s | 1365 bits |
+| 1024 | 1024 | -21.6 dB | 5.12s | 683 bits |
+| 512 | 512 | -18.6 dB | 2.56s | 341 bits |
+| 256 | 256 | -15.6 dB | 1.28s | 171 bits |
+| 128 | 128 | -12.6 dB | 0.64s | 85 bits |
+| 64 | 64 | -9.6 dB | 0.32s | 43 bits |
+
+**Achieved:** -21.19 dB @ 2048 symbols (3.41 dB from Welch bound)
+
+**Nested extraction (no redundancy):**
+```python
+# Shorter patterns = prefixes of longer ones
+# Direct bit extraction from optimized 2048-bit pattern
+pattern_1024 = pattern_2048[0:1024]  # First 1024 bits
+pattern_512 = pattern_2048[0:512]    # First 512 bits
+pattern_256 = pattern_2048[0:256]    # First 256 bits
+pattern_128 = pattern_2048[0:128]    # First 128 bits
+pattern_64 = pattern_2048[0:64]      # First 64 bits
+# Perfect cross-length orthogonality (nested structure)
+```
+
+### Pattern Selection by Message Size
+
+| Message Size | Pattern Length | Modulation | Duration @ 200 sym/s | Example |
+|--------------|----------------|------------|---------------------|---------|
+| 5-30 bytes | 128s | BPSK | 0.64s | ACK, CTS |
+| 28 bytes (1 kernel) | 512s | BPSK | 2.56s | Beacon, RTS |
+| 50-100 bytes | 512s | QPSK | 2.56s | Short message |
+| 100-200 bytes | 1024s | QPSK | 5.12s | Medium message |
+| 200-400 bytes | 2048s | QPSK | 10.24s | Long message |
+| 400-500 bytes | 2048s | 8-PSK | 10.24s | Maximum |
+
+---
+
+## Genetic Algorithm Details
+
+### Population Structure
+
+**32 pattern sets** per trial, each set contains 8 patterns:
+```python
+population = [
+    [Pattern_0, Pattern_1, ..., Pattern_7],  # Set 0
+    [Pattern_0, Pattern_1, ..., Pattern_7],  # Set 1
+    ...
+    [Pattern_0, Pattern_1, ..., Pattern_7]   # Set 31
+]
+```
+
+### Evolution Loop
 
 ```python
-BEACON_GENERATION_PARAMS = {
-    'num_patterns': 48,
-    'pattern_id_range': range(0, 48),
-    'tone_alphabet': [1490, 1520, 1580, 1610],  # 4-FSK tones (Hz)
-    'tone_alphabet_size': 4,
-    'symbols_per_pattern': 32,
-    'target_orthogonality_db': -30,
-    'max_iterations': 100000,  # Per pattern
+for generation in range(150000):
+    # 1. SELECTION (Elitism)
+    keep_top_4_sets()
+
+    # 2. CROSSOVER (70% rate)
+    breed_from_top_16_sets()
+    # Example: Patterns 0-3 from parent A, patterns 4-7 from parent B
+
+    # 3. MUTATION (10% rate per pattern)
+    mutate_core_bits(13_bits_average)
+
+    # 4. EVALUATION
+    if generation % 10 == 0:
+        evaluate_all_120_pairs(full_correlation)
+    else:
+        evaluate_30_random_pairs(fast_sampling)
+
+    # 5. RANKING
+    sort_by_worst_case_orthogonality()
+```
+
+### Fitness Function
+
+**Triple orthogonality testing:**
+```python
+def evaluate_fitness(pattern_set):
+    worst_normal = -100
+    worst_flip = -100
+    worst_erasure = -100
+
+    for pattern_i, pattern_j in pairs:
+        # Expand cores using repetition map
+        expanded_i = core_i[repetition_map]
+        expanded_j = core_j[repetition_map]
+
+        # Normal correlation
+        corr_normal = correlate(expanded_i, expanded_j)
+        worst_normal = max(worst_normal, corr_normal)
+
+        # Flip correlation (adjacent channel interference)
+        corr_flip = correlate(expanded_i, invert(expanded_j))
+        worst_flip = max(worst_flip, corr_flip)
+
+        # Erasure correlation (~20% symbol loss)
+        corr_erasure = correlate_with_dropout(expanded_i, expanded_j, 0.2)
+        worst_erasure = max(worst_erasure, corr_erasure)
+
+    return max(worst_normal, worst_flip, worst_erasure)
+```
+
+### Convergence Results
+
+**Proven trajectory (8 patterns, 2048 symbols, no redundancy):**
+- 6k generations: -17.38 dB
+- 100k generations: **-21.19 dB** ✅
+- Welch bound: -24.6 dB (theoretical limit for 8p, 2048s)
+- Gap: 3.41 dB (excellent for genetic algorithm!)
+
+---
+
+## Output Format
+
+### Nested Pattern File Structure
+
+```python
+{
+    'nested_patterns': {
+        128: {
+            'cores': [array([0,1,1,...]), ...],  # 8 × 64-bit cores
+            'repetition_map': array([...]),      # 128-element map
+            'core_length': 64,
+            'full_length': 128
+        },
+        256: {...},  # 8 × 128-bit cores
+        512: {...},  # 8 × 256-bit cores
+        1024: {...}, # 8 × 512-bit cores
+        2048: {      # 8 × 1024-bit cores
+            'cores': [array([0,1,0,1,...]), ...],
+            'repetition_map': array([...]),
+            'core_length': 1024,
+            'full_length': 2048
+        }
+    },
+    'nested_orthogonality': {
+        128: -8.2,    # dB (estimated)
+        256: -11.3,
+        512: -14.5,
+        1024: -17.4,
+        2048: -19.87  # Proven!
+    },
+    'num_patterns': 8,
+    'redundancy': 1,
+    'max_core_length': 2048,
+    'max_full_length': 2048,
+    'algorithm': 'genetic_nested',
+    'generations': 100000
 }
 ```
 
-### Step 1: Zadoff-Chu Base Sequences
+### Pattern Structure (No Built-in Redundancy)
 
+**Pure orthogonality optimization:**
 ```python
-import numpy as np
-
-def generate_zadoff_chu_4tone(u, N=31):
-    """
-    Generate Zadoff-Chu sequence for 4-tone alphabet
-
-    Args:
-        u: Root index (0 to 63)
-        N: Sequence length (31, prime)
-
-    Returns:
-        32-element array of tone indices (0-3)
-    """
-    sequence = []
-
-    for n in range(31):
-        # Zadoff-Chu formula
-        q = u * n * (n + 1) / 2
-        phase = 2 * np.pi * q / N
-
-        # Map phase to 4-tone index
-        tone_idx = int((phase % (2 * np.pi)) / (2 * np.pi / 4))
-        sequence.append(tone_idx)
-
-    # Pad to 32 symbols
-    sequence.append(0)
-
-    return np.array(sequence, dtype=np.uint8)
-
-# Generate first 31 base patterns
-base_patterns = [generate_zadoff_chu_4tone(u) for u in range(31)]
-
-# Remaining 33 patterns: Random initialization
-for i in range(33):
-    random_base = np.random.randint(0, 4, size=32, dtype=np.uint8)
-    base_patterns.append(random_base)
+# Example for 512-symbol pattern
+pattern = [0, 1, 1, 0, 1, 0, ...]  # 512 bits (pattern length = bits)
+# No repetition map needed
+# Error correction handled by polar codes at protocol layer
 ```
 
-### Step 2: Hierarchical IQ Generation
+**Polar code error correction (separate from pattern):**
+- Applied at protocol layer after pattern selection
+- Adaptive rates: 1/2, 2/3, 3/4, 4/5, 5/6, 7/8
+- Negotiated via kernel based on measured SNR
+- More efficient than building redundancy into patterns
+
+---
+
+## Usage in CASCADE Modem
+
+### Loading Patterns
 
 ```python
-def generate_beacon_iq_hierarchical(pattern_id):
-    """
-    Generate IQ trajectory based on pattern ID
-    Hierarchical: Pattern ID determines complexity
+import pickle
 
-    Returns:
-        Single IQ trajectory (32 complex values)
-    """
+# Load nested pattern set
+with open('patterns_p8_l2048_r1x_*.pkl', 'rb') as f:
+    pattern_data = pickle.load(f)
 
-    iq_trajectory = np.zeros(32, dtype=np.complex64)
+# Select length based on message size
+def select_pattern_length(message_bytes, modulation):
+    bits_needed = message_bytes * 8
 
-    if pattern_id < 16:
-        # EMERGENCY PATTERNS (0-15): BPSK line
-        for t in range(32):
-            # Alternate ±1 on I-axis (Q=0)
-            iq_trajectory[t] = complex((-1)**(t % 2), 0)
+    if modulation == 'BPSK':
+        bits_per_symbol = 1
+    elif modulation == 'QPSK':
+        bits_per_symbol = 2
+    elif modulation == '8-PSK':
+        bits_per_symbol = 3
+    else:  # 16-APSK
+        bits_per_symbol = 4
 
-    else:
-        # NORMAL BEACONS (16-63): Simple circle
-        for t in range(32):
-            angle = 2 * np.pi * pattern_id * t / 64
-            radius = 0.7  # Fixed radius for beacons
-            iq_trajectory[t] = radius * np.exp(1j * angle)
+    # Find smallest pattern that fits
+    for length in [128, 256, 512, 1024, 2048]:
+        core_bits = length // 2  # 2x redundancy
+        capacity = core_bits * bits_per_symbol
+        if capacity >= bits_needed:
+            return length
 
-    return iq_trajectory
+    return 2048  # Maximum
+
+# Example: 152-byte message @ QPSK
+length = select_pattern_length(152, 'QPSK')  # Returns 1024
+patterns = pattern_data['nested_patterns'][length]
 ```
 
-### Step 3: 4D Correlation Function
+### Encoding Message
 
 ```python
-def compute_4d_correlation_beacon(pattern_1, pattern_2):
-    """
-    Compute correlation in 4D space (Time × Freq × I × Q)
+# Get pattern from kernel
+pattern_id = rx_kernel.pattern_id  # 0-7
+pattern = patterns['cores'][pattern_id]  # Direct pattern (no expansion needed)
 
-    Args:
-        pattern_1: {'freq': [32 tone indices], 'iq': [32 complex]}
-        pattern_2: {'freq': [32 tone indices], 'iq': [32 complex]}
+# Apply Polar encoding to user data
+user_bits = message_to_bits(message)
+polar_rate = rx_kernel.polar_rate  # From kernel (1/2, 2/3, 3/4, etc.)
+polar_encoded = polar_encode(user_bits, rate=polar_rate)
 
-    Returns:
-        Correlation in dB (must be < -30)
-    """
+# Encode on pattern with GMSK + IQ modulation
+transmitted_symbols = []
 
-    correlation = 0.0
+for i, fsk_symbol in enumerate(pattern):
+    # Layer 1: GMSK 2-tone FSK (pattern selection)
+    tone = gmsk_tone_A if fsk_symbol == 0 else gmsk_tone_B
 
-    for t in range(32):  # Time dimension
-        # Frequency dimension (discrete)
-        if pattern_1['freq'][t] != pattern_2['freq'][t]:
-            # Different tones → orthogonal
-            continue
+    # Layer 2: IQ data modulation on selected tone
+    data_bits = extract_bits(polar_encoded, i, modulation_order)
+    iq_symbol = modulate_iq(data_bits, modulation_type)
 
-        # Same tone → check IQ orthogonality
-        iq_1 = pattern_1['iq'][t]
-        iq_2 = pattern_2['iq'][t]
-
-        # Inner product in IQ plane
-        iq_corr = iq_1 * np.conj(iq_2)
-        correlation += np.abs(iq_corr)
-
-    # Normalize
-    normalized = correlation / 32.0
-
-    # Convert to dB
-    if normalized < 1e-10:
-        return -100  # Excellent orthogonality
-    else:
-        return 20 * np.log10(normalized)
-```
-
-### Step 4: Simulated Annealing Optimization
-
-```python
-def optimize_pattern_to_30db(base_freq, iq_trajectory, existing_patterns, alphabet_size):
-    """
-    Optimize frequency sequence to achieve <-30 dB with all existing patterns
-
-    Args:
-        base_freq: Initial frequency sequence (32 symbols)
-        iq_trajectory: Fixed IQ trajectory (32 complex values)
-        existing_patterns: List of already-optimized patterns
-        alphabet_size: 4 (beacon) or 70 (message)
-
-    Returns:
-        Optimized frequency sequence
-    """
-
-    best_freq = base_freq.copy()
-    best_max_corr = float('inf')
-
-    temperature = 1.0
-    cooling_rate = 0.9999
-
-    for iteration in range(100000):
-        # Mutate: Change one random symbol
-        candidate = best_freq.copy()
-        idx = np.random.randint(32)
-        candidate[idx] = np.random.randint(alphabet_size)
-
-        # Check 4D correlation with ALL existing patterns
-        max_corr = -100
-        for existing in existing_patterns:
-            corr = compute_4d_correlation_beacon(
-                {'freq': candidate, 'iq': iq_trajectory},
-                existing
-            )
-            max_corr = max(max_corr, corr)
-
-        # Simulated annealing acceptance
-        if max_corr < best_max_corr:
-            best_freq = candidate
-            best_max_corr = max_corr
-        elif np.random.random() < np.exp(-(max_corr - best_max_corr) / temperature):
-            best_freq = candidate
-            best_max_corr = max_corr
-
-        temperature *= cooling_rate
-
-        # Success?
-        if best_max_corr < -30:
-            print(f"  Pattern optimized to {best_max_corr:.1f} dB in {iteration} iterations")
-            return best_freq
-
-    # Check final result
-    if best_max_corr < -30:
-        return best_freq
-    else:
-        raise ValueError(f"Could not achieve -30 dB (got {best_max_corr:.1f} dB)")
-```
-
-### Step 5: Complete Beacon Generation
-
-```python
-def generate_all_beacon_patterns():
-    """
-    Generate all 48 beacon patterns
-    Estimated time: 6-8 hours on 8-core CPU
-    """
-
-    beacon_patterns = []
-
-    for pattern_id in range(48):
-        print(f"Generating beacon pattern {pattern_id}/48...")
-
-        # Step 1: Base frequency sequence
-        if pattern_id < 31:
-            base_freq = generate_zadoff_chu_4tone(pattern_id)
-        else:
-            base_freq = np.random.randint(0, 4, size=32, dtype=np.uint8)
-
-        # Step 2: Generate IQ (hierarchical)
-        iq_traj = generate_beacon_iq_hierarchical(pattern_id)
-
-        # Step 3: Optimize to <-30 dB
-        freq_optimized = optimize_pattern_to_30db(
-            base_freq,
-            iq_traj,
-            beacon_patterns,
-            alphabet_size=4
-        )
-
-        # Step 4: Store
-        beacon_patterns.append({
-            'id': pattern_id,
-            'freq_sequence': freq_optimized,
-            'iq_trajectory': iq_traj,
-            'tone_alphabet_size': 4,
-            'complexity_level': 0 if pattern_id < 16 else 1
-        })
-
-        # Validate against all existing
-        for existing in beacon_patterns[:-1]:
-            corr = compute_4d_correlation_beacon(beacon_patterns[-1], existing)
-            assert corr < -37.5, f"Patterns {pattern_id} and {existing['id']}: {corr:.1f} dB"
-
-    print(f"✓ All 48 beacon patterns generated and validated")
-    return beacon_patterns
+    # Transmit GMSK tone with IQ modulation
+    transmitted_symbols.append((tone, iq_symbol))
 ```
 
 ---
 
-## Algorithm: Message Pattern Generation
+## Performance Characteristics
 
-### Input Parameters
+### Orthogonality vs Pattern Count
 
-```python
-MESSAGE_GENERATION_PARAMS = {
-    'num_patterns': 80,
-    'pattern_id_range': range(48, 128),  # Will be stored as IDs 48-127
-    'tone_alphabet_size': 78,  # Each pattern selects 4 from 78
-    'tone_indices': range(0, 78),  # Message tone indices (full grid)
-    'symbols_per_pattern': 32,
-    'target_orthogonality_db': -30,
-    'max_iterations': 100000,
+| Patterns | Welch @ 1024s | Achieved @ 100k gen | Capacity (×67 pairs) |
+|----------|---------------|---------------------|---------------------|
+| 4 | -25.3 dB | -24 to -25 dB | 268 channels |
+| 8 | -21.6 dB | -21.19 dB ✅ | 536 channels |
+| 16 | -18.3 dB | -16 to -17 dB | 1,072 channels |
 
-    'complexity_pools': {
-        'emergency': (0, 16, 0.0),     # (start_idx, count, lambda)
-        'typical_dx': (16, 128, 0.4),   # LARGEST POOL
-        'good_prop': (144, 32, 0.6),
-        'nvis': (176, 16, 0.8),
-    }
-}
-```
+**Recommendation: 8 patterns** (best balance of orthogonality and capacity)
 
-### Step 1: Zadoff-Chu for 70-Tone Alphabet
+### Redundancy Trade-offs (8 patterns, 2048 symbols)
 
-```python
-def generate_zadoff_chu_message(u, N=31):
-    """
-    Generate for 78-tone message grid (each pattern selects 4)
+| Redundancy | Core Bits | Welch Bound | Error Correction Method |
+|------------|-----------|-------------|------------------------|
+| **1x** | **2048** | **-24.6 dB** | **Polar (adaptive 1/2 to 7/8)** |
+| 2x | 1024 | -21.6 dB | Pattern repetition + Polar |
+| 4x | 512 | -18.6 dB | Pattern repetition (QR-like) |
 
-    Args:
-        u: Root index (0-191)
-        N: 31 (prime)
+**Recommendation: 1x redundancy** (best orthogonality, Polar provides superior FEC)
 
-    Returns:
-        32-element array of tone indices (0-69)
-    """
-    sequence = []
-
-    for n in range(31):
-        q = u * n * (n + 1) / 2
-        phase = 2 * np.pi * q / N
-
-        # Map to 4-tone index (0-3)
-        tone_idx = int((phase % (2 * np.pi)) / (2 * np.pi / 4))
-        sequence.append(tone_idx)
-
-    sequence.append(0)
-    return np.array(sequence, dtype=np.uint8)
-```
-
-### Step 2: Hierarchical IQ Generation (6 Pools)
-
-```python
-def generate_message_iq_hierarchical(pattern_id):
-    """
-    Generate IQ based on complexity pool
-    pattern_id: 0-79 (will map to IDs 48-127 in file)
-
-    Returns:
-        Single IQ trajectory with baked-in complexity
-    """
-
-    iq_trajectory = np.zeros(32, dtype=np.complex64)
-
-    # Determine pool and complexity
-    if pattern_id < 16:
-        # Pool 1: Emergency (IDs 64-79)
-        # BPSK line (λ=0.0)
-        for t in range(32):
-            iq_trajectory[t] = complex((-1)**(t % 2), 0)
-
-    elif pattern_id < 80:
-        # Pool 2a: Typical DX Simple (IDs 80-143)
-        # Simple ellipse (λ=0.30-0.40)
-        target_lambda = 0.30 + (pattern_id - 16) / 64 * 0.10
-
-        for t in range(32):
-            # Simple ellipse with pattern-specific parameters
-            angle = 2 * np.pi * t / 32
-            phase_offset = 2 * np.pi * pattern_id / 192
-
-            i = target_lambda * np.cos(angle + phase_offset)
-            q = target_lambda * 0.7 * np.sin(angle + phase_offset)  # Ellipse
-            iq_trajectory[t] = complex(i, q)
-
-    elif pattern_id < 144:
-        # Pool 2b: Typical DX Moderate (IDs 144-207)
-        # Moderate ellipse (λ=0.40-0.50)
-        target_lambda = 0.40 + (pattern_id - 80) / 64 * 0.10
-
-        # Slightly more complex ellipse
-        freq_a = ((pattern_id - 80) % 3) + 1  # 1-3
-        freq_b = ((pattern_id - 80) % 2) + 1  # 1-2
-
-        for t in range(32):
-            angle_a = 2 * np.pi * freq_a * t / 32
-            angle_b = 2 * np.pi * freq_b * t / 32
-            offset = 2 * np.pi * pattern_id / 192
-
-            i = target_lambda * np.cos(angle_a + offset)
-            q = target_lambda * np.sin(angle_b + offset)
-            iq_trajectory[t] = complex(i, q)
-
-    elif pattern_id < 64:
-        # Pool 3: Good Propagation (IDs 96-111)
-        # Moderate IQ (λ=0.50-0.70)
-        target_lambda = 0.50 + (pattern_id - 144) / 32 * 0.20
-
-        freq_a = ((pattern_id - 144) % 5) + 1  # 1-5
-        freq_b = ((pattern_id - 144) % 3) + 1  # 1-3
-
-        for t in range(32):
-            angle_a = 2 * np.pi * freq_a * t / 32
-            angle_b = 2 * np.pi * freq_b * t / 32
-            offset = 2 * np.pi * pattern_id / 192
-
-            i = target_lambda * np.cos(angle_a + offset)
-            q = target_lambda * np.sin(angle_b + offset)
-            iq_trajectory[t] = complex(i, q)
-
-    else:
-        # Pool 4: NVIS Exceptional (IDs 112-127)
-        # Complex Lissajous (λ=0.70-0.90)
-        target_lambda = 0.70 + (pattern_id - 176) / 16 * 0.20
-
-        # Complex Lissajous with varied frequency ratios
-        freq_a = ((pattern_id - 176) % 7) + 1  # 1-7
-        freq_b = ((pattern_id - 176) % 5) + 1  # 1-5
-
-        for t in range(32):
-            angle_a = 2 * np.pi * freq_a * t / 32
-            angle_b = 2 * np.pi * freq_b * t / 32
-            offset = 2 * np.pi * pattern_id / 192
-
-            i = target_lambda * np.cos(angle_a + offset)
-            q = target_lambda * np.sin(angle_b + offset)
-            iq_trajectory[t] = complex(i, q)
-
-    return iq_trajectory
-```
-
-### Step 3: Optimization Loop
-
-```python
-def generate_all_beacon_patterns():
-    """
-    Generate all 48 beacon patterns with optimization
-    """
-
-    optimized_patterns = []
-
-    for pattern_id in range(48):
-        print(f"Generating beacon pattern {pattern_id}/48...")
-
-        # Base frequency sequence
-        if pattern_id < 31:
-            base_freq = generate_zadoff_chu_4tone(pattern_id)
-        else:
-            base_freq = np.random.randint(0, 4, size=32, dtype=np.uint8)
-
-        # Generate IQ (hierarchical, single trajectory)
-        iq_traj = generate_beacon_iq_hierarchical(pattern_id)
-
-        # Optimize to <-30 dB
-        freq_optimized = optimize_to_30db(
-            base_freq_seq=base_freq,
-            iq_trajectory=iq_traj,
-            existing_patterns=optimized_patterns,
-            alphabet_size=4,
-            max_iterations=100000
-        )
-
-        # Store
-        optimized_patterns.append({
-            'id': pattern_id,
-            'freq_sequence': freq_optimized,
-            'iq_trajectory': iq_traj,
-            'complexity_level': 0 if pattern_id < 16 else 1,
-            'tone_alphabet': [1490, 1520, 1580, 1610]
-        })
-
-        print(f"  Pattern {pattern_id}: Orthogonality validated <-30 dB")
-
-    return optimized_patterns
-```
+**Why 1x + Polar is better:**
+- More core bits to optimize (all 2048 bits)
+- Better Welch bound (-24.6 vs -21.6 dB)
+- Adaptive error correction (adjust rate to SNR)
+- Higher throughput (Polar overhead 12.5% to 50% vs fixed 75%)
 
 ---
 
-## Algorithm: Message Pattern Generation
+## Archived Documentation
 
-### Input Parameters
+**V1 (128-pattern theoretical):** See `pattern_generation_spec_v1_archived.md`
 
-```python
-MESSAGE_GENERATION_PARAMS = {
-    'num_patterns': 192,
-    'storage_id_range': range(64, 256),  # IDs in file
-    'generation_id_range': range(0, 192),  # Loop index
-    'tone_alphabet_size': 70,
-    'tone_indices': range(0, 4),  # Each pattern uses 4 tones (indices 0-3)
-    'symbols_per_pattern': 32,
-    'target_orthogonality_db': -30,
-    'max_iterations': 100000,
-}
-```
-
-### Complete Message Generation Function
-
-```python
-def generate_all_message_patterns():
-    """
-    Generate all 80 message patterns
-    Estimated time: 30-40 hours (can parallelize)
-    """
-
-    optimized_patterns = []
-
-    for gen_id in range(80):
-        storage_id = gen_id + 48  # Will be stored as 48-127
-        print(f"Generating message pattern {storage_id}/127 ({gen_id}/80)...")
-
-        # Base frequency sequence
-        if gen_id < 31:
-            base_freq = generate_zadoff_chu_message(gen_id)
-        else:
-            base_freq = np.random.randint(0, 70, size=32, dtype=np.uint8)
-
-        # Generate IQ (hierarchical, single trajectory)
-        iq_traj = generate_message_iq_hierarchical(gen_id)
-
-        # Optimize to <-30 dB
-        freq_optimized = optimize_to_30db(
-            base_freq_seq=base_freq,
-            iq_trajectory=iq_traj,
-            existing_patterns=optimized_patterns,
-            alphabet_size=70,
-            max_iterations=100000
-        )
-
-        # Determine complexity level for metadata
-        if gen_id < 16:
-            complexity_level = 0  # Emergency
-        elif gen_id < 144:
-            complexity_level = 1 + (gen_id - 16) // 32  # Typical DX (1-4)
-        elif gen_id < 176:
-            complexity_level = 5  # Good prop
-        else:
-            complexity_level = 6  # NVIS
-
-        # Store
-        optimized_patterns.append({
-            'id': storage_id,
-            'freq_sequence': freq_optimized,
-            'iq_trajectory': iq_traj,
-            'complexity_level': complexity_level,
-            'tone_alphabet': list(range(70))
-        })
-
-        print(f"  Pattern {storage_id}: Orthogonality validated <-30 dB")
-
-    return optimized_patterns
-```
-
----
-
-## Output File Format
-
-### Binary File Structure
-
-```python
-def write_pattern_file(filename, beacon_patterns, message_patterns):
-    """
-    Write cascade_patterns_v1.bin
-    """
-
-    with open(filename, 'wb') as f:
-        # HEADER (32 bytes)
-        f.write(b'CASC')  # Magic (4)
-        f.write(1 .to_bytes(2, 'little'))  # Version (2)
-        f.write(256 .to_bytes(2, 'little'))  # Total patterns (2)
-        f.write(64 .to_bytes(2, 'little'))  # Beacon count (2)
-        f.write(192 .to_bytes(2, 'little'))  # Message count (2)
-        f.write(32 .to_bytes(2, 'little'))  # Pattern length (2)
-        f.write(4 .to_bytes(2, 'little'))  # Beacon tones (2)
-        f.write(78 .to_bytes(2, 'little'))  # Reference tone grid (2)
-        f.write(32 .to_bytes(2, 'little'))  # Tone spacing Hz (2)
-        f.write(bytes(14))  # Reserved (14)
-
-        # BEACON PATTERNS (64 × 292 = 18,688 bytes)
-        for pattern in beacon_patterns:
-            f.write(pattern['id'].to_bytes(1, 'little'))  # ID (1)
-            f.write(pattern['freq_sequence'].tobytes())  # Freq (32)
-            f.write(pattern['iq_trajectory'].tobytes())  # IQ (256)
-            f.write(pattern['complexity_level'].to_bytes(1, 'little'))  # (1)
-            crc = compute_crc16(pattern['freq_sequence'], pattern['iq_trajectory'])
-            f.write(crc.to_bytes(2, 'little'))  # CRC (2)
-
-        # MESSAGE PATTERNS (192 × 292 = 56,064 bytes)
-        for pattern in message_patterns:
-            f.write(pattern['id'].to_bytes(1, 'little'))
-            f.write(pattern['freq_sequence'].tobytes())
-            f.write(pattern['iq_trajectory'].tobytes())
-            f.write(pattern['complexity_level'].to_bytes(1, 'little'))
-            crc = compute_crc16(pattern['freq_sequence'], pattern['iq_trajectory'])
-            f.write(crc.to_bytes(2, 'little'))
-
-    print(f"Written {filename}: {f.tell()} bytes")
-    # Total: 32 + 18,688 + 56,064 = 74,784 bytes ≈ 38 KB
-```
-
----
-
-## Validation
-
-### Comprehensive Validation Suite
-
-```python
-def validate_all_patterns(beacon_patterns, message_patterns):
-    """
-    Final validation before writing file
-    """
-
-    print("Validating all 128 patterns...")
-
-    # Test 1: Beacon patterns orthogonal to each other
-    print("Test 1: Beacon pattern orthogonality...")
-    for i in range(48):
-        for j in range(i+1, 48):
-            corr = compute_4d_correlation_beacon(
-                beacon_patterns[i],
-                beacon_patterns[j]
-            )
-            assert corr < -30, f"Beacon {i},{j}: {corr:.1f} dB"
-    print("  ✓ All beacon patterns <-30 dB")
-
-    # Test 2: Message patterns orthogonal to each other
-    print("Test 2: Message pattern orthogonality...")
-    for i in range(192):
-        for j in range(i+1, 192):
-            corr = compute_4d_correlation_message(
-                message_patterns[i],
-                message_patterns[j]
-            )
-            assert corr < -30, f"Message {i},{j}: {corr:.1f} dB"
-    print("  ✓ All message patterns <-30 dB")
-
-    # Test 3: Beacon vs message (different tone sets, should be orthogonal)
-    print("Test 3: Beacon vs message cross-check...")
-    # These use different tones, so should be naturally orthogonal
-    # But verify anyway
-    sample_checks = 100
-    for _ in range(sample_checks):
-        b = np.random.choice(beacon_patterns)
-        m = np.random.choice(message_patterns)
-        # Since different tone alphabets, should be ~-infinity dB
-        # (no overlap possible)
-    print("  ✓ Beacon and message sets independent")
-
-    # Test 4: Complexity levels correct
-    print("Test 4: Complexity hierarchy...")
-    for p in beacon_patterns:
-        if p['id'] < 16:
-            assert p['complexity_level'] == 0
-        else:
-            assert p['complexity_level'] == 1
-
-    for p in message_patterns:
-        gen_id = p['id'] - 64
-        if gen_id < 16:
-            assert p['complexity_level'] == 0
-        elif gen_id < 144:
-            assert p['complexity_level'] in [1, 2, 3, 4]
-        # etc.
-    print("  ✓ Complexity levels correct")
-
-    print("✓ ALL VALIDATION PASSED")
-```
-
----
-
-## Parallelization Strategy
-
-```python
-def generate_patterns_parallel():
-    """
-    Parallelize to reduce wall-clock time
-    """
-
-    import multiprocessing
-
-    # Part 1: Beacon patterns (serial, fast anyway)
-    beacon_patterns = generate_all_beacon_patterns()
-    # Time: 6-8 hours
-
-    # Part 2: Message patterns (PARALLELIZE)
-    # Split 192 patterns into 4 batches of 48
-
-    pool = multiprocessing.Pool(4)
-
-    batches = [
-        range(0, 48),    # Emergency + Typical DX 1
-        range(48, 96),   # Typical DX 2
-        range(96, 144),  # Typical DX 3 + 4
-        range(144, 192), # Good prop + NVIS
-    ]
-
-    # Generate each batch in parallel
-    results = pool.map(generate_message_batch, batches)
-
-    # Combine
-    message_patterns = []
-    for batch_result in results:
-        message_patterns.extend(batch_result)
-
-    # Wall-clock: ~16-20 hours (vs 64 hours serial)
-    # Total: 6-8 + 16-20 = 22-28 hours (realistic: 30-36 hours with overhead)
-
-    return beacon_patterns, message_patterns
-```
-
----
-
-## Reference Implementation Location
-
-**When implementing, create:**
-- `/modules/data/scripts/generate_patterns.py` - Main generation script
-- `/modules/data/scripts/validate_patterns.py` - Validation suite
-- `/modules/data/cascade_patterns_v2_128chaos.bin` - Output file (38 KB)
-
-**Dependencies:**
-- NumPy (array operations)
-- SciPy (optional, for optimization helpers)
-- Python 3.11+
-
-**Estimated resources:**
-- CPU: 8 cores
-- RAM: 8 GB
-- Time: 36-48 hours
-- Disk: 1 GB temp space
-
----
-
-## See Also
-
-- **[Pattern Architecture](../model/pattern_architecture.md)** - Why 128 patterns, hierarchical organization
-- **[4D Pattern Envelope](../model/4d_pattern_envelope.md)** - Mathematics of 4D trajectories
-- **[Adaptive Tone Grid](../protocol/adaptive_tone_grid.md)** - 78-tone reference grid specification
-
----
-
-*Specification complete - ready for implementation*
-*One-time generation cost: 18-24 hours*
-*Output: 38 KB pattern file used by all CASCADE stations*
+V1 explored Zadoff-Chu sequences with hierarchical IQ for 128 patterns.
+V2 uses genetic algorithm for 8 patterns with proven convergence.

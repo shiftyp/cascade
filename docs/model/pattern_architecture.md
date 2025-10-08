@@ -1,1412 +1,508 @@
-# CASCADE Dual-Layer Pattern Architecture (2-FSK)
+# CASCADE Pattern Architecture (V2)
 
-**FINAL 2025-10-04**: Dual-layer encoding with Time×Frequency orthogonality
+**Final: 2025-10-07** - 8-pattern system with dual-layer encoding
 
-CASCADE uses a **128-pattern system** with revolutionary dual-layer information encoding. Patterns provide robust skeletons (Time×Frequency orthogonality, all λ=0) while adaptive IQ modulation carries user data (BPSK→16-APSK, differential encoding).
+CASCADE V2 uses **8 universal patterns** with dual-layer information encoding. Patterns provide robust GMSK-modulated 2-FSK skeletons while adaptive IQ modulation carries user data.
 
-**Dual-Layer Architecture**:
-- **Layer 1 (Pattern ID)**: Time×Frequency hopping sequence identifies pattern (7 bits)
-  - All patterns λ=0 (BPSK baseline skeleton)
-  - Orthogonality: -37.5 dB in Time×Frequency space ONLY
-  - Robust: -10 dB SNR threshold (all 128 patterns)
-- **Layer 2 (Data Payload)**: Adaptive IQ modulation encodes user data (8-32 bits)
-  - Modulation: BPSK/QPSK/8-PSK/16-APSK (kernel-selected)
-  - Differential encoding: Immune to frequency drift
-  - Natural redundancy: Tone revisits (4× average)
+---
 
-**Total**: 15-39 bits per pattern (vs 7 bits single-layer) = **2-5× improvement**
+## Executive Summary
 
-**Key advantages**:
-- **All λ=0**: Every pattern works at -10 dB SNR (100% vs 59% previous)
-- **Adaptive throughput**: 94-244 bps per pattern based on channel SNR
-- **No GPS required**: Differential encoding tolerates ±0.1-10 Hz drift
-- **Equipment-agnostic**: QRP ($180) to premium SDR ($2000+)
+**Pattern System:**
+- **8 patterns total** (universal, no pools)
+- **Nested lengths:** 128, 256, 512, 1024, 2048 symbols (from single genetic optimization)
+- **Orthogonality:** -21.19 dB @ 2048 symbols (3.41 dB from Welch bound -24.6 dB)
+- **Symbol rate:** 200 symbols/second (5ms per symbol)
+- **Logical channels:** 8 patterns × 67 frequency pairs = **536 channels**
 
-This document covers dual-layer architecture, 2-FSK structure, kernel coordination, and adaptive modulation.
+**Dual-Layer Encoding:**
+- **Layer 1 (Pattern):** GMSK-modulated 2-tone FSK (binary pattern selects tone A or B)
+- **Layer 2 (Data):** Adaptive IQ modulation on pattern-selected tones (BPSK/QPSK/8-PSK/16-APSK)
+- **Error Correction:** Polar codes at protocol layer (adaptive rates 1/2 to 7/8)
+
+**Key Innovation:**
+- Kernel provides pattern ID → eliminates blind 8-pattern correlation
+- RPi4 CPU-only decoding (<5ms per pattern)
+- Genetic algorithm achieves excellent orthogonality (-21.19 dB proven)
+
+---
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Pattern Design Principles](#pattern-design-principles)
-3. [4D Mathematical Foundation](#4d-mathematical-foundation)
-4. [Pattern Generation Algorithm](#pattern-generation-algorithm)
-5. [Discrete Frequency Hopping](#discrete-frequency-hopping)
-6. [Continuous IQ Trajectories](#continuous-iq-trajectories)
-7. [Model-Driven Tone Shifting](#model-driven-tone-shifting)
-8. [Multi-Pattern Transmission](#multi-pattern-transmission)
-9. [Per-Receiver Tone Adaptation](#per-receiver-tone-adaptation)
-10. [Pattern Storage Format](#pattern-storage-format)
-11. [Implementation & Training](#implementation--training)
+2. [Dual-Layer Architecture](#dual-layer-architecture)
+3. [Pattern Generation](#pattern-generation)
+4. [Frequency Architecture](#frequency-architecture)
+5. [Nested Pattern Lengths](#nested-pattern-lengths)
+6. [Kernel-Assisted Detection](#kernel-assisted-detection)
+7. [Performance Characteristics](#performance-characteristics)
+8. [Pattern Storage Format](#pattern-storage-format)
 
 ---
 
 ## Overview
 
-CASCADE uses a **two-tier pattern architecture:**
+CASCADE V2 dramatically simplifies pattern architecture while improving performance:
 
-**Unified 128-Pattern Architecture (2-FSK with Adaptive λ Minimization)**
+**V1 (archived):** 128 patterns, 4-FSK, blind detection, complex
+**V2 (current):** 8 patterns, 2-FSK, kernel-assisted, simple
 
-**Architecture (FINAL - 2025-10-04)**:
-- **Tone Grid:** 135 tones (standard 2.7 kHz SSB channel, 20 Hz spacing)
-- **Pattern Structure:** 2-FSK (each pattern uses 2 adjacent tones, tone indices 0-1)
-  - Pattern span: 20 Hz (2 adjacent tones × 20 Hz spacing)
-  - Frequency hopping: Select 1 of 2 tones per symbol
-  - 32 symbols per pattern
-- **Pattern Allocation:**
-  - 48 beacon patterns (IDs 0-47): Kernel coordination, emergency detection
-  - 80 message patterns (IDs 48-127): All message traffic
-
-**λ Distribution (Empirically Discovered via Optimization)**:
-```
-75 patterns (59%): λ = 0.00-0.05 (BPSK/near-BPSK)
-- Frequency-orthogonal: Use non-overlapping tone pairs from 135-tone grid
-- Maximum robustness: Decode at -10 dB SNR
-- Emergency priority patterns
-
-40 patterns (31%): λ = 0.05-0.15 (Simple circles)
-- IQ-orthogonal: Reuse tone positions, separated by IQ phase/magnitude
-- Good robustness: Decode at -5 to 0 dB SNR
-
-13 patterns (10%): λ = 0.15-0.25 (Moderate complexity)
-- IQ-orthogonal: Reuse tone positions, complex IQ trajectories
-- Typical conditions: Decode at 0 to +5 dB SNR
-
-Average λ: 0.08-0.10 (exceptional low-SNR performance)
-```
-
-**Why λ is NOT pre-assigned**:
-- Optimizer discovers minimum λ needed for each pattern
-- Two-phase: Try BPSK first (320K iterations), add IQ only if needed (80K iterations)
-- Phase-aware: Tests under HF propagation conditions during optimization
-- Result: 59% BPSK patterns (vs 29% with 4-FSK, vs <10% with pre-assigned pools)
-
-**Storage:**
-- Per pattern: 295 bytes (ID + freq_sequence + iq_trajectory + λ + checksum)
-- Total: 38 KB (128 × 295 + 32 byte header)
-- Generation: 72-96 hours (8 trials × 400K iterations, local high-end CPU)
-
-**Total System: 38 KB storage** (14 KB beacon + 24 KB message), 7-bit pattern encoding
-
-**Why pattern-based beacons?** Eliminates frequency reservation (96.7% spectrum efficiency), adaptive to local interference (stations pick patterns with clear tones), consistent 4D separation philosophy (all traffic separated by patterns, not frequencies), emergency detected via pattern correlation (zero overhead).
-
-**128-pattern chaos architecture:** Optimized for Raspberry Pi 4 (8.5ms inference), achieves 78-85% Shannon efficiency with ±2 Hz micro-tuning + kernel coordination, supports 45 active users (1,024 total via frequency + time reuse).
-
-**Key distinction from LoRa CSS:** CASCADE uses discrete frequency hops (not continuous chirps), making it fundamentally frequency-hopping spread spectrum (FHSS) like Bluetooth, not chirp spread spectrum (CSS) like LoRa.
+**Why 8 patterns?**
+- Excellent orthogonality achievable (-21.19 dB measured)
+- Kernel eliminates blind detection cost
+- 67 frequency pairs provide sufficient channels (536 total)
+- Simpler = more robust, easier to implement
 
 ---
 
-## Dual-Layer Encoding Architecture (CRITICAL)
+## Dual-Layer Architecture
 
-**This section describes the FINAL CASCADE architecture. Sections below contain legacy/reference material.**
+### Layer 1: Pattern Skeleton (GMSK 2-FSK)
 
-### Layer 1: Pattern Identification (Time×Frequency, 7 bits)
+**Purpose:** Establish orthogonal channel and carry binary pattern data
 
-**Purpose**: Identify which of 128 patterns via tone hopping sequence
+**Structure:**
+```python
+# Each pattern = sequence of binary symbols
+pattern = [0, 1, 0, 0, 1, 1, 0, 1, ...]  # Length: 64-2048
 
-**Structure**:
+# Each binary symbol selects which tone from assigned pair
+for symbol in pattern:
+    if symbol == 0:
+        transmit_tone = tone_A  # First tone of pair
+    else:
+        transmit_tone = tone_B  # Second tone of pair
 ```
-32 symbols, each selects tone index (0 or 1)
-Example Pattern 42: [0,1,0,0,1,1,0,1,0,1,0,1,1,0,0,1,...]
 
-Orthogonality: Time×Frequency space ONLY (not IQ!)
-All patterns: λ=0 (BPSK baseline, IQ = 1+0j for pattern skeleton)
-Separation: -37.5 dB cross-correlation in hopping sequences
+**Modulation:**
+- GMSK (Gaussian Minimum Shift Keying)
+- BT = 0.3 (bandwidth-time product)
+- Smooth transitions, constant envelope
+- Excellent spectral containment
+
+**Frequency pairs:**
+- 135-tone reference grid (300-3000 Hz, 20 Hz spacing)
+- 67 non-overlapping 2-tone pairs
+- Pair N uses tones (N×2, N×2+1)
+- Example: Pair 25 = tones 50-51 (1300-1320 Hz)
+
+### Layer 2: Data Payload (Adaptive IQ)
+
+**Purpose:** Carry user data via modulation on pattern-selected tones
+
+**Modulation schemes (adaptive to SNR):**
+```python
+# After pattern selects tone, modulate data on that tone
+
+SNR < 0 dB:    BPSK    (1 bit/symbol)
+SNR 0-10 dB:   QPSK    (2 bits/symbol)
+SNR 10-20 dB:  8-PSK   (3 bits/symbol)
+SNR > 20 dB:   16-APSK (4 bits/symbol, 4+12 constellation)
 ```
 
-**Recognition**: NN pattern matching (QR code-like)
-- Can identify pattern with 12 symbols corrupted (37.5% erasure tolerance)
-- Threshold: -10 dB SNR (all 128 patterns)
-
-### Layer 2: Data Payload (Adaptive IQ, 8-32 bits)
-
-**Purpose**: Encode user data via adaptive modulation
-
-**Method**: Differential encoding on tone revisits
+**Constellation examples:**
 ```
-Pattern visits tone 0: ~16 times (average)
-Pattern visits tone 1: ~16 times
+BPSK:          QPSK:         8-PSK:        16-APSK:
+  ●               ● ●           ● ● ●       ● ● ● ●
+                  ● ●         ● ● ● ●     ●  ● ●  ●
+                              ● ●  ● ●    ● ●   ● ●
+                                          ●  ● ●  ●
+```
 
-Data encoding (differential BPSK example):
-- Tone 0, visit 0: Reference phase
-- Tone 0, visit 1: Δφ = 0° → bit "0"
-- Tone 0, visit 2: Δφ = 180° → bit "1"
-- Tone 0, visit 3: Δφ = 0° → bit "0"
+**Data encoding:**
+- Differential phase encoding (immune to frequency drift)
+- No pilot symbols needed
+- Adapts continuously based on measured SNR
+- Negotiated via kernel (modulation field)
+
+### Layer 3: Error Correction (Polar Codes)
+
+**Purpose:** Protect user data against errors
+
+**Applied at:** Protocol layer (not in pattern)
+
+**Adaptive rates:**
+```
+SNR < 0 dB:    Polar 1/2  (strongest FEC)
+SNR 0-5 dB:    Polar 2/3  (strong FEC)
+SNR 5-10 dB:   Polar 3/4  (medium FEC)
+SNR 10-15 dB:  Polar 4/5  (light FEC)
+SNR 15-20 dB:  Polar 5/6  (minimal FEC)
+SNR > 20 dB:   Polar 7/8  (very light FEC)
+```
+
+**Rate selection:**
+- Negotiated via kernel (polar_rate field, 3 bits)
+- Trades throughput vs. robustness
+- Combined with modulation for adaptive coded modulation (ACM)
+
+---
+
+## Pattern Generation
+
+### Genetic Algorithm
+
+**Goal:** 8 patterns with maximum orthogonality
+
+**Algorithm:**
+```python
+# Population-based optimization
+population_size = 32  # 32 pattern sets
+pattern_count = 8     # 8 patterns per set
+max_length = 2048     # Optimize at maximum length
+
+# Evolution loop
+for generation in range(150000):
+    # 1. Selection: Keep top 4 elite sets
+    # 2. Crossover: Breed from top 50% (70% rate)
+    # 3. Mutation: Flip random bits (10% rate, ~13 bits avg)
+    # 4. Evaluation: Measure orthogonality
+    # 5. Rank: Sort by worst-case cross-correlation
+```
+
+**Fitness function:**
+```python
+def evaluate_pattern_set(patterns):
+    """Measure worst-case orthogonality"""
+
+    worst_corr = -100  # dB
+
+    # Test all pattern pairs
+    for i in range(8):
+        for j in range(i+1, 8):
+            # Normal correlation
+            corr_normal = correlate(patterns[i], patterns[j])
+
+            # Flip correlation (adjacent channel interference)
+            corr_flip = correlate(patterns[i], invert(patterns[j]))
+
+            # Track worst case
+            worst_corr = max(worst_corr, corr_normal, corr_flip)
+
+    return worst_corr  # Lower (more negative) = better
+```
+
+### Convergence Results
+
+**Proven trajectory (8 patterns, 2048 symbols):**
+```
+6k generations:   -17.38 dB
+100k generations: -21.19 dB ✅ (proven achievable)
+150k generations: -20 to -21 dB (expected)
+
+Welch bound:      -24.6 dB (theoretical limit)
+Gap at 100k:      3.41 dB (excellent for genetic algorithm)
+```
+
+**Generation time:**
+- ~48 hours on modern CPU
+- One-time cost (patterns reused forever)
+- Deterministic once converged
+
+---
+
+## Frequency Architecture
+
+### 135-Tone Reference Grid
+
+**Grid specification:**
+```python
+# 135 discrete tones
+tones = [300 + i*20 for i in range(135)]
+# [300, 320, 340, ..., 2960, 2980, 3000] Hz
+
+# Spacing: 20 Hz
+# Bandwidth: 300-3000 Hz (2.7 kHz total, standard SSB)
+```
+
+**67 Frequency Pairs:**
+```python
+# Non-overlapping 2-tone pairs
+pairs = [(i*2, i*2+1) for i in range(67)]
+# [(0,1), (2,3), (4,5), ..., (132,133)]
+
+# Pair 0:  Tones 0-1   (300-320 Hz)
+# Pair 1:  Tones 2-3   (340-360 Hz)
+# ...
+# Pair 66: Tones 132-133 (2940-2960 Hz)
+```
+
+### 2-FSK Modulation
+
+**Each pattern uses 2 adjacent tones:**
+```
+Pattern binary: [0, 1, 0, 0, 1, 1, ...]
+Tones selected: [A, B, A, A, B, B, ...]
+
+Example (Pair 25: tones 50-51):
+Symbol 0 (bit=0): Transmit 1300 Hz (tone A)
+Symbol 1 (bit=1): Transmit 1320 Hz (tone B)
+Symbol 2 (bit=0): Transmit 1300 Hz (tone A)
 ...
-Total: 16 visits with 4× redundancy → 4 protected data bits per tone
-
-Both tones: 8 protected data bits total
 ```
 
-**Adaptive modulation** (kernel-selected):
-- BPSK: 1 bit/visit → 8 bits total (SNR <0 dB)
-- QPSK: 2 bits/visit → 16 bits total (SNR 0-10 dB)
-- 8-PSK: 3 bits/visit → 24 bits total (SNR 10-20 dB)
-- 16-APSK: 4 bits/visit → 32 bits total (SNR >20 dB, 4+12 constellation)
+**GMSK pulse shaping:**
+- Smooths transitions between tones
+- BT = 0.3 (moderate smoothing)
+- Reduces spectral splatter
+- Maintains constant envelope (good for RF amplifiers)
 
-**Differential encoding advantages**:
-- Immune to frequency drift (±0.1-10 Hz, works with/without GPS)
-- Phase-rotation invariant (multipath, propagation phase shifts)
-- No pilot symbols needed (100% data efficiency)
+### Logical Channel Count
 
-### Complete Information Capacity
+**Total logical channels:**
+```
+8 patterns × 67 frequency pairs = 536 logical channels
+```
 
-**Total bits per pattern**: 7 (pattern ID) + 8-32 (data) = **15-39 bits**
-
-**Throughput @ 200 sym/s** (pattern duration = 0.16s):
-- BPSK data: 15 bits / 0.16s = 94 bps
-- QPSK data: 23 bits / 0.16s = 144 bps
-- 8-PSK data: 31 bits / 0.16s = 194 bps
-- 16-APSK data: 39 bits / 0.16s = 244 bps
-
-**Multi-pattern** (4 patterns simultaneously):
-- 375 bps @ BPSK
-- 575 bps @ QPSK
-- 775 bps @ 8-PSK
-- 975 bps @ 16-APSK
-
-**Improvement**: 2.14-5.57× vs single-layer (7 bits only)
+**Supports:**
+- 40-45 active users simultaneously
+- Kernel coordination for distribution
+- RTS/CTS for local collision avoidance
 
 ---
 
-## Pattern Design Principles (2-FSK Architecture)
+## Nested Pattern Lengths
 
-**NOTE**: Sections below describe pattern generation. For complete system architecture including kernel coordination and encoder mutations, see [Kernel Architecture](kernel_architecture.md).
+### Automatic Length Variants
 
-### Core Design
-1. **4D Orthogonality**: -37.5 dB cross-correlation across Time × Freq × I × Q
-2. **2-FSK Structure**: Each pattern allocated 2 adjacent tones (tone indices 0-1, 64 Hz span)
-3. **Adaptive λ Minimization**: IQ complexity empirically discovered, NOT pre-assigned
-4. **Multi-Pattern Capable**: 1-8 patterns simultaneously (power/equipment-dependent)
-5. **FHSS (not CSS)**: Patent-safe discrete frequency hopping
-6. **Single IQ trajectory**: Each pattern stores one IQ trajectory per symbol
+**From single 2048-symbol optimization, extract 6 lengths:**
 
-### Pattern Distribution (Empirically Optimized)
+| Symbols | Duration @ 200 sym/s | Welch Bound | Achieved (est) | Use Case |
+|---------|---------------------|-------------|----------------|----------|
+| 64 | 0.32s | -9.6 dB | ~-7 dB | Micro ACKs |
+| 128 | 0.64s | -12.6 dB | ~-10 dB | ACK, CTS |
+| 256 | 1.28s | -15.6 dB | ~-13 dB | Short control |
+| 512 | 2.56s | -18.6 dB | ~-16 dB | Beacons, RTS |
+| 1024 | 5.12s | -21.6 dB | ~-18 dB | Medium messages |
+| 2048 | 10.24s | -24.6 dB | -21.19 dB ✅ | Large messages |
 
-**Frequency-Orthogonal** (75 patterns, 59%):
-- Use non-overlapping tone pairs from 135-tone grid
-- λ = 0.00-0.05 (BPSK or near-BPSK)
-- Maximum robustness: -10 dB SNR threshold
-- Includes: Most beacon patterns (0-47) and emergency message patterns
-- Use case: Low-SNR, emergency communications, legacy equipment
-
-**IQ-Orthogonal** (53 patterns, 41%):
-- Reuse tone positions from first 75 patterns
-- Separated via IQ phase/magnitude differences
-- λ = 0.05-0.25 (simple to moderate IQ complexity)
-- Good robustness: -5 to +5 dB SNR threshold
-- Use case: Typical DX, good propagation, SDR equipment
-
-**Storage:** 295 bytes per pattern (ID + freq_sequence + iq_trajectory + λ + checksum)
-
-### Equipment Scalability (Dual-Layer 2-FSK Transmission)
-
-**QRP/QMX (5W, 200 sym/s)**:
-- Transmit: 1 pattern (BPSK data modulation)
-- Throughput: 94 bps (15 bits/pattern @ 0.16s)
-- Use case: Emergency comms, low SNR links
-
-**Modern (50W, 200 sym/s)**:
-- Transmit: 4 patterns (QPSK data modulation)
-- Throughput: 575 bps (23 bits/pattern × 4 patterns)
-- Use case: Typical DX, good propagation
-
-**Premium (100W, 300 sym/s)**:
-- Transmit: 4-8 patterns (8-PSK/16-APSK data modulation)
-- Throughput: 975-1,950 bps
-- Use case: High-speed data, excellent conditions
-
-**Same 128 patterns support all power levels** - modem transmits variable number simultaneously
-
-**Target equipment: QMX-class SDR** ($150-180 with GPS):
-- 200 sym/s capable (NN-enhanced ISI tolerance)
-- GPS-disciplined (±0.1 Hz, enables 20 Hz tone spacing)
-- IQ mode (15-20 kHz bandwidth for multi-band monitoring)
-- Best value: $180 vs $1400 IC-7300, better CASCADE support
-
----
-
-## 4D Mathematical Foundation
-
-### Trajectory Definition
-
-Each pattern P(t, λ) is a parametric function through 4D space:
-
+**Nested extraction:**
 ```python
-class Pattern4D:
-    """
-    Pattern as 4D trajectory
-
-    Dimensions:
-      1. Time: t ∈ [0, 31] (32 discrete symbols)
-      2. Frequency: Discrete tone index ∈ {0, 1, ..., 69}
-      3. I: Continuous ∈ [-1.5, +1.5]
-      4. Q: Continuous ∈ [-1.5, +1.5]
-
-    Parameters:
-      λ (complexity): [0.0, 1.0]
-        1.0 = complex trajectory (high SNR)
-        0.0 = simple trajectory (low SNR)
-    """
-
-    def trajectory(self, t, complexity_lambda):
-        # Dimension 1: TIME (implicit via parameter t)
-
-        # Dimension 2: FREQUENCY (discrete hop among 4 tones)
-        tone_idx = self.freq_sequence[t]  # Integer 0-3
-        freq_hz = REFERENCE_TONES[tone_idx]  # Exact: 600, 1200, 1800, or 2400 Hz
-
-        # Dimensions 3 & 4: I and Q (continuous, maximized for separation)
-        iq = self.iq_path(t, complexity_lambda)
-
-        return {
-            'tone_index': tone_idx,  # Discrete 0-3
-            'frequency_hz': freq_hz,  # One of 4 tones
-            'iq_basis': iq,  # Continuous complex (16 directions at high SNR)
-        }
+# Shorter patterns = prefixes of longer ones
+pattern_64 = pattern_2048[0:64]
+pattern_128 = pattern_2048[0:128]
+pattern_256 = pattern_2048[0:256]
+pattern_512 = pattern_2048[0:512]
+pattern_1024 = pattern_2048[0:1024]
+# pattern_2048 is the full optimized pattern
 ```
 
-### 4D Orthogonality
+**Benefits:**
+- Single optimization effort
+- Cross-length orthogonality guaranteed
+- Simpler storage (just store full 2048, extract as needed)
 
-Patterns must be <-30 dB orthogonal across ALL dimensions:
+### Capacity by Length
 
+**With polar codes @ 2/3 rate:**
+
+| Length | Raw Bits | After Polar 2/3 | BPSK | QPSK | 8-PSK | 16-APSK |
+|--------|----------|-----------------|------|------|-------|---------|
+| 128 | 128 | 85 | 85b | 171b | 256b | 341b |
+| 256 | 256 | 171 | 171b | 341b | 512b | 683b |
+| 512 | 512 | 341 | 341b | 683b | 1024b | 1365b |
+| 1024 | 1024 | 683 | 683b | 1365b | 2048b | 2731b |
+| 2048 | 2048 | 1365 | 1365b | 2731b | 4096b | 5461b |
+
+**Pattern selection algorithm:**
 ```python
-def pattern_correlation_4d(pattern_i, pattern_j, complexity_lambda):
-    """
-    Compute correlation in 4D space
-    Must be < -30 dB for all λ ∈ [0, 1]
-    """
-    correlation = 0
+def select_pattern_length(message_bytes, modulation, polar_rate):
+    bits_needed = message_bytes * 8
+    bits_per_symbol = {'BPSK': 1, 'QPSK': 2, '8-PSK': 3, '16-APSK': 4}[modulation]
+    polar_overhead = {'1/2': 2.0, '2/3': 1.5, '3/4': 1.33, ...}[polar_rate]
 
-    for t in range(32):  # Dimension 1: TIME
-        # Dimension 2: FREQUENCY (discrete)
-        tone_i = pattern_i.freq_sequence[t]
-        tone_j = pattern_j.freq_sequence[t]
+    coded_bits = bits_needed * polar_overhead
 
-        # Different discrete tones → orthogonal in frequency
-        if tone_i != tone_j:
-            continue
+    for length in [128, 256, 512, 1024, 2048]:
+        capacity = length * bits_per_symbol
+        if capacity >= coded_bits:
+            return length
 
-        # Same tone → check IQ orthogonality
-        # Dimensions 3 & 4: I and Q
-        iq_i = complex(pattern_i.i_traj[t], pattern_i.q_traj[t])
-        iq_j = complex(pattern_j.i_traj[t], pattern_j.q_traj[t])
-
-        # Inner product in IQ space
-        correlation += abs(iq_i * iq_j.conjugate())
-
-    # Normalize and convert to dB
-    normalized = correlation / 32
-    return 20 * np.log10(normalized + 1e-10)
-
-# Requirement: correlation_4d(i, j, λ) < -30 dB
-# For all i ≠ j, all λ ∈ [0, 1]
+    return 2048  # Maximum
 ```
 
 ---
 
-## Pattern Generation Algorithm
+## Kernel-Assisted Detection
 
-CASCADE generates RS-structured patterns where each pattern encodes both its identity and data payload using Reed-Solomon RS(32,20) codes. This provides aligned erasure protection: the same 12-symbol tolerance applies to both pattern recognition and data recovery.
+### Why Kernels Eliminate Blind Detection
 
-### RS Pattern Structure (All Patterns)
-
-**Core Principle:** Each pattern IS an RS codeword that encodes both pattern_id and data.
-
+**Without kernel (V1 concept):**
 ```python
-def generate_rs_pattern_transmission(pattern_id, data_bytes_18):
-    """
-    Generate RS-structured pattern transmission
+# Must correlate against ALL 8 patterns
+for pattern_id in range(8):
+    correlation = correlate(received_signal, pattern[pattern_id])
+    if correlation > threshold:
+        detected_pattern = pattern_id
+        break
 
-    Args:
-        pattern_id: 0-255 (which pattern to use)
-        data_bytes_18: 18 bytes of data (144 bits)
-
-    Returns:
-        32 RS symbols mapped to 4D space
-    """
-    # Step 1: Create 20 information symbols
-    info_symbols = [
-        pattern_id,              # Symbol 0
-        crc8(data_bytes_18),     # Symbol 1
-        *data_bytes_18           # Symbols 2-19 (18 bytes)
-    ]
-
-    # Step 2: Generate 12 RS parity symbols
-    rs_codeword = rs_encode_gf256(info_symbols, n=32, k=20)
-    # rs_codeword = [symbol_0, ..., symbol_31] (32 bytes)
-
-    # Step 3: Map each RS symbol to 4D (Time-Freq-IQ)
-    pattern_4d = []
-    selected_tones = select_4_tones(pattern_id, channel_state)
-
-    for t, rs_symbol in enumerate(rs_codeword):
-        # Split 8 bits: 2 for tone, 6 for IQ
-        tone_idx = (rs_symbol >> 6) & 0x3  # 0-3
-        iq_idx = rs_symbol & 0x3F           # 0-63
-
-        # Map to 4D point
-        freq_hz = REFERENCE_TONES[selected_tones[tone_idx]]
-        iq_point = CONSTELLATION_64QAM[iq_idx]
-
-        pattern_4d.append({
-            'time': t * 0.05,  # 50ms symbols
-            'frequency_hz': freq_hz,
-            'iq': iq_point
-        })
-
-    return pattern_4d  # 32 time-freq-IQ points
+# Cost: 8 correlations per detection
+# Time: ~20-30ms on RPi4
 ```
 
-### Beacon Pattern Generation (48 patterns, RS-structured)
-
-**Phase 1: RS Pattern Base with Zadoff-Chu Properties**
-
+**With kernel (V2):**
 ```python
-def generate_beacon_pattern_freq_sequence(pattern_id, num_symbols=32):
-    """
-    Generate beacon pattern frequency sequence
+# Beacon tells you which pattern
+pattern_id = rx_kernel.pattern_id  # 3 bits: 0-7
 
-    Returns sequence of indices 0-3, representing which of the pattern's
-    4 selected tones to use at each symbol time.
+# Correlate against only that pattern
+correlation = correlate(received_signal, pattern[pattern_id])
 
-    The 4 actual tones are selected from 78-tone grid adaptively.
-    """
-    u = pattern_id  # Zadoff-Chu root (0-47)
-    N = 31  # Prime
-
-    sequence = []
-    for n in range(31):
-        phase = 2 * np.pi * u * n * (n + 1) / (2 * N)
-
-        # Map to 4-tone index (0-3)
-        # This says "use tone 0, 1, 2, or 3 from pattern's selected set"
-        tone_idx = int((phase % (2 * np.pi)) / (2 * np.pi) * 4)
-        sequence.append(tone_idx)
-
-    sequence.append(0)  # Pad to 32
-
-    return np.array(sequence, dtype=np.uint8)
-
-# Returns indices 0-3 for pattern's 4-tone set
-# Actual tones selected from 78-tone grid based on conditions
-# Example: Pattern's selected_tones = [12, 34, 51, 65] (from 0-77)
-#          sequence = [0, 2, 1, 3, ...] means use [12, 51, 34, 65, ...]
+# Cost: 1 correlation
+# Time: <5ms on RPi4 ✅
 ```
 
-**Phase 2: Simple IQ Trajectories for Beacons**
+**Benefits:**
+- **8× faster** detection
+- **CPU-only** sufficient (no TPU/GPU needed)
+- **Lower power** (important for portable ops)
+- **Simpler code** (no pattern search logic)
 
+### Kernel Structure (28 bytes)
+
+**Discrete fields (4 bytes):**
 ```python
-def generate_beacon_iq_trajectories(pattern_id):
-    """
-    Beacon IQ: Simple (λ max 0.3)
-    Prioritizes robustness over throughput
-    """
-
-    iq_full = []  # λ=0.3 maximum (not 1.0!)
-    iq_collapsed = []  # λ=0.0
-
-    for t in range(32):
-        # Full complexity: Simple circle (NOT complex Lissajous)
-        angle = 2 * np.pi * pattern_id * t / 48  # 48 beacon patterns
-        radius = 0.7  # Moderate radius
-        iq_full.append(radius * np.exp(1j * angle))
-
-        # Collapsed: BPSK line
-        iq_collapsed.append(np.exp(1j * (2 * np.pi * pattern_id * t / 32)))
-
-    return {
-        'full': np.array(iq_full),  # Simple circle (λ=0.3)
-        'collapsed': np.array(iq_collapsed),  # BPSK
-        'max_lambda': 0.3,  # Beacon limit
-    }
+{
+    'pattern_id': 3 bits,      # 0-7 (which pattern)
+    'frequency_pair': 7 bits,  # 0-66 (which tone pair)
+    'modulation': 3 bits,      # BPSK/QPSK/8-PSK/16-APSK
+    'polar_rate': 3 bits,      # 1/2 to 7/8
+    'protocol_version': 2 bits,
+    'model_version': 2 bits,
+    'reserved': 12 bits
+}
 ```
 
-**Phase 3: Optimize RS Structure for <-37.5 dB Orthogonality**
+**Embedding (24 bytes):**
+- 48 dimensions × 4-bit quantization
+- NN-generated optimization hints
+- Enables adaptive encoder mutations
 
-```python
-# RS pattern generation maintains orthogonality:
-# 1. Generate RS codeword for pattern_id
-# 2. Map to 4D space
-# 3. Verify <-37.5 dB cross-correlation with all existing patterns
-# 4. Adjust mapping if needed (simulated annealing)
-
-# Time: 6-8 hours for 48 beacon patterns (128-pattern set easier than 256)
-# Challenge: Maintain RS properties while achieving orthogonality
-# Solution: Optimize 4D mapping, not RS structure itself
-```
-
-### Message Pattern Generation (80 patterns, RS-structured)
-
-**Phase 1: Zadoff-Chu for 4-Tone Alphabet**
-
-```python
-def generate_message_pattern_freq_sequence(pattern_id, num_symbols=32):
-    """
-    Generate message pattern frequency sequence
-
-    Returns sequence of indices 0-3, representing which of the pattern's
-    4 selected tones to use at each symbol time.
-
-    The 4 actual tones are selected from 78-tone grid adaptively.
-    """
-    u = pattern_id - 48  # Zadoff-Chu root (0-79 for message patterns 48-127)
-    N = 31  # Prime closest to 32
-
-    sequence = []
-    for n in range(31):
-        # Zadoff-Chu quadratic phase
-        phase = 2 * np.pi * u * n * (n + 1) / (2 * N)
-
-        # Map to 4-tone index (0-3)
-        # This is index into pattern's 4-tone set
-        tone_idx = int((phase % (2 * np.pi)) / (2 * np.pi) * 4)
-        sequence.append(tone_idx)
-
-    sequence.append(0)  # Pad to 32 symbols
-
-    return np.array(sequence, dtype=np.uint8)
-
-# Generate 31 base patterns
-base_freq_sequences = [
-    generate_zadoff_chu_frequency_sequence(u)
-    for u in range(31)
-]
-
-# Properties:
-# - Perfect autocorrelation (zero sidelobes)
-# - Cross-correlation ~-15 dB (not sufficient, needs optimization)
-# - Constant amplitude
-```
-
-### Phase 2: IQ Trajectory Generation
-
-Extend Zadoff-Chu to IQ dimensions for additional orthogonality:
-
-```python
-def generate_iq_trajectories(pattern_id, num_symbols=32):
-    """
-    Generate continuous IQ trajectories
-
-    Returns:
-      full_complexity: Lissajous curve (λ=1.0, theoretical maximum)
-      collapsed: Simple circle/line (λ=0.0)
-
-    Note: On HF, typical λ is 0.3-0.6 due to multipath phase distortion.
-          Full complexity (λ>0.7) realistic only for NVIS (80m/40m single-hop).
-          Multi-hop DX typically uses λ=0.3-0.5 (simplified ellipses).
-    """
-
-    iq_full = []
-    iq_collapsed = []
-
-    for t in range(32):
-        # FULL COMPLEXITY (λ=1.0): Lissajous curve
-        # Theoretical maximum - realistic only for NVIS propagation
-        # Different patterns use different frequency ratios
-        freq_a = (pattern_id % 7) + 1  # 1-7
-        freq_b = (pattern_id % 5) + 1  # 1-5
-
-        angle_a = 2 * np.pi * freq_a * t / 32
-        angle_b = 2 * np.pi * freq_b * t / 32
-        offset = 2 * np.pi * pattern_id / 128  # Adjusted for 128 patterns
-
-        i_full = np.cos(angle_a + offset)
-        q_full = np.sin(angle_b + offset)
-        iq_full.append(complex(i_full, q_full))
-
-        # COLLAPSED (λ=0.0): Simple rotation (BPSK circle)
-        # Used for severe multipath, emergency traffic
-        simple_angle = 2 * np.pi * (pattern_id - 48) * t / 80  # 80 message patterns
-        iq_collapsed.append(np.exp(1j * simple_angle))
-
-    return {
-        'full': np.array(iq_full),     # Theoretical max (rarely used on HF)
-        'collapsed': np.array(iq_collapsed),  # Emergency/disturbed
-        'typical_hf': 0.4,  # Recommend λ=0.4 for multi-hop DX
-    }
-```
-
-### Phase 3: Optimization to <-30 dB
-
-Simulated annealing optimizes frequency sequences to achieve exactly -30 dB:
-
-```python
-def optimize_to_30db(base_freq_seq, existing_patterns, iterations=100000):
-    """
-    Optimize frequency sequence to <-30 dB with existing patterns
-    Uses simulated annealing
-    """
-
-    best_pattern = base_freq_seq.copy()
-    best_max_corr = float('inf')
-
-    temperature = 1.0
-    cooling_rate = 0.9999
-
-    for i in range(iterations):
-        # Mutate: Change one random symbol to different tone
-        candidate = best_pattern.copy()
-        idx = np.random.randint(32)
-        candidate[idx] = np.random.randint(4)  # 0-3 (4 tones)
-
-        # Check correlation with all existing patterns
-        max_corr = max(
-            cross_correlation_4d(candidate, p)
-            for p in existing_patterns
-        )
-
-        # Simulated annealing acceptance
-        if max_corr < best_max_corr:
-            best_pattern = candidate
-            best_max_corr = max_corr
-        elif np.random.random() < np.exp(-(max_corr - best_max_corr) / temperature):
-            best_pattern = candidate
-            best_max_corr = max_corr
-
-        temperature *= cooling_rate
-
-        # Success criterion
-        if best_max_corr < -30:
-            return best_pattern
-
-    if best_max_corr < -30:
-        return best_pattern
-    else:
-        raise ValueError(f"Could not achieve -30 dB (got {best_max_corr:.1f} dB)")
-
-# Generate all 128 patterns (48 beacon + 80 message)
-patterns_4d = []
-
-for pattern_id in range(128):
-    # Frequency sequence (optimized)
-    if pattern_id < 48:
-        # Beacon patterns
-        base_freq = generate_beacon_freq_sequence(pattern_id)
-    else:
-        # Message patterns
-        base_freq = generate_message_freq_sequence(pattern_id - 48)
-
-    freq_seq = optimize_to_30db(base_freq, patterns_4d)
-
-    # IQ trajectories
-    iq_trajs = generate_iq_trajectories(pattern_id)
-
-    patterns_4d.append({
-        'id': pattern_id,
-        'freq_sequence': freq_seq,
-        'iq_full': iq_trajs['full'],
-        'iq_collapsed': iq_trajs['collapsed']
-    })
-```
-
-### Phase 4: Validation
-
-```python
-def validate_4d_patterns(patterns):
-    """
-    Verify <-30 dB orthogonality across all dimensions
-    Test multiple complexity values
-    """
-
-    for lambda_test in [0.0, 0.5, 1.0]:  # Test collapsed, medium, full
-        max_corr = -100
-
-        for i, p1 in enumerate(patterns):
-            for j, p2 in enumerate(patterns):
-                if i >= j:
-                    continue
-
-                corr = pattern_correlation_4d(p1, p2, lambda_test)
-                max_corr = max(max_corr, corr)
-
-                if corr > -30:
-                    print(f"WARNING: Patterns {i},{j} at λ={lambda_test}: {corr:.1f} dB")
-
-        print(f"λ={lambda_test}: Max correlation = {max_corr:.1f} dB")
-        assert max_corr < -30
-
-    print("✓ All patterns meet -30 dB in 4D space")
-```
+**See:** [Kernel Encoding Spec](../implementation/kernel_encoding_spec.md)
 
 ---
 
-## Discrete Frequency Hopping
+## Performance Characteristics
 
-### 78 Reference Tone Grid
+### Orthogonality
 
-See [Adaptive Tone Grid](../protocol/adaptive_tone_grid.md) for comprehensive tone grid specification.
+**Measured performance (8 patterns, 2048 symbols):**
+```
+Worst-case cross-correlation: -21.19 dB ✅
+Welch bound (theoretical):     -24.6 dB
+Gap:                           3.41 dB
 
-**Summary:**
-- **78 tones total**: 300-2764 Hz (indices 0-77)
-- **Spacing**: 32 Hz (optimized for HF multipath and drift)
-- **Pattern usage**: Each pattern uses 4 tones from the 78 (adaptive selection)
-- **Overlap allowed**: Multiple patterns can share tones (Time × IQ separation)
-- **Combinations**: C(78,4) = 1,426,425 possible 4-tone sets
-
-### Discrete Hopping (NOT Continuous Chirping)
-
-```python
-# CASCADE frequency behavior:
-
-Time:  0ms   50ms  100ms 150ms 200ms 250ms
-Tone:  2     1     3     0     2     1
-Freq:  1800  1200  2400  600   1800  1200  (Hz - EXACT discrete values)
-
-# Each symbol at constant frequency (50ms dwell)
-# Instantaneous hop to next discrete tone
-# NO frequency sweeps, NO chirps
-# This is FHSS (Bluetooth-like), not CSS (LoRa-like)
+Interpretation: Excellent
+- Most pattern pairs: < -22 dB
+- Worst pair: -21.19 dB
+- Sufficient for kernel-assisted detection with frequency separation
 ```
 
-**Patent safety:** Discrete frequency selection fundamentally different from LoRa's continuous chirp modulation.
-
----
-
-## Continuous IQ Trajectories
-
-### IQ as Lissajous Curves (HF-Adapted)
-
-While frequency hops discretely, IQ trajectories are continuous. **Important:** HF multipath phase distortion limits practical IQ complexity to λ=0.3-0.6 for most propagation modes. Full complexity (λ>0.7) is theoretical maximum, realistic only for NVIS single-hop paths.
-
-```python
-def get_iq_basis(pattern_id, t, complexity_lambda):
-    """
-    Continuous IQ trajectory at time t
-    Smoothly adapts via λ parameter
-    """
-
-    # Full complexity (λ=1.0): Lissajous curve
-    freq_a = (pattern_id % 7) + 1
-    freq_b = (pattern_id % 5) + 1
-
-    angle_a = 2 * np.pi * freq_a * t / 32
-    angle_b = 2 * np.pi * freq_b * t / 32
-    offset = 2 * np.pi * pattern_id / 64
-
-    i_full = np.cos(angle_a + offset)
-    q_full = np.sin(angle_b + offset)
-    iq_full = complex(i_full, q_full)
-
-    # Collapsed (λ=0.0): Simple circle
-    simple_angle = 2 * np.pi * pattern_id * t / 32
-    iq_collapsed = np.exp(1j * simple_angle)
-
-    # Linear interpolation (continuous)
-    iq = (1 - complexity_lambda) * iq_collapsed + complexity_lambda * iq_full
-
-    return iq  # Continuous complex value
-```
-
-### IQ Collapse Visualization (HF-Realistic)
-
-```
-NVIS (λ=0.7-0.9):              Multi-hop DX (λ=0.3-0.5):   Emergency (λ=0.0):
-80m/40m single-hop             20m typical                 Disturbed/weak
-    Q ↑                            Q ↑                          Q ↑
-      │   ╱──╲                       │   ╱─╲                      │
-    1 │  ╱ ●  ╲                    1 │  ╱   ╲                   1 │   ●
-      │ │   ↓  │                     │ │  ●  │                    │  ╱ ╲
-    0 ├─┼──────┼─ I               0 ├─┼─────┼─ I              0 ├─●───●─ I
-      │ │   ●  │                     │ │  ●  │                    │  ╲ ╱
-   -1 │  ╲    ╱                   -1 │  ╲   ╱                  -1 │   ●
-      └──────────                     └───────                     └──────
-
- Moderate Lissajous            Simple ellipse/circle        BPSK line
- (Realistic for NVIS)          (MOST COMMON on HF)          (Emergency)
- 4-6 IQ directions             2-4 IQ directions            1-2 directions
- 2-3 bits/symbol               1-2 bits/symbol              0.5-1 bit/symbol
-
- Note: λ=1.0 (full complexity) is THEORETICAL maximum
-       λ=0.4 is TYPICAL for HF DX (multipath phase distortion)
-       λ=0.7-0.9 realistic only for NVIS (80m/40m single-hop)
-```
-
-### HF-Realistic IQ Complexity Limits
-
-**Multipath phase distortion constrains practical IQ complexity:**
-
-```python
-def hf_realistic_lambda_limits(propagation_mode, multipath_delay_ms):
-    """
-    Determine realistic λ based on HF propagation characteristics
-
-    HF multipath causes phase distortion that smears IQ constellation.
-    Complex Lissajous curves (λ>0.7) only work on clean single-hop paths.
-    """
-
-    propagation_limits = {
-        'nvis_80m_40m': {
-            'multipath_delay': 0.5,  # ms (single-hop, minimal)
-            'lambda_max': 0.9,  # Near-full Lissajous OK
-            'iq_directions': 6,  # Can use 6-8 directions
-            'typical_lambda': 0.7,
-            'note': 'Clean propagation, IQ coherent'
-        },
-
-        'single_hop_f2_20m': {
-            'multipath_delay': 2,  # ms (one F2 reflection)
-            'lambda_max': 0.6,  # Moderate complexity
-            'iq_directions': 4,  # QPSK-level
-            'typical_lambda': 0.5,
-            'note': 'Some phase distortion, keep IQ simple'
-        },
-
-        'multi_hop_dx_20m': {
-            'multipath_delay': 5,  # ms (2-3 hops typical)
-            'lambda_max': 0.5,  # Simplified ellipses
-            'iq_directions': 4,  # QPSK max
-            'typical_lambda': 0.4,  # RECOMMENDED DEFAULT
-            'note': 'Significant multipath, rely on time-freq separation'
-        },
-
-        'long_path_15m': {
-            'multipath_delay': 10,  # ms (short+long path)
-            'lambda_max': 0.3,  # Nearly collapsed
-            'iq_directions': 2,  # BPSK-level
-            'typical_lambda': 0.2,
-            'note': 'Severe phase distortion, IQ nearly linear'
-        },
-
-        'disturbed_aurora': {
-            'multipath_delay': 20,  # ms (chaotic)
-            'lambda_max': 0.1,  # Collapsed
-            'iq_directions': 1-2,  # BPSK only
-            'typical_lambda': 0.0,
-            'note': 'Phase incoherent, use frequency-time only'
-        },
-    }
-
-    # Rule of thumb:
-    # lambda_max ≈ 1.0 / (1 + multipath_delay_ms / 2)
-    # For 5ms delay: λ_max ≈ 1.0 / (1 + 2.5) = 0.29 ≈ 0.3
-
-    return propagation_limits[propagation_mode]
-
-# CRITICAL INSIGHT:
-# Most HF operation uses λ = 0.3-0.5 (simplified ellipses)
-# NOT λ = 1.0 (full Lissajous)
-# Full complexity reserved for exceptional NVIS conditions
-```
-
-### Continuous Collapse Mechanism (HF-Bounded)
-
-```python
-def continuous_collapse_hf_realistic(snr_db, propagation_mode):
-    """
-    Complexity λ varies continuously with SNR
-    BUT capped by propagation mode (HF reality)
-    """
-
-    # Determine SNR-based lambda (as before)
-    if snr_db > 15:
-        lambda_snr = 1.0
-    elif snr_db > -10:
-        lambda_snr = (snr_db + 10) / 25  # 0.0 to 1.0
-    else:
-        lambda_snr = 0.0
-
-    # Determine propagation-based maximum
-    prop_limits = hf_realistic_lambda_limits(propagation_mode)
-    lambda_max_propagation = prop_limits['lambda_max']
-
-    # Actual lambda: Limited by BOTH SNR and propagation
-    lambda_actual = min(lambda_snr, lambda_max_propagation)
-
-    # Add hysteresis (prevent oscillation)
-    lambda_actual = apply_hysteresis(lambda_actual, window=2)  # ±2 dB
-
-    return {
-        'lambda': lambda_actual,  # Bounded by HF propagation
-        'iq_directions': prop_limits['iq_directions'],
-        'limited_by': 'propagation' if lambda_snr > lambda_max_propagation else 'snr'
-    }
-
-# Example:
-# SNR = +15 dB (excellent), multi-hop DX:
-#   lambda_snr = 1.0 (SNR says "use full complexity")
-#   lambda_max_prop = 0.5 (propagation says "too much multipath")
-#   lambda_actual = 0.5 (LIMITED BY PROPAGATION)
-#
-# This is HF reality! ✓
-```
-
----
-
-## Model-Driven Tone Shifting
-
-Model can shift ±3 tones to avoid interference, always staying on discrete grid:
-
-```python
-def select_4_tones_for_pattern(pattern_id, available_tones, interference_map):
-    """
-    Select 4 optimal tones from 78-tone grid for this pattern
-
-    Args:
-        pattern_id: 0-255
-        available_tones: List of usable tones from 78-tone grid (typically 60-78)
-        interference_map: Power level at each of 78 tones
-
-    Returns:
-        selected_tones: [tone1, tone2, tone3, tone4]  # 4 indices from 0-77
-    """
-
-    # Pattern's nominal 4-tone set (deterministic starting point)
-    base_tones = get_pattern_base_tones(pattern_id)  # 4 tones from 0-77
-    # Example: Pattern 5 base = [12, 34, 51, 65]
-
-    # Model adapts each based on conditions
-    selected_tones = []
-    for base_tone in base_tones:
-        # Can shift ±3 tones from base
-        candidates = range(base_tone - 3, base_tone + 4)
-        candidates = [t for t in candidates if t in available_tones and 0 <= t < 78]
-
-    if not candidates:
-        # No nearby tones available - search farther
-        candidates = available_tones
-
-    # Model scores each discrete option
-    scores = model.score_tones(
-        candidates,
-        base_tone=base_tone_idx,
-        interference=interference_state
-    )
-
-    # Select best (discrete)
-    best_idx = np.argmax(scores)
-    selected_tone = candidates[best_idx]
-
-        # Select best based on interference
-        best = min(candidates, key=lambda t: interference_map[t])
-        selected_tones.append(best)
-
-    return selected_tones  # [tone1, tone2, tone3, tone4] from 0-77
-
-# Example:
-# Pattern 5 base tones: [12, 34, 51, 65]
-# Tone 34 has interference, shifts to 35
-# Selects: [12, 35, 51, 65]
-# Maps to frequencies: [684, 1420, 1932, 2380] Hz
-# Transmits using these 4 frequencies during pattern
-
-# Multiple patterns can select overlapping tones:
-# Pattern 5: [12, 35, 51, 65]
-# Pattern 12: [15, 35, 54, 68]  # Tone 35 overlaps!
-# Separated via Time × IQ orthogonality
-```
-
-### Training Discrete Selection
-
-```python
-def train_tone_selection_discrete():
-    """
-    Train model using Gumbel-softmax for differentiability
-    """
-
-    # Model outputs tone scores
-    tone_logits = model.tone_selection_head(features)  # [70 values]
-
-    # Gumbel-softmax (differentiable discrete sampling)
-    tone_probs = gumbel_softmax(tone_logits, temperature=1.0)
-
-    # During training: soft selection (continuous)
-    if training:
-        soft_tone_selection = sum(
-            tone_probs[i] * REFERENCE_TONES[i]
-            for i in range(78)
-        )
-        freq_selected = soft_tone_selection  # Weighted average
-
-    # During inference: hard selection (discrete)
-    else:
-        tone_idx = argmax(tone_probs)
-        freq_selected = REFERENCE_TONES[tone_idx]  # Exact discrete
-
-    # Loss gradient flows during training ✓
-    # Discrete selection during inference ✓
-```
-
----
-
-## Multi-Pattern Transmission
-
-Users transmit 1-4 patterns simultaneously based on receiver capability:
-
-```python
-def multi_pattern_transmission(data, assigned_patterns, target_kernel):
-    """
-    Kernel-driven multi-pattern transmission
-    Strong receivers get 4×, weak receivers get 1×
-    """
-
-    # Kernel announces capacity
-    max_patterns = target_kernel['max_patterns_simultaneous']
-    # RPi: 1-2 patterns
-    # RPi+Coral: 2-4 patterns
-    # Desktop: 3-4 patterns
-
-    # Select best patterns from assigned pool
-    pattern_scores = model.evaluate_patterns(
-        assigned_patterns,
-        link_snr=estimate_snr(target_kernel),
-        available_tones=target_kernel['available_tones']
-    )
-
-    selected = top_k(pattern_scores, k=max_patterns)
-
-    # Split data across patterns
-    for i, pattern in enumerate(selected):
-        chunk = data[i::max_patterns]  # Interleaved
-        transmit_pattern(pattern, chunk, target_kernel)
-
-    # Throughput scales with pattern count
-    # 1 pattern: 80 bps
-    # 2 patterns: 160 bps
-    # 4 patterns: 320 bps
-```
-
-### Multi-Pattern Example
-
-```
-User A → User B (strong link, +15 dB):
-
-B's kernel: max_patterns=4, available_tones=[0-69]
-
-A transmits on 4 patterns simultaneously:
-  Pattern 5:  Hops through tones [12, 34, 5, 18, ...]
-  Pattern 12: Hops through tones [45, 7, 29, 3, ...]
-  Pattern 19: Hops through tones [22, 61, 14, 38, ...]
-  Pattern 26: Hops through tones [8, 52, 31, 9, ...]
-
-At t=0: 4 different discrete tones active (12, 45, 22, 8)
-Each carries 1/4 of data
-4× throughput = 320 bps
-```
-
----
-
-## Per-Receiver Tone Adaptation
-
-### Receiver Measures Available Tones
-
-```python
-def measure_available_tones():
-    """
-    Receiver measures which of 78 discrete tones are usable
-    Accounts for selective fading, local QRM
-    """
-
-    available = []
-
-    for tone_idx in range(78):
-        freq_hz = REFERENCE_TONES[tone_idx]
-
-        # Measure SNR at exact discrete frequency
-        snr = measure_snr(freq_hz)
-        qrm = detect_interference(freq_hz)
-
-        if snr > -10 and not qrm:
-            available.append(tone_idx)
-
-    return available
-
-# Examples:
-# Excellent: [0-69] (all 70)
-# Selective fading: [0-34, 40-69] (60 tones, notch at 35-39)
-# Heavy QRM: [5-12, 25-35, 50-69] (34 tones)
-# Extreme: [10, 25, 40, 55] (4 tones only - system still works!)
-```
-
-### 28-Byte Kernel Architecture
-
-**New dual-layer kernel structure combines discrete coordination with continuous optimization:**
-
-```python
-class KernelStructure:
-    """
-    28-byte kernel for distributed coordination
-    Beaconed by each station every ~60s
-    """
-
-    # Discrete component (3 bytes = 24 bits)
-    pattern_id: int       # 7 bits  - Which of 128 patterns
-    frequency_pair: int   # 7 bits  - Which tone pair (0-66 from 135-tone grid)
-    modulation: int       # 3 bits  - BPSK/QPSK/8-PSK/16-APSK
-    protocol_version: int # 4 bits  - Protocol compatibility
-    model_version: int    # 3 bits  - NN model generation
-
-    # Continuous embedding (24 bytes)
-    embedding: np.array   # 48 dims × 4-bit quantization
-                         # Encoder mutation guidance
-                         # Learned optimization parameters
-
-    def encode(self) -> bytes:
-        """Encode to 28-byte binary format"""
-        discrete = (
-            (self.pattern_id & 0x7F) |
-            ((self.frequency_pair & 0x7F) << 7) |
-            ((self.modulation & 0x07) << 14) |
-            ((self.protocol_version & 0x0F) << 17) |
-            ((self.model_version & 0x07) << 21)
-        )
-
-        # Pack 48 4-bit values into 24 bytes
-        embedding_bytes = pack_4bit_array(self.embedding)
-
-        return discrete.to_bytes(3, 'little') + embedding_bytes
-```
-
-**Pro/Anti-Kernel Coordination:**
-```python
-def generate_tx_kernel(target_pro_kernels, network_anti_kernels):
-    """
-    Generate transmission kernel using pro/anti coordination
-
-    Each station beacons 3 kernel candidates (top-3 from decoder)
-    Pro-kernel: "Use these settings to reach ME optimally"
-    Anti-kernel: "I'm receiving here, avoid interference"
-    """
-
-    # Select best discrete parameters
-    pattern = select_non_interfering_pattern(
-        target_pro_kernels[0].pattern_id,
-        [k.pattern_id for k in network_anti_kernels]
-    )
-
-    freq_pair = select_clear_frequency(
-        target_pro_kernels[0].frequency_pair,
-        [k.frequency_pair for k in network_anti_kernels]
-    )
-
-    modulation = select_best_modulation(
-        link_snr=estimate_snr(target_pro_kernels),
-        available_modulations=[BPSK, QPSK, PSK8, APSK16]
-    )
-
-    # Combine continuous embeddings
-    α = 0.7  # Pro-kernel weight
-    β = 0.3 / len(network_anti_kernels)  # Anti-kernel weight
-
-    embedding = (
-        α * target_pro_kernels[0].embedding -
-        sum(β * k.embedding for k in network_anti_kernels)
-    )
-
-    return KernelStructure(
-        pattern_id=pattern,
-        frequency_pair=freq_pair,
-        modulation=modulation,
-        embedding=embedding
-    )
-```
-
-This achieves **78-85% coordination efficiency** without central control.
-
-### Transmitter Uses RX's Tone Subset
-
-```python
-def transmit_with_rx_tone_subset(pattern, target_kernel):
-    """
-    Use only tones receiver can decode
-    """
-
-    rx_tones = decode_available_tones(target_kernel)
-    # e.g., [0-34, 40-69] (tone 35-39 blocked by QRM at RX)
-
-    for t in range(32):
-        base_tone = pattern.freq_sequence[t]
-
-        if base_tone in rx_tones:
-            selected = base_tone  # Use as-is
-        else:
-            # Base tone unavailable at RX - shift to nearest available
-            selected = find_nearest(base_tone, rx_tones, max_dist=3)
-
-        freq = REFERENCE_TONES[selected]
-        transmit(frequency=freq, ...)  # Discrete frequency
-
-# Graceful degradation:
-# - 4 tones → 60 bps (4 patterns, with FEC)
-# - 40 tones → 280 bps (still works!)
-# - 10 tones → 160 bps (minimal but functional)
-```
+### Throughput
+
+**Per pattern @ 200 sym/s:**
+
+| Modulation | Polar Rate | Pattern Length | Duration | Throughput |
+|------------|-----------|----------------|----------|------------|
+| BPSK | 1/2 | 512s | 2.56s | 100 bps |
+| QPSK | 2/3 | 512s | 2.56s | 267 bps |
+| QPSK | 2/3 | 1024s | 5.12s | 267 bps |
+| 8-PSK | 3/4 | 512s | 2.56s | 500 bps |
+| 16-APSK | 5/6 | 512s | 2.56s | 853 bps |
+
+**Multi-pattern:**
+- Strong receiver: Can decode 4-8 patterns simultaneously
+- Throughput scales linearly (4× patterns = 4× throughput)
+
+### Hardware Requirements
+
+**RPi4 (CPU-only):**
+- Pattern detection: <5ms (kernel-assisted)
+- Pattern encoding: <1ms
+- Active users: 40-45 simultaneous
+- Power: 8W
+
+**Desktop (x86):**
+- Pattern detection: <2ms
+- Encoding: <0.5ms
+- Active users: 100+
+- Overkill but works great
+
+**See:** [Hardware Requirements](../deployment/hardware_requirements.md)
 
 ---
 
 ## Pattern Storage Format
 
-### File Specification (cascade_patterns_v1.bin)
+### File Structure
 
+**Per pattern (all 8 patterns):**
 ```python
-# Storage requirements per pattern (HIERARCHICAL - single IQ):
-# - Frequency sequence: 32 bytes (tone indices)
-#   * Beacon patterns (0-47): indices 0-3 (4-tone selection)
-#   * Message patterns (48-127): indices 0-3 (4 tones from 78)
-# - IQ trajectory: 256 bytes (32 × complex64, SINGLE baked-in complexity)
-# - Metadata: 4 bytes (includes baked-in complexity level)
-# Total: 292 bytes per pattern (47% savings vs dynamic collapse)
-
-# 128 total patterns: 37,376 bytes ≈ 38 KB
-
-FILE_FORMAT = {
-    'header': {
-        'magic': b'CASC',  # 4 bytes
-        'version': 2,  # 2 bytes (v2 = 128-pattern chaos)
-        'pattern_count': 128,  # 2 bytes (48 beacon + 80 message)
-        'beacon_pattern_count': 48,  # 2 bytes
-        'message_pattern_count': 80,  # 2 bytes
-        'pattern_length': 32,  # 2 bytes (symbols)
-        'num_tones_grid': 78,  # 2 bytes (total reference tones)
-        'tones_per_pattern': 4,  # 2 bytes (each pattern uses 4)
-        'tone_spacing_hz': 32,  # 2 bytes
-        'reserved': 12,  # bytes
-        'total': 32  # bytes
+{
+    'id': 1 byte,                    # 0-7
+    'pattern_2048': 2048 bits,       # Full binary pattern
+    'nested_offsets': {              # For quick extraction
+        128: 0,
+        256: 0,
+        512: 0,
+        1024: 0,
+        2048: 0
     },
-
-    'beacon_pattern_data': [  # 48 beacon patterns (IDs 0-47)
-        {
-            'id': 1,  # byte (0-47)
-            'freq_sequence': 32,  # bytes (tone indices 0-3 for 4-tone selection)
-            'iq_trajectory': 256,  # bytes (32 complex64, SINGLE trajectory)
-            'complexity_level': 1,  # byte (0=BPSK, 1=simple)
-            'checksum': 2,  # bytes (CRC16)
-            'reserved': 1,  # byte
-            'total': 292  # bytes
-        }
-    ],
-
-    'message_pattern_data': [  # 80 message patterns (IDs 48-127)
-        {
-            'id': 1,  # byte (48-127)
-            'freq_sequence': 32,  # bytes (tone indices 0-3 from 78-tone grid)
-            'iq_trajectory': 256,  # bytes (SINGLE baked-in complexity)
-            'complexity_level': 1,  # byte (encoded IQ complexity for this pattern)
-            'checksum': 2,  # bytes (CRC16)
-            'reserved': 1,  # byte
-            'total': 292  # bytes
-        }
-    ],
-
-    'total_size': 37376  # bytes (≈38 KB)
+    'checksum': 2 bytes
 }
 
-# Complexity levels:
-COMPLEXITY_ENCODING = {
-    0: 'minimal (BPSK line)',  # Beacon: 0-15, Message: 48-63
-    1: 'simple (circle)',  # Beacon: 16-47, Message: 64-95
-    2: 'moderate (ellipse)',  # Message: 96-111
-    3: 'complex (Lissajous)',  # Message: 112-127
-}
+# Per pattern: ~260 bytes
+# Total (8 patterns): ~2 KB
+```
+
+**Much smaller than V1:**
+- V1 (128 patterns × 292 bytes): 38 KB
+- V2 (8 patterns × 260 bytes): 2 KB
+- **19× reduction** in storage
+
+### Loading at Runtime
+
+```python
+# Load pattern set
+with open('cascade_patterns_v2.bin', 'rb') as f:
+    patterns = load_patterns(f)
+
+# Select pattern (from kernel)
+pattern_id = rx_kernel.pattern_id  # 0-7
+
+# Select length (from message size)
+length = select_pattern_length(message_size, modulation, polar_rate)
+
+# Extract pattern
+pattern = patterns[pattern_id][0:length]  # Nested extraction
 ```
 
 ---
 
-## Implementation & Training
+## Comparison: V1 vs V2
 
-### Pattern Lookup (Runtime)
+| Aspect | V1 (Archived) | V2 (Current) |
+|--------|--------------|-------------|
+| Pattern count | 128 | **8** |
+| Modulation | 4-FSK | **GMSK 2-FSK** |
+| Data encoding | RS(32,20) + IQ | **GMSK + IQ + Polar** |
+| Symbol rate | 200 sym/s | **200 sym/s** |
+| Error correction | Built-in RS | **Polar codes (protocol layer)** |
+| Detection | Blind 128-pattern | **Kernel-assisted (1 pattern)** |
+| Orthogonality | -37.5 dB (claimed) | **-21.19 dB (proven)** |
+| Storage | 38 KB | **2 KB** |
+| CPU requirement | High (blind search) | **Low (kernel-assisted)** |
+| Hardware | Coral TPU recommended | **RPi4 CPU-only** |
+| Logical channels | 128 | **536 (8 × 67 pairs)** |
 
-```python
-# Patterns loaded at startup
-PATTERN_TABLE = load_patterns('cascade_patterns_v1.bin')
-
-def get_pattern_envelope(pattern_id, t, complexity_lambda, rx_available_tones):
-    """
-    Get 4D envelope for transmission
-    """
-
-    pattern = PATTERN_TABLE[pattern_id]
-
-    # Discrete frequency
-    base_tone_idx = pattern['freq_sequence'][t]
-
-    # Shift if needed (interference or unavailable at RX)
-    selected_tone = model.select_tone(
-        base_tone_idx,
-        rx_available_tones,
-        interference_state
-    )
-
-    # Continuous IQ
-    iq_full = pattern['iq_full'][t]
-    iq_collapsed = pattern['iq_collapsed'][t]
-    iq = (1 - complexity_lambda) * iq_collapsed + complexity_lambda * iq_full
-
-    return {
-        'frequency_hz': REFERENCE_TONES[selected_tone],  # Discrete
-        'iq_basis': iq,  # Continuous
-    }
-```
-
-### Training Strategy
-
-```python
-def train_4d_patterns():
-    """
-    Train model to optimize within 4D pattern structure
-    """
-
-    for batch in training_data:
-        # Generate multi-user scenario
-        users = generate_users(num=random.randint(10, 80))
-
-        for user in users:
-            # Pattern assignment (protocol layer)
-            assigned = assign_pattern_pool(user.id)
-
-            # Model selects (continuous layer):
-            # - Which discrete tone (classification - Gumbel-softmax)
-            # - What IQ basis (regression - MSE loss)
-            # - Complexity λ (regression)
-            # - How many patterns (classification)
-
-            encoding = model.encode_4d(
-                data=user.data,
-                patterns=assigned,
-                target_kernel=user.target.kernel,
-                snr=user.link_snr
-            )
-
-            # Transmit and decode
-            transmitted = transmit_4d(encoding)
-            decoded = receive_4d(transmitted, user.pattern)
-
-            # Loss
-            loss = cross_entropy(decoded, user.data)
-
-            # Additional losses:
-            # - Tone selection (discrete) via Gumbel-softmax
-            # - IQ optimization (continuous) via MSE
-            # - Orthogonality preservation penalty
-
-            optimize(loss)
-```
-
----
-
-## Alternative Approaches (Why Zadoff-Chu + 4D?)
-
-### Gold Codes
-- Cross-correlation: ~-15 dB (insufficient)
-- **Verdict:** ❌ Need -30 dB
-
-### Kasami Sequences
-- Cross-correlation: ~-17 dB (insufficient)
-- **Verdict:** ❌ Need -30 dB
-
-### Walsh-Hadamard
-- Requires perfect synchronization
-- Poor with frequency/timing offsets
-- **Verdict:** ❌ CASCADE is asynchronous
-
-### Zadoff-Chu + Optimization + 4D Extension
-- Base correlation: ~-15 dB
-- With optimization: Exactly -30 dB ✓
-- Extended to IQ: Additional orthogonality ✓
-- Patent-free (1970s mathematics) ✓
-- **Verdict:** ✅ Chosen approach
-
----
-
-## 128-Pattern Chaos Mode Architecture
-
-### Why 128 Patterns is Optimal
-
-**Pattern count trade-off analysis:**
-
-| Pattern Count | Correlation Time | Orthogonality | Total Users | Per-User (1p) | RPi4 Fit? |
-|---------------|------------------|---------------|-------------|---------------|-----------|
-| 32 | 0.75ms | -43 dB | 64 | 168 bps | ✓ Yes |
-| 64 | 1.5ms | -41 dB | 128 | 179 bps | ✓ Yes |
-| **128** | **3ms** | **-37.5 dB** | **256** | **218 bps** | **✓ Yes** |
-| 256 | 6ms | -30 dB | 512 | 261 bps | ✗ No (11.5ms) |
-
-**128 patterns maximizes per-user throughput while maintaining RPi4 compatibility.**
-
-### Chaos Mode Performance
-
-**Achieved with 128-pattern chaos:**
-- 78% Shannon efficiency (with ±2 Hz micro-tuning)
-- 9,805 bps total capacity @ +15 dB
-- 218 bps per user (1 pattern), 872 bps (4 patterns)
-- **45 active users, 512+ total capacity** (frequency + time reuse)
-- 8.5ms RPi4 inference (fits <10ms budget)
-- -37.5 dB orthogonality achieved
-
-**14.5× improvement** over original 256-pattern coordinated design (15 → 218 bps per user).
-
-### Capacity via Frequency & Time Reuse
-
-**Pattern reuse mechanisms:**
-
-1. **Frequency reuse** - Same pattern on different tone selections:
-   ```python
-   # User A and B both use Pattern 5:
-   User A: Pattern 5, tones [12, 35, 51, 65] → [684, 1420, 1932, 2380] Hz
-   User B: Pattern 5, tones [8, 29, 47, 63] → [556, 1228, 1804, 2316] Hz
-
-   # Zero tone overlap → Pure FDMA separation (~0 dB interference)
-   # Pattern orthogonality not needed!
-   ```
-
-2. **Time reuse** - Same pattern, asynchronous starts:
-   ```python
-   # Users C and D both use Pattern 5 with same tones:
-   User C: Pattern 5, tones [12, 35, 51, 65], starts t=0.0s
-   User D: Pattern 5, tones [12, 35, 51, 65], starts t=0.8s (50% offset)
-
-   # At actual time T=0.8s:
-   # User C at symbol 16/32, User D at symbol 0/32
-   # Different positions in pattern → Mostly separated by frequency
-   # ~6% interference from time offset alone → -12 dB separation
-   ```
-
-3. **Combined reuse** - Both mechanisms simultaneously:
-   - 128 patterns (base)
-   - × 4-8 frequency reuse (different tone selections)
-   - × 2-4 time reuse (asynchronous starts in chaos)
-   - = **512 to 4,096 total users** theoretical
-
-**Active limit: 45 users** (chaos overlap tolerance + RS(32,20) erasure capacity)
-
-**Why 78% Shannon is achievable:**
-- Frequency reuse gives FDMA-like efficiency (~100% per disjoint user)
-- 81% of random tone selections are disjoint (C(78,4) combinations)
-- Disjoint users: 98% efficient (FDMA)
-- Overlapping users: 50% efficient (pattern orthogonality)
-- Weighted: 88.9% theoretical, 78% practical (with implementation losses)
-
-### Chaos Operation
-
-**No coordination required:**
-```python
-# Beacon chaos (no time slots)
-while True:
-    sleep(random.uniform(55, 65))  # ~60s random
-    transmit_beacon(pattern_id=select_beacon_pattern())
-
-# Message chaos (no guards)
-def send_message(data, dest_kernel):
-    transmit_rs_pattern(data, start_time=now())  # Immediate, no waiting
-```
-
-### RS(32,20) Aligned Structure
-
-**Pattern structure IS the error correction:**
-- 32 symbols: 20 information + 12 parity
-- Pattern ID + data protected together
-- 37.5% erasure tolerance (12 of 32 symbols)
-- No separate FEC layer needed
-- 90 bps per pattern throughput
-
-**Like QR codes for radio:** Single RS decode recovers both pattern ID and data payload.
+**V2 is simpler, proven, and more practical.**
 
 ---
 
 ## See Also
 
-- **[Adaptive Tone Grid](../protocol/adaptive_tone_grid.md)** - 78 discrete reference tones specification
-- **[TFIQ Dimensions](tfiq_dimensions.md)** - Multi-user separation in 4D space
-- **[Emergency Relay Network](../protocol/emergency_relay_network.md)** - Ad-hoc emergency system
-- **[Model README](README.md)** - Overall model architecture
 - **[Signal Specification](../protocol/signal_specification.md)** - Physical layer details
-- **[CASCADE Architecture](../../architecture.md)** - Executive summary and performance overview
+- **[Pattern Generation Spec](../implementation/pattern_generation_spec.md)** - Genetic algorithm
+- **[Kernel Encoding](../implementation/kernel_encoding_spec.md)** - 28-byte kernel structure
+- **[Protocol Layer](../protocol/README.md)** - RTS/CTS and coordination
+- **[Architecture Summary](../../architecture.md)** - Executive overview

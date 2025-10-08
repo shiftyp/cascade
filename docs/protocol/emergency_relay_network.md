@@ -538,7 +538,7 @@ EMERGENCY_NEGOTIATION = {
     },
 
     # FEC for robustness
-    'fec_rate': 0.5,      # Rate 1/2 LDPC
+    'fec_rate': 0.5,      # Rate 1/2 Polar
     'coded_bits': 384,    # 192 × 2
     'symbols': 192,       # 384 bits ÷ 2 bits/symbol
     'duration': 38.4,     # seconds

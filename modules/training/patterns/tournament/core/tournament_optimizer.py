@@ -456,7 +456,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     'erasure': worst_erasure,
                     'worst_normal': worst_normal,
                     'worst_flip': worst_flip,
-                    'worst_overall': worst_case
+                    'worst_overall': worst_case,
+                    'weighted_score': weighted_score
                 }
                 return worst_case, details
             else:
@@ -823,7 +824,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                         'seed': seed,
                         'window_metrics': detailed_metrics['window_metrics'],
                         'global_metrics': detailed_metrics['global_metrics'],
-                        'erasure_metrics': detailed_metrics['erasure']
+                        'erasure_metrics': detailed_metrics['erasure'],
+                        'weighted_score': detailed_metrics.get('weighted_score', best_score)
                     }
                     with open(checkpoint_file, 'wb') as f:
                         pickle.dump(checkpoint, f)
@@ -1231,6 +1233,8 @@ class DynamicTournamentOptimizer:
                         trial.global_metrics = checkpoint['global_metrics']
                     if 'erasure_metrics' in checkpoint:
                         trial.erasure_metrics = checkpoint['erasure_metrics']
+                    if 'weighted_score' in checkpoint:
+                        trial.weighted_score = checkpoint['weighted_score']
 
                     # GA-specific stats (for display)
                     if 'generation' in checkpoint:

@@ -1,0 +1,377 @@
+[
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 10.238464212205418,
+    "signal_power": 1.276951789855957,
+    "peak_amplitude": 2.990285634994507,
+    "signal_index": 0
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 9.95921701770909,
+    "signal_power": 2.9683892726898193,
+    "peak_amplitude": 3.9114320278167725,
+    "signal_index": 1
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 9.525114251632488,
+    "signal_power": 2.12327241897583,
+    "peak_amplitude": 3.546410083770752,
+    "signal_index": 2
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 2.634189755096731,
+    "signal_power": 4.831729888916016,
+    "peak_amplitude": 5.990314960479736,
+    "signal_index": 3
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 4.479010113110217,
+    "signal_power": 0.7305358648300171,
+    "peak_amplitude": 4.799808502197266,
+    "signal_index": 4
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 8.214184076692778,
+    "signal_power": 0.8554636240005493,
+    "peak_amplitude": 2.810103178024292,
+    "signal_index": 5
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": -7.6965735677065705,
+    "signal_power": 25.535457611083984,
+    "peak_amplitude": 16.778039932250977,
+    "signal_index": 6
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 1.1845223238387774,
+    "signal_power": 3.437441349029541,
+    "peak_amplitude": 5.27870512008667,
+    "signal_index": 7
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 10.385833030769888,
+    "signal_power": 1.1783525943756104,
+    "peak_amplitude": 3.046133041381836,
+    "signal_index": 8
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 12.242627760291107,
+    "signal_power": 0.9116296172142029,
+    "peak_amplitude": 3.9755144119262695,
+    "signal_index": 9
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 13.843685417870521,
+    "signal_power": 2.272865056991577,
+    "peak_amplitude": 3.191964864730835,
+    "signal_index": 10
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 6.984918617906484,
+    "signal_power": 4.957874774932861,
+    "peak_amplitude": 5.282473087310791,
+    "signal_index": 11
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 10.731442206485578,
+    "signal_power": 1.5628284215927124,
+    "peak_amplitude": 3.32077956199646,
+    "signal_index": 12
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 4.129751974201554,
+    "signal_power": 3.1143524646759033,
+    "peak_amplitude": 4.741298198699951,
+    "signal_index": 13
+  },
+  {
+    "expert_type": "combined",
+    "effects_applied": [
+      "multipath",
+      "qrn",
+      "qrm",
+      "awgn"
+    ],
+    "multipath_profile": {
+      "delays": [
+        0.0,
+        0.002
+      ],
+      "powers": [
+        0.7,
+        0.3
+      ]
+    },
+    "qrn_power": 0.3,
+    "qrm_power": 0.2,
+    "snr_db": 14.731241974957413,
+    "signal_power": 2.119394540786743,
+    "peak_amplitude": 3.241901397705078,
+    "signal_index": 14
+  }
+]
