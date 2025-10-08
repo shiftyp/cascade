@@ -294,8 +294,8 @@ class SignalGenerator:
             len(message_bits), polar_rate, modulation_scheme
         )
 
-        # Load pattern
-        pattern_bits = self.pattern_loader.load_pattern(pattern_id, pattern_length)
+        # Load pattern (ternary symbols for 3-FSK)
+        pattern_symbols = self.pattern_loader.load_pattern(pattern_id, pattern_length)
 
         # Encode message with Polar code
         polar_codeword = polar_codec.encode(message_bits, polar_rate, pattern_length)
@@ -321,29 +321,19 @@ class SignalGenerator:
         # Generate GMSK carrier for full duration (including ramps)
         num_pattern_symbols = int(total_samples / self.SAMPLE_RATE * self.PATTERN_SYMBOL_RATE)
 
-        # For 3-FSK, patterns must be ternary (0, 1, 2)
-        # Convert binary pattern_bits to ternary pattern_symbols
-        # Simple approach: map pairs of bits to ternary symbols
-        # 00->0, 01->1, 10->2, 11->0 (wrap around)
-        pattern_bits_extended = pattern_bits[:num_pattern_symbols * 2]  # Need 2 bits per ternary symbol
-        if len(pattern_bits_extended) < num_pattern_symbols * 2:
-            # Pad if needed
-            pattern_bits_extended = np.pad(
-                pattern_bits_extended,
-                (0, num_pattern_symbols * 2 - len(pattern_bits_extended)),
+        # Extract ternary pattern symbols for 3-FSK
+        # Pattern is already ternary (0, 1, 2) from genetic algorithm
+        pattern_symbols_extended = pattern_symbols[:num_pattern_symbols]
+        if len(pattern_symbols_extended) < num_pattern_symbols:
+            # Pad if needed (wrap around pattern)
+            pattern_symbols_extended = np.pad(
+                pattern_symbols_extended,
+                (0, num_pattern_symbols - len(pattern_symbols_extended)),
                 mode='wrap'
             )
 
-        # Convert pairs of bits to ternary
-        pattern_symbols = np.zeros(num_pattern_symbols, dtype=np.uint8)
-        for i in range(num_pattern_symbols):
-            bit_pair = pattern_bits_extended[i*2:i*2+2]
-            if len(bit_pair) == 2:
-                # 00->0, 01->1, 10->2, 11->0
-                pattern_symbols[i] = (bit_pair[0] * 2 + bit_pair[1]) % 3
-
         gmsk_signal = gmsk.generate_gmsk_3fsk(
-            pattern_symbols, tone_a, tone_b, tone_c,
+            pattern_symbols_extended, tone_a, tone_b, tone_c,
             self.SAMPLE_RATE, self.PATTERN_SYMBOL_RATE
         )
 
