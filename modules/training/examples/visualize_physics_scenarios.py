@@ -287,41 +287,48 @@ def add_awgn_for_target_snr(signal_in, clean_signal_power, qrn_power_added, targ
         return signal_in
 
 
-def add_pattern_overlay(ax, pattern_bits, tone_a, tone_b, symbol_rate, sample_rate,
-                       t_max, freq_min, freq_max, color_a='blue', color_b='red'):
+def add_pattern_overlay(ax, pattern_symbols, tone_a, tone_b, symbol_rate, sample_rate,
+                       t_max, freq_min, freq_max, tone_c=None):
     """
-    Add translucent boxes showing pattern bit timing on spectrogram.
+    Add translucent boxes showing pattern symbol timing on spectrogram (2-FSK or 3-FSK).
 
     Args:
         ax: Matplotlib axis to draw on
-        pattern_bits: Binary pattern array
-        tone_a: Frequency for bit=0 (Hz)
-        tone_b: Frequency for bit=1 (Hz)
+        pattern_symbols: Ternary pattern array (0, 1, 2) for 3-FSK
+        tone_a: Frequency for symbol=0 (Hz)
+        tone_b: Frequency for symbol=1 (Hz)
         symbol_rate: Symbol rate (sym/s)
         sample_rate: Sample rate (Hz)
         t_max: Maximum time on plot (s)
         freq_min: Minimum frequency on plot (Hz)
         freq_max: Maximum frequency on plot (Hz)
-        color_a: Color for tone_a boxes
-        color_b: Color for tone_b boxes
+        tone_c: Frequency for symbol=2 (Hz) - for 3-FSK, None for 2-FSK
     """
     symbol_duration = 1.0 / symbol_rate  # seconds per symbol
     box_width = 16  # Hz (width of frequency box)
 
-    for i, bit in enumerate(pattern_bits):
+    # Colors for 3-FSK: red, yellow, cyan
+    colors = ['red', 'yellow', 'cyan']
+
+    for i, symbol in enumerate(pattern_symbols):
         t_start = i * symbol_duration
         t_end = (i + 1) * symbol_duration
 
         if t_start >= t_max:
             break
 
-        # Select frequency and color based on bit value
-        if bit == 0:
+        # Select frequency and color based on symbol value (3-FSK: 0, 1, 2)
+        if symbol == 0:
             freq_center = tone_a
-            color = color_a
-        else:
+            color = colors[0]
+        elif symbol == 1:
             freq_center = tone_b
-            color = color_b
+            color = colors[1]
+        elif symbol == 2 and tone_c is not None:
+            freq_center = tone_c
+            color = colors[2]
+        else:
+            continue  # Skip invalid symbols
 
         # Only draw if within visible frequency range
         if freq_min <= freq_center <= freq_max:
@@ -349,37 +356,81 @@ print("=" * 80)
 physics_calc = CoupledPhysicsCalculator(seed=42)
 scenario_lib = ScenarioLibrary()
 
-# Load real patterns from pattern file if available, otherwise generate simple orthogonal pattern
+# Load patterns from final_patterns file
+import pickle
+
+final_patterns_path = os.path.join(training_dir, 'patterns', 'final_patterns_399968.pkl')
 try:
-    # Try to load pattern using PatternLoader
-    import sys
-    sys.path.insert(0, os.path.join(training_dir, 'src'))
-    from signal_generator.pattern_loader import PatternLoader
+    with open(final_patterns_path, 'rb') as f:
+        final_data = pickle.load(f)
 
-    pattern_loader = PatternLoader()
-    # Load full 2048-bit pattern for proper visualization
-    test_pattern = pattern_loader.load_pattern(pattern_id=0, length=2048)
+    print(f"✓ Loaded final patterns from: {final_patterns_path}")
+    print(f"  Algorithm: {final_data['algorithm']}")
+    print(f"  Iterations: {final_data['iterations']:,}")
+    print(f"  Best score: {final_data['best_score']:.2f} dB")
 
-    # Verify patterns are different
-    pattern_0 = pattern_loader.load_pattern(pattern_id=0, length=2048)
-    pattern_2 = pattern_loader.load_pattern(pattern_id=2, length=2048)
-    pattern_4 = pattern_loader.load_pattern(pattern_id=4, length=2048)
-    pattern_6 = pattern_loader.load_pattern(pattern_id=6, length=2048)
+    # Use 1024-symbol patterns (good for visualization)
+    pattern_length = 1024
+    patterns_dict = final_data['nested_patterns'][pattern_length]
+    repetition_map = patterns_dict['repetition_map']
 
-    print(f"✓ Loaded real custom CASCADE patterns from genetic algorithm")
-    print(f"  Pattern 0: {np.sum(pattern_0[:100])} ones in first 100 bits, hash={hash(pattern_0.tobytes())}")
-    print(f"  Pattern 2: {np.sum(pattern_2[:100])} ones in first 100 bits, hash={hash(pattern_2.tobytes())}")
-    print(f"  Pattern 4: {np.sum(pattern_4[:100])} ones in first 100 bits, hash={hash(pattern_4.tobytes())}")
-    print(f"  Pattern 6: {np.sum(pattern_6[:100])} ones in first 100 bits, hash={hash(pattern_6.tobytes())}")
-except (FileNotFoundError, ImportError) as e:
+    # Extract and expand patterns using repetition map
+    # We need 4 patterns (0, 2, 4, 6) but only have 4 total, so use 0, 1, 2, 3
+    pattern_0 = patterns_dict['cores'][0][repetition_map]
+    pattern_2 = patterns_dict['cores'][1][repetition_map]
+    pattern_4 = patterns_dict['cores'][2][repetition_map]
+    pattern_6 = patterns_dict['cores'][3][repetition_map]
+
+    # Pad to 2048 symbols if needed
+    if len(pattern_0) < 2048:
+        pattern_0 = np.tile(pattern_0, (2048 // len(pattern_0)) + 1)[:2048]
+        pattern_2 = np.tile(pattern_2, (2048 // len(pattern_2)) + 1)[:2048]
+        pattern_4 = np.tile(pattern_4, (2048 // len(pattern_4)) + 1)[:2048]
+        pattern_6 = np.tile(pattern_6, (2048 // len(pattern_6)) + 1)[:2048]
+
+    print(f"  Using {pattern_length}-symbol patterns (padded to 2048 for visualization)")
+    print(f"  Orthogonality: {final_data['nested_orthogonality'][pattern_length]:.2f} dB")
+    print(f"  Pattern 0: {np.sum(pattern_0[:100])} symbols≠0 in first 100, hash={hash(pattern_0.tobytes())}")
+    print(f"  Pattern 2: {np.sum(pattern_2[:100])} symbols≠0 in first 100, hash={hash(pattern_2.tobytes())}")
+    print(f"  Pattern 4: {np.sum(pattern_4[:100])} symbols≠0 in first 100, hash={hash(pattern_4.tobytes())}")
+    print(f"  Pattern 6: {np.sum(pattern_6[:100])} symbols≠0 in first 100, hash={hash(pattern_6.tobytes())}")
+
+    # Create simple pattern loader interface for compatibility
+    class FinalPatternLoader:
+        def __init__(self, patterns):
+            self.patterns = patterns
+
+        def load_pattern(self, pattern_id, length):
+            pattern = self.patterns[pattern_id][:length]
+            if len(pattern) < length:
+                pattern = np.tile(pattern, (length // len(pattern)) + 1)[:length]
+            return pattern
+
+    pattern_loader = FinalPatternLoader({
+        0: pattern_0, 2: pattern_2, 4: pattern_4, 6: pattern_6
+    })
+
+except (FileNotFoundError, KeyError) as e:
     # Fall back to simple alternating pattern (low autocorrelation)
-    print(f"⚠ Pattern files not found, using simple orthogonal pattern")
-    print(f"  To use real patterns, generate them first:")
-    print(f"  cd /workspaces/cascade/modules/training/patterns/tournament")
-    print(f"  python generate_patterns_tournament.py")
+    print(f"⚠ Final patterns file not found, using simple orthogonal pattern")
+    print(f"  Error: {e}")
     # Generate simple pattern with reasonable properties
     np.random.seed(42)
-    test_pattern = np.array([i % 2 for i in range(2048)], dtype=np.uint8)  # Alternating pattern
+    pattern_0 = pattern_2 = pattern_4 = pattern_6 = np.array([i % 3 for i in range(2048)], dtype=np.uint8)
+
+    class FinalPatternLoader:
+        def __init__(self, patterns):
+            self.patterns = patterns
+
+        def load_pattern(self, pattern_id, length):
+            pattern = self.patterns[pattern_id][:length]
+            if len(pattern) < length:
+                pattern = np.tile(pattern, (length // len(pattern)) + 1)[:length]
+            return pattern
+
+    pattern_loader = FinalPatternLoader({
+        0: pattern_0, 2: pattern_2, 4: pattern_4, 6: pattern_6
+    })
 
 # Encode test message
 message = "CASCADE"
@@ -479,8 +530,7 @@ for col, (title, mod, rate, freq_offset, pattern_id) in enumerate(row1_configs):
 
     # Add pattern overlay showing bit timing (2-FSK boxes)
     add_pattern_overlay(ax_amp, pattern_for_signal, tone_a, tone_b, PATTERN_SYMBOL_RATE,
-                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1],
-                       color_a='blue', color_b='red')
+                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1], tone_c=tone_c)
 
     plt.colorbar(im_amp, ax=ax_amp, label='dB', pad=0.02)
 
@@ -499,8 +549,7 @@ for col, (title, mod, rate, freq_offset, pattern_id) in enumerate(row1_configs):
 
     # Add pattern overlay (2-FSK boxes)
     add_pattern_overlay(ax_phase, pattern_for_signal, tone_a, tone_b, PATTERN_SYMBOL_RATE,
-                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1],
-                       color_a='blue', color_b='red')
+                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1], tone_c=tone_c)
 
     plt.colorbar(im_phase, ax=ax_phase, label='rad', pad=0.02)
 
@@ -606,8 +655,7 @@ for col, (title, mod, rate, freq_offset, pattern_id) in enumerate(row2_configs):
 
     # Add pattern overlay (2-FSK boxes)
     add_pattern_overlay(ax_amp, pattern_for_signal, tone_a, tone_b, PATTERN_SYMBOL_RATE,
-                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1],
-                       color_a='blue', color_b='red')
+                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1], tone_c=tone_c)
 
     plt.colorbar(im_amp, ax=ax_amp, label='dB', pad=0.02)
 
@@ -626,8 +674,7 @@ for col, (title, mod, rate, freq_offset, pattern_id) in enumerate(row2_configs):
 
     # Add pattern overlay (2-FSK boxes)
     add_pattern_overlay(ax_phase, pattern_for_signal, tone_a, tone_b, PATTERN_SYMBOL_RATE,
-                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1],
-                       color_a='blue', color_b='red')
+                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1], tone_c=tone_c)
 
     plt.colorbar(im_phase, ax=ax_phase, label='rad', pad=0.02)
 
@@ -747,8 +794,7 @@ for col, (title, mod, rate, freq_offset, pattern_id) in enumerate(row2_configs):
 
     # Add pattern overlay (2-FSK boxes)
     add_pattern_overlay(ax_amp, pattern_for_signal, tone_a, tone_b, PATTERN_SYMBOL_RATE,
-                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1],
-                       color_a='blue', color_b='red')
+                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1], tone_c=tone_c)
 
     plt.colorbar(im_amp, ax=ax_amp, label='dB', pad=0.02)
 
@@ -767,8 +813,7 @@ for col, (title, mod, rate, freq_offset, pattern_id) in enumerate(row2_configs):
 
     # Add pattern overlay (2-FSK boxes)
     add_pattern_overlay(ax_phase, pattern_for_signal, tone_a, tone_b, PATTERN_SYMBOL_RATE,
-                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1],
-                       color_a='blue', color_b='red')
+                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1], tone_c=tone_c)
 
     plt.colorbar(im_phase, ax=ax_phase, label='rad', pad=0.02)
 
@@ -857,8 +902,7 @@ for col, (title, mod, rate, freq_offset, pattern_id) in enumerate(row2_configs):
 
     # Add pattern overlay (2-FSK boxes)
     add_pattern_overlay(ax_amp, pattern_for_signal, tone_a, tone_b, PATTERN_SYMBOL_RATE,
-                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1],
-                       color_a='blue', color_b='red')
+                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1], tone_c=tone_c)
 
     plt.colorbar(im_amp, ax=ax_amp, label='dB', pad=0.02)
 
@@ -877,8 +921,7 @@ for col, (title, mod, rate, freq_offset, pattern_id) in enumerate(row2_configs):
 
     # Add pattern overlay (2-FSK boxes)
     add_pattern_overlay(ax_phase, pattern_for_signal, tone_a, tone_b, PATTERN_SYMBOL_RATE,
-                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1],
-                       color_a='blue', color_b='red')
+                       SAMPLE_RATE, t[-1], f[freq_mask][0], f[freq_mask][-1], tone_c=tone_c)
 
     plt.colorbar(im_phase, ax=ax_phase, label='rad', pad=0.02)
 
