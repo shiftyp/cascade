@@ -783,6 +783,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 detailed_metrics = None
                 if current_generation % 100 == 0:
                     # Use pattern_set (historically best) for consistent tracking
+                    # Set random seed for deterministic windowed evaluation
+                    np.random.seed(seed + 999999)
                     _, detailed_metrics = evaluate_fitness(pattern_set, use_sampling=False, return_details=True)
 
                 with open(debug_file_path, 'a') as f:
@@ -816,6 +818,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 # Get detailed metrics for checkpoint (use historically best pattern_set)
                 try:
                     # Use pattern_set which is the historically best (never gets worse)
+                    # Set random seed for deterministic windowed evaluation
+                    np.random.seed(seed + 999999)
                     _, detailed_metrics = evaluate_fitness(pattern_set, use_sampling=False, return_details=True)
 
                     # Verify weighted score calculation for debugging
@@ -992,6 +996,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         # Calculate final detailed metrics for return to main process
         # Use pattern_set which is the historically best (never gets worse)
         try:
+            # Set random seed for deterministic windowed evaluation
+            np.random.seed(seed + 999999)
             _, final_detailed_metrics = evaluate_fitness(pattern_set, use_sampling=False, return_details=True)
         except:
             final_detailed_metrics = None
