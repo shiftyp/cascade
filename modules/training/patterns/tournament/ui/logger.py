@@ -239,7 +239,7 @@ class DualLogger:
     def _format_trial_event(self, trial_id: int, event_type: str, data: Dict) -> str:
         """Format trial event into human-readable message"""
         if event_type == 'improvement':
-            return f"Trial {trial_id} improved: {data.get('old_score', 0):.2f} → {data.get('new_score', 0):.2f} dB"
+            return f"Trial {trial_id} improved: {data.get('old_score', 0):.2f} -> {data.get('new_score', 0):.2f} dB"
         elif event_type == 'eliminate':
             return f"Trial {trial_id} eliminated: {data.get('reason', 'unknown reason')}"
         elif event_type == 'checkpoint':
@@ -253,7 +253,7 @@ class DualLogger:
 
     def log_phase_change(self, old_phase: str, new_phase: str):
         """Log optimization phase change"""
-        message = f"Phase transition: {old_phase.upper()} → {new_phase.upper()}"
+        message = f"Phase transition: {old_phase.upper()} -> {new_phase.upper()}"
         self.log(message, level='PHASE', to_ui=True)
 
     def log_elimination(self, trial_id: int, reason: str, score: float):

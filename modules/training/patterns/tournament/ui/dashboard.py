@@ -365,15 +365,15 @@ class PatternGeneratorDashboard:
     def _get_status_display(self, status: str, is_best: bool) -> str:
         """Get status display with icon"""
         if is_best:
-            return "[bold yellow]👑 BEST[/bold yellow]"
+            return "[bold yellow]BEST[/bold yellow]"
 
         status_map = {
-            'running': '[green]● RUN[/green]',
-            'paused': '[yellow]⏸ PAUSE[/yellow]',
-            'eliminated': '[red]✗ ELIM[/red]',
-            'completed': '[bold green]✓ DONE[/bold green]',
-            'pending': '[dim]○ WAIT[/dim]',
-            'error': '[red]⚠ ERROR[/red]'
+            'running': '[green]RUN[/green]',
+            'paused': '[yellow]PAUSE[/yellow]',
+            'eliminated': '[red]ELIM[/red]',
+            'completed': '[bold green]DONE[/bold green]',
+            'pending': '[dim]WAIT[/dim]',
+            'error': '[red]ERROR[/red]'
         }
         return status_map.get(status, '[dim]?[/dim]')
 
