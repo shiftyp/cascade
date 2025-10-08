@@ -229,7 +229,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write(f"  Number of patterns: {num_patterns}\n")
                 f.write(f"  Pattern length: {pattern_length} symbols ({duration_sec:.2f} sec)\n")
                 f.write(f"  Core length: {pattern_core_length} ternary symbols ({redundancy}x redundancy)\n")
-                f.write(f"  Modulation: 3-FSK (ternary: 0,1,2 → 3 frequencies)\n")
+                f.write(f"  Modulation: 3-FSK (ternary: 0,1,2 -> 3 frequencies)\n")
                 f.write(f"  Min symbols for decode: {min_symbols_needed} (37.5% erasure)\n")
                 f.write(f"  Welch bound: {welch_bound_db:.2f} dB (theoretical limit)\n")
                 f.flush()
@@ -377,7 +377,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 # Expand and convert ternary {0,1,2} to {-1,0,+1} for correlation
                 pi_full = pattern_set_cores[i][repetition_map]
                 pj_full = pattern_set_cores[j][repetition_map]
-                # 3-FSK: 0→-1, 1→0, 2→+1 (for ternary patterns)
+                # 3-FSK: 0->-1, 1->0, 2->+1 (for ternary patterns)
                 pi = pi_full.astype(np.float32) - 1
                 pj = pj_full.astype(np.float32) - 1
 
@@ -539,7 +539,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     # Expand and convert ternary {0,1,2} to {-1,0,+1} for correlation
                     pi_full = pattern_set_cores[i][repetition_map]
                     pj_full = pattern_set_cores[j][repetition_map]
-                    # 3-FSK: 0→-1, 1→0, 2→+1 (for ternary patterns)
+                    # 3-FSK: 0->-1, 1->0, 2->+1 (for ternary patterns)
                     pi = pi_full.astype(np.float32) - 1
                     pj = pj_full.astype(np.float32) - 1
 
