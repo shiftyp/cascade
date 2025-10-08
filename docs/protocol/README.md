@@ -289,13 +289,19 @@ Station B wants to TX to Station A:
 
 **QSY mechanism:**
 ```python
-# RX monitors 8 closest context signals during RTS reception
+# Protocol layer examines TX kernel from incoming RTS
 def handle_rts(incoming_rts, context_signals):
-    # Check if conflicting station in 8 closest
-    if collision_detected_in_8_closest(incoming_rts, context_signals):
-        # Send QSY with latest RX kernel (from beacon)
-        send_qsy(self.latest_rx_kernel)
-        return
+    # Extract TX kernel from RTS
+    tx_kernel = incoming_rts.tx_kernel
+
+    # Compare against 8 closest context signals
+    for context_signal in context_signals[:8]:
+        if (context_signal.pattern_id == tx_kernel.pattern_id and
+            context_signal.frequency_triple == tx_kernel.frequency_triple):
+            # CONFLICT! Another station using same channel
+            # Send QSY with latest RX kernel (from beacon)
+            send_qsy(self.latest_rx_kernel)
+            return
 
     # No conflict → send CTS
     send_cts()

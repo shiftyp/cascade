@@ -246,18 +246,29 @@ The embedding now contains ONLY channel-adaptive parameters that can't be discre
 6. **Data transmission:** Proceeds on collision-free channel
 
 **Conflict determination (protocol layer):**
-- Examines 8 closest context signals (by frequency/time/pattern/SNR proximity)
-- Detects if another station is using same pattern + frequency triple
-- Calculates collision probability based on timing overlap
-- If risk exceeds threshold → issue QSY with alternative parameters
+- Protocol extracts TX kernel from incoming RTS
+- Compares TX kernel's pattern_id and frequency_triple against 8 closest context signals
+- Detects if another station is already using same pattern + frequency triple
+- If conflict found → issue QSY with RX's latest RX kernel as alternative
 
 **QSY kernel negotiation:**
 ```python
-# RX detects collision from context signals
-if collision_detected_in_8_closest(incoming_rts, context_signals):
-    # Send QSY with latest RX kernel (already advertised in beacon)
-    # This tells TX: "Use MY preferred parameters instead"
-    send_qsy(self.latest_rx_kernel)
+# Protocol layer at RX examines incoming RTS
+def handle_rts(incoming_rts, context_signals):
+    # Extract TX kernel from RTS
+    tx_kernel = incoming_rts.tx_kernel
+
+    # Check if TX kernel conflicts with 8 closest context signals
+    for context_signal in context_signals[:8]:
+        if (context_signal.pattern_id == tx_kernel.pattern_id and
+            context_signal.frequency_triple == tx_kernel.frequency_triple):
+            # CONFLICT! Another station using same channel
+            # Send QSY with latest RX kernel (already advertised in beacon)
+            send_qsy(self.latest_rx_kernel)
+            return
+
+    # No conflict → send CTS
+    send_cts()
 
     # TX receives QSY with RX's preferred kernel
     # TX retransmits RTS using RX kernel parameters

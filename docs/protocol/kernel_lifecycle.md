@@ -249,13 +249,16 @@ T=6s:  Station B sends RTS to A (doesn't hear C)
 
 T=7s:  Station A receives both RTS
        Decodes B's RTS clearly (arrived later, stronger)
-       Detects C's RTS in 8 closest context signals
-       CONFLICT DETECTED on pattern 3, freq 25
+       Protocol extracts TX kernel from B's RTS: {pattern: 3, freq: 25}
+       Compares against 8 closest context signals
+       Finds C's TX kernel in context: {pattern: 3, freq: 25}
+       CONFLICT DETECTED - same pattern + frequency triple
 
 T=8s:  Station A sends QSY to B
-       {rx_kernel: latest (pattern: 3, freq: 25), reason: collision}
+       {rx_kernel: latest, reason: collision}
        256s @ BPSK = 1.28s
-       Tells B: "Conflict detected, use my RX kernel as-is or pick alternative"
+       Protocol tells B: "Your TX kernel conflicts with another station,
+                          use my RX kernel instead or pick alternative"
 
 T=9s:  Station B receives QSY
        Extracts RX kernel from QSY
