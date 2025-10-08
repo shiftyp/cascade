@@ -10,7 +10,13 @@ Provides channel effects for training data generation:
 """
 
 from .awgn import generate_awgn
-from .qrn import generate_mixed_qrn, generate_atmospheric_static, generate_popcorn_noise
+from .qrn import (
+    generate_mixed_qrn,
+    generate_continuous_static,
+    generate_crackling_noise,
+    generate_lightning_crashes,
+    generate_powerline_noise
+)
 from .multipath import (
     apply_multipath_fading,
     MultipathProfile,
@@ -27,8 +33,10 @@ __all__ = [
 
     # QRN
     'generate_mixed_qrn',
-    'generate_atmospheric_static',
-    'generate_popcorn_noise',
+    'generate_continuous_static',
+    'generate_crackling_noise',
+    'generate_lightning_crashes',
+    'generate_powerline_noise',
 
     # Multipath
     'apply_multipath_fading',
