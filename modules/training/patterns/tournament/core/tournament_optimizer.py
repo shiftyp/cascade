@@ -741,12 +741,15 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             # Sort by fitness
             fitness_scores.sort(key=lambda x: x[0])
 
-            # Track best
+            # Track best (only update on full evaluations to avoid sampling noise)
             current_best = fitness_scores[0][0]
-            if current_best < best_score:
-                best_score = current_best
-                best_set_idx = fitness_scores[0][1]
-                pattern_set = population[best_set_idx]
+            if use_full_eval:
+                # Full evaluation - safe to update historically best pattern and score
+                if current_best < best_score:
+                    best_score = current_best
+                    best_set_idx = fitness_scores[0][1]
+                    pattern_set = population[best_set_idx]
+            # On sampled evals, keep historical best_score and pattern_set unchanged
 
             score_history.append(best_score)
 
