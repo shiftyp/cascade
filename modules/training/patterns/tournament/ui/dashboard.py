@@ -78,10 +78,10 @@ class PatternGeneratorDashboard:
             header_text = Text()
             header_text.append("CASCADE Pattern Tournament", style="bold white")
             header_text.append(" | ", style="dim")
-            # Show: patterns × core_bits × redundancy (e.g., "8p × 256c × 2x")
+            # Show: patterns x core_bits x redundancy (e.g., "8p x 256c x 2x")
             redundancy = self.optimizer.redundancy if hasattr(self.optimizer, 'redundancy') else 4
             core_bits = self.optimizer.pattern_length // redundancy
-            header_text.append(f"{self.optimizer.num_patterns}p × {core_bits}c × {redundancy}x", style="bold cyan")
+            header_text.append(f"{self.optimizer.num_patterns}p x {core_bits}c x {redundancy}x", style="bold cyan")
             header_text.append(" | ", style="dim")
 
             # Show generation progress
@@ -297,13 +297,13 @@ class PatternGeneratorDashboard:
 
             info_lines = [
                 f"[bold cyan]System Resources[/bold cyan]",
-                f"────────────────",
+                f"----------------",
                 f"CPU Usage:    {cpu_percent:5.1f}%",
                 f"CPU Freq:     {freq_ghz:4.2f} GHz",
                 f"Memory:       {mem_used_gb:4.1f}/{mem_total_gb:4.1f} GB",
                 "",
                 f"[bold cyan]Configuration[/bold cyan]",
-                f"────────────────",
+                f"----------------",
                 f"Trials:       {self.optimizer.num_initial_trials if self.optimizer else '-'}",
                 f"Total Gens:   {self.optimizer.total_generations:,}" if self.optimizer else "-",
                 f"Per Trial:    {self.optimizer.total_generations // self.optimizer.num_initial_trials:,} gens" if self.optimizer else "-"
@@ -380,10 +380,10 @@ class PatternGeneratorDashboard:
     def _create_progress_bar(self, progress: float) -> str:
         """Create a text-based progress bar"""
         if progress <= 0:
-            return "[dim]" + "─" * 20 + "[/dim]"
+            return "[dim]" + "-" * 20 + "[/dim]"
 
         filled = int(progress * 20)
-        bar = "█" * filled + "─" * (20 - filled)
+        bar = "=" * filled + "-" * (20 - filled)
 
         # Color based on progress
         if progress < 0.33:
