@@ -334,21 +334,19 @@ class PhysicsConstrainedDataset(Dataset):
             profile = MultipathProfile(
                 delays=[0.0],
                 powers=[1.0],
-                doppler_spreads=[conditions.doppler_spread_hz]
+                doppler_shifts=[conditions.doppler_spread_hz],
+                k_factors=[0.0]  # Pure Rayleigh (no LOS)
             )
             return apply_multipath_fading(signal, profile, self.sample_rate)
 
         elif mode == PropagationMode.RICIAN:
-            # Rician fading (dominant path + scattered component)
-            # K-factor determines ratio of LOS to scattered power
-            k_linear = 10 ** (conditions.rician_k_factor / 10)
-            los_power = k_linear / (k_linear + 1)
-            scattered_power = 1 / (k_linear + 1)
-
+            # Rician fading (dominant LOS path)
+            # Use single path with Rician K-factor
             profile = MultipathProfile(
-                delays=[0.0, 0.0],  # Both at same delay (LOS + scatter)
-                powers=[los_power, scattered_power],
-                doppler_spreads=[0.0, conditions.doppler_spread_hz]  # LOS stable, scatter fades
+                delays=[0.0],
+                powers=[1.0],
+                doppler_shifts=[conditions.doppler_spread_hz],
+                k_factors=[conditions.rician_k_factor]  # Rician K-factor in dB
             )
             return apply_multipath_fading(signal, profile, self.sample_rate)
 
