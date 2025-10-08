@@ -76,6 +76,7 @@ class KernelParameters:
     frequency_triple: int  # 0-42 (3-FSK: 3 adjacent channels)
     modulation: str  # 'BPSK', 'QPSK', '8-PSK', '16-APSK'
     polar_rate: Tuple[int, int]  # (k, n) e.g., (2, 3)
+    data_symbol_rate: int  # 75, 100, 125, 150, 175, 200, 250, 300 sym/s
 
 
 @dataclass
@@ -113,7 +114,7 @@ class SignalGenerator:
     # CASCADE V2 constants
     SAMPLE_RATE = 48000  # Hz
     PATTERN_SYMBOL_RATE = 25  # Pattern layer symbols/second (optimized for low power)
-    DATA_SYMBOL_RATE = 200  # Data layer symbols/second (variable based on SNR)
+    VALID_DATA_SYMBOL_RATES = [75, 100, 125, 150, 175, 200, 250, 300]  # sym/s (from kernel)
     MIN_FREQ = 300  # Hz (140 Hz guard band on right: 2860-3000 Hz)
     MAX_FREQ = 2860  # Hz (usable bandwidth: 300-2860 Hz = 2.56 kHz)
     TONE_SPACING = 20  # Hz
@@ -139,7 +140,8 @@ class SignalGenerator:
             print(f"Warning: Could not pre-load patterns: {e}")
 
     def validate_parameters(self, pattern_id: int, frequency_triple: int,
-                           modulation_scheme: str, polar_rate: Tuple[int, int]) -> None:
+                           modulation_scheme: str, polar_rate: Tuple[int, int],
+                           data_symbol_rate: int) -> None:
         """Validate kernel parameters.
 
         Args:
@@ -147,6 +149,7 @@ class SignalGenerator:
             frequency_triple: Frequency triple index (0-42)
             modulation_scheme: Modulation type
             polar_rate: Polar code rate (k, n)
+            data_symbol_rate: Data layer symbol rate (75-300 sym/s)
 
         Raises:
             ValueError: If any parameter is invalid
@@ -160,6 +163,11 @@ class SignalGenerator:
         if modulation_scheme not in ['BPSK', 'QPSK', '8-PSK', '16-APSK']:
             raise ValueError(
                 f"modulation must be BPSK/QPSK/8-PSK/16-APSK, got {modulation_scheme}"
+            )
+
+        if data_symbol_rate not in self.VALID_DATA_SYMBOL_RATES:
+            raise ValueError(
+                f"data_symbol_rate must be one of {self.VALID_DATA_SYMBOL_RATES}, got {data_symbol_rate}"
             )
 
         polar_codec.validate_rate(polar_rate[0], polar_rate[1])
@@ -271,14 +279,16 @@ class SignalGenerator:
 
     def generate(self, pattern_id: int, frequency_triple: int,
                 modulation_scheme: str, polar_rate: Tuple[int, int],
-                message: bytes, seed: Optional[int] = None) -> Tuple[CleanIQSignal, Dict]:
+                data_symbol_rate: int, message: bytes,
+                seed: Optional[int] = None) -> Tuple[CleanIQSignal, Dict]:
         """Generate clean CASCADE V2 signal with 3-FSK modulation.
 
         Args:
-            pattern_id: Pattern ID (0-7)
+            pattern_id: Pattern ID (0-3, 4 patterns)
             frequency_triple: Frequency triple (0-42)
             modulation_scheme: 'BPSK', 'QPSK', '8-PSK', or '16-APSK'
             polar_rate: Polar code rate (k, n)
+            data_symbol_rate: Data layer symbol rate (75, 100, 125, 150, 175, 200, 250, 300 sym/s)
             message: Message bytes to transmit
             seed: Random seed for deterministic generation
 
@@ -287,10 +297,12 @@ class SignalGenerator:
 
         Example:
             >>> gen = SignalGenerator()
-            >>> params = (3, 21, 'QPSK', (2, 3))
-            >>> signal, metadata = gen.generate(*params, b"Hello CASCADE", seed=42)
+            >>> signal, metadata = gen.generate(
+            ...     pattern_id=3, frequency_triple=21, modulation_scheme='QPSK',
+            ...     polar_rate=(2, 3), data_symbol_rate=150, message=b"Hello CASCADE", seed=42
+            ... )
             >>> signal.iq_samples.shape
-            (349440,)  # 512 symbols × 640 samples/symbol (pattern) + ramps
+            (349440,)  # Pattern @ 25 sym/s + data @ 150 sym/s
             >>> signal.has_carrier_ramps
             True
         """
@@ -298,7 +310,8 @@ class SignalGenerator:
             np.random.seed(seed)
 
         # Validate parameters
-        self.validate_parameters(pattern_id, frequency_triple, modulation_scheme, polar_rate)
+        self.validate_parameters(pattern_id, frequency_triple, modulation_scheme,
+                                polar_rate, data_symbol_rate)
 
         # Convert message to bits
         message_bytes = np.frombuffer(message, dtype=np.uint8)
@@ -360,8 +373,8 @@ class SignalGenerator:
         # Apply carrier ramps (preamble/postamble for spectral containment)
         gmsk_signal = apply_carrier_ramps(gmsk_signal, self.RAMP_DURATION_MS, self.SAMPLE_RATE)
 
-        # Apply raised cosine pulse shaping to data symbols (data layer at 200 sym/s)
-        samples_per_data_symbol = self.SAMPLE_RATE // self.DATA_SYMBOL_RATE
+        # Apply raised cosine pulse shaping to data symbols (data layer at variable rate from kernel)
+        samples_per_data_symbol = self.SAMPLE_RATE // data_symbol_rate
 
         # Upsample data symbols with raised cosine filtering
         data_upsampled = np.zeros(len(gmsk_signal), dtype=np.complex64)
@@ -399,7 +412,7 @@ class SignalGenerator:
             iq_samples=iq_signal.astype(np.complex64),
             sample_rate=self.SAMPLE_RATE,
             pattern_symbol_rate=self.PATTERN_SYMBOL_RATE,
-            data_symbol_rate=self.DATA_SYMBOL_RATE,
+            data_symbol_rate=data_symbol_rate,  # From kernel parameter
             pattern_length=pattern_length,
             kernel_params=kernel_params,
             tone_a_hz=tone_a,
@@ -444,6 +457,7 @@ class SignalGenerator:
             kernel_params.frequency_triple,
             kernel_params.modulation,
             kernel_params.polar_rate,
+            kernel_params.data_symbol_rate,
             message,
             seed
         )
