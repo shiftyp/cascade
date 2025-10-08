@@ -34,12 +34,12 @@ CASCADE (Coordinated Adaptive Signaling with Collision Avoidance and Distributed
 - Adaptive modulation based on SNR
 
 **Frequency Organization (3-FSK):**
-- 120 usable channels (300-2680 Hz, 20 Hz spacing)
-- 300 Hz guard band on right (2680-3000 Hz reserved)
-- Organized into **40 frequency triples** (120 ÷ 3)
+- 129 usable channels (300-2860 Hz, 20 Hz spacing)
+- 140 Hz guard band on right (2860-3000 Hz reserved)
+- Organized into **43 frequency triples** (129 ÷ 3)
 - Triple 0: Channels 0-2 (300, 320, 340 Hz)
-- Triple 19: Channels 57-59 (1440, 1460, 1480 Hz)
-- Triple 39: Channels 117-119 (2640, 2660, 2680 Hz)
+- Triple 21: Channels 63-65 (1560, 1580, 1600 Hz)
+- Triple 42: Channels 126-128 (2820, 2840, 2860 Hz)
 
 **Why 3-FSK (frequency diversity):**
 - If 1 tone hits fading notch → still have 2 tones (67% energy)
@@ -65,7 +65,7 @@ The kernel is **separate from the message header**. The header is part of the me
 |-------|------|-------|-------------|
 | Protocol version | 6 | 0-63 | Protocol/model version (for future compatibility) |
 | Pattern ID | 3 | 0-7 | Which orthogonal pattern (ternary) |
-| Frequency triple | 6 | 0-39 | Which of 40 frequency triples (3-FSK) |
+| Frequency triple | 6 | 0-42 | Which of 43 frequency triples (3-FSK) |
 | SNR estimate | 8 | -30 to +30 dB | Measured signal quality (offset by 30) |
 | Modulation hint | 3 | 0-7 | BPSK/QPSK/8PSK/16APSK + future |
 | Polar code rate | 3 | 0-7 | FEC rate (1/2, 2/3, 3/4, 5/6, 7/8) |
@@ -232,7 +232,7 @@ The embedding now contains ONLY channel-adaptive parameters that can't be discre
 **Why 8 context signals:**
 - Covers adjacent frequency triples (±3 triples on each side = 7 triples)
 - Includes recent transmissions on same frequency
-- With 40 triples, 8 contexts covers 20% of spectrum neighborhood
+- With 43 triples, 8 contexts covers ~18% of spectrum neighborhood
 - Balances memory/computation with disambiguation capability
 
 ## Training Strategy: Breaking the Circular Dependencies

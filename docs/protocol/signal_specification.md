@@ -50,43 +50,43 @@ for symbol in pattern:
 
 ## Frequency Allocation
 
-### 120-Channel Reference Grid (with Guard Band)
+### 129-Channel Reference Grid (with Guard Band)
 
 **Specification:**
 ```python
-# 120 usable channels
-channels = [300 + i*20 for i in range(120)]
-# [300, 320, 340, ..., 2640, 2660, 2680] Hz
+# 129 usable channels
+channels = [300 + i*20 for i in range(129)]
+# [300, 320, 340, ..., 2820, 2840, 2860] Hz
 
 Spacing: 20 Hz
-Usable bandwidth: 2.38 kHz (300-2680 Hz)
-Guard band: 320 Hz (2680-3000 Hz reserved)
+Usable bandwidth: 2.56 kHz (300-2860 Hz)
+Guard band: 140 Hz (2860-3000 Hz reserved)
 Total bandwidth: 2.7 kHz (standard SSB)
 ```
 
-### 40 Frequency Triples (3-FSK)
+### 43 Frequency Triples (3-FSK)
 
 **Non-overlapping triples:**
 ```python
-triples = [(i*3, i*3+1, i*3+2) for i in range(40)]
+triples = [(i*3, i*3+1, i*3+2) for i in range(43)]
 
 # Examples:
 Triple 0:  Channels 0-2   (300-320-340 Hz)
 Triple 1:  Channels 3-5   (360-380-400 Hz)
-Triple 19: Channels 57-59 (1440-1460-1480 Hz)
+Triple 21: Channels 63-65 (1560-1580-1600 Hz)
 ...
-Triple 39: Channels 117-119 (2640-2660-2680 Hz)
+Triple 42: Channels 126-128 (2820-2840-2860 Hz)
 ```
 
 **Logical channels:**
 ```
-8 patterns × 40 frequency triples = 320 total logical channels
+8 patterns × 43 frequency triples = 344 total logical channels
 ```
 
 **Multi-user access:**
-- All users share 2.38 kHz usable bandwidth
+- All users share 2.56 kHz usable bandwidth
 - Separated by: pattern orthogonality + frequency triples + time offset
-- Supports **40 concurrent users** (vs 67 with 2-FSK)
+- Supports **43 concurrent users** (vs 67 with 2-FSK)
 - **+18% network throughput** due to better FEC efficiency (rate-7/8 vs rate-1/2)
 
 **Why 3-FSK wins:**
