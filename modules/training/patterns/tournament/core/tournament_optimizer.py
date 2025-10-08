@@ -196,14 +196,16 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                     population = checkpoint['population']
                     fitness_scores = checkpoint.get('fitness_scores', [])
                     repetition_map = checkpoint.get('repetition_map')
-                    pattern_set = checkpoint['pattern_set']
+                    # Deep copy pattern_set to prevent mutation issues
+                    pattern_set = [p.copy() for p in checkpoint['pattern_set']]
                     start_iteration = checkpoint['iteration']
                     best_score = checkpoint['best_score']
                     score_history = checkpoint['score_history']
                     # Will continue below with GA initialization
                 else:
                     # Old format - convert to GA
-                    pattern_set = checkpoint['pattern_set']
+                    # Deep copy pattern_set to prevent mutation issues
+                    pattern_set = [p.copy() for p in checkpoint['pattern_set']]
                     start_iteration = checkpoint['iteration']
                     best_score = checkpoint['best_score']
                     score_history = checkpoint['score_history']
@@ -633,7 +635,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             fitness_scores.sort(key=lambda x: x[0])
             best_score = fitness_scores[0][0]
             best_set_idx = fitness_scores[0][1]
-            pattern_set = population[best_set_idx]  # Track best for checkpointing
+            # IMPORTANT: Deep copy to avoid mutation when population evolves
+            pattern_set = [p.copy() for p in population[best_set_idx]]
             score_history = [best_score]
             start_iteration = 0
 
@@ -748,7 +751,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 if current_best < best_score:
                     best_score = current_best
                     best_set_idx = fitness_scores[0][1]
-                    pattern_set = population[best_set_idx]
+                    # IMPORTANT: Deep copy to avoid mutation when population evolves
+                    pattern_set = [p.copy() for p in population[best_set_idx]]
             # On sampled evals, keep historical best_score and pattern_set unchanged
 
             score_history.append(best_score)
