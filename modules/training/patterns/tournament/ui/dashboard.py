@@ -124,7 +124,7 @@ class PatternGeneratorDashboard:
         table.add_column("Status", width=7, justify="center")
         table.add_column("Core", width=5, justify="center")
         table.add_column("Gen/Iter", justify="right", width=11)
-        table.add_column("Win(S/M/L/F)", justify="center", width=20)  # Window orthogonality (Small/Med/Large/Full)
+        table.add_column("Weighted", justify="center", width=9)  # Weighted score (what's being optimized)
         table.add_column("Progress", width=16)
         table.add_column("ETA", width=7, justify="center")
 
@@ -151,42 +151,18 @@ class PatternGeneratorDashboard:
                 else:
                     gen_iter_display = f"{trial.iterations:,}"
 
-                # Window orthogonality (Small/Medium/Large/Full)
-                if hasattr(trial, 'window_metrics') and trial.window_metrics:
-                    # Get window sizes (should be sorted largest to smallest)
-                    window_sizes = sorted(trial.window_metrics.keys(), reverse=True)
-                    if len(window_sizes) >= 3:
-                        # Large (25%), Medium (12.5%), Small (6.25%)
-                        large_ws = window_sizes[0]
-                        med_ws = window_sizes[1]
-                        small_ws = window_sizes[2]
-
-                        # Get worst (max of normal and flip) for each window
-                        small_worst = max(trial.window_metrics[small_ws]['normal'],
-                                         trial.window_metrics[small_ws]['flip'])
-                        med_worst = max(trial.window_metrics[med_ws]['normal'],
-                                       trial.window_metrics[med_ws]['flip'])
-                        large_worst = max(trial.window_metrics[large_ws]['normal'],
-                                         trial.window_metrics[large_ws]['flip'])
-
-                        # Get full pattern orthogonality
-                        if hasattr(trial, 'global_metrics') and trial.global_metrics:
-                            full_worst = max(trial.global_metrics['normal'],
-                                           trial.global_metrics['flip'])
-                            window_display = f"{small_worst:.1f}/{med_worst:.1f}/{large_worst:.1f}/{full_worst:.1f}"
-                        else:
-                            window_display = f"{small_worst:.1f}/{med_worst:.1f}/{large_worst:.1f}/-"
-                    else:
-                        window_display = "-"
+                # Weighted score (what's being optimized)
+                if hasattr(trial, 'weighted_score') and trial.weighted_score is not None:
+                    weighted_display = f"{trial.weighted_score:.1f} dB"
                 else:
-                    window_display = "-"
+                    weighted_display = "-"
 
                 table.add_row(
                     str(trial.trial_id),
                     status_display,
                     core_display,
                     gen_iter_display,
-                    window_display,
+                    weighted_display,
                     progress_bar,
                     trial.eta,
                     style=row_style

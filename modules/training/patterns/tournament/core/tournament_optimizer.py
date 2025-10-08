@@ -963,6 +963,13 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         iterations_done = current_iteration - start_iteration
         avg_speed = iterations_done / total_elapsed if total_elapsed > 0 else float('inf')
 
+        # Calculate final detailed metrics for return to main process
+        try:
+            best_set_cores = population[fitness_scores[0][1]]
+            _, final_detailed_metrics = evaluate_fitness(best_set_cores, use_sampling=False, return_details=True)
+        except:
+            final_detailed_metrics = None
+
         with open(debug_file_path, 'a') as f:
             f.write(f"\n=== WORKER COMPLETE ===\n")
             f.write(f"Final iteration: {current_iteration}\n")
@@ -977,8 +984,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             f.write(f"Patterns saved to: {final_patterns_file}\n")
             f.flush()
 
-        # Return results
-        return {
+        # Return results with final metrics
+        result = {
             'trial_id': trial_id,
             'iterations_run': current_iteration - start_iteration,
             'best_score': best_score,
@@ -987,6 +994,15 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             'score_history': score_history[-100:],  # Last 100 scores
             'patterns_file': str(final_patterns_file)
         }
+
+        # Include metrics if available
+        if final_detailed_metrics:
+            result['window_metrics'] = final_detailed_metrics['window_metrics']
+            result['global_metrics'] = final_detailed_metrics['global_metrics']
+            result['erasure_metrics'] = final_detailed_metrics['erasure']
+            result['weighted_score'] = final_detailed_metrics.get('weighted_score', best_score)
+
+        return result
 
     except Exception as e:
         # Log error to file for debugging
@@ -1491,6 +1507,16 @@ class DynamicTournamentOptimizer:
         # Store patterns file path if available
         if 'patterns_file' in result:
             trial.patterns_file = result['patterns_file']
+
+        # Store metrics for UI display
+        if 'window_metrics' in result:
+            trial.window_metrics = result['window_metrics']
+        if 'global_metrics' in result:
+            trial.global_metrics = result['global_metrics']
+        if 'erasure_metrics' in result:
+            trial.erasure_metrics = result['erasure_metrics']
+        if 'weighted_score' in result:
+            trial.weighted_score = result['weighted_score']
 
         # Update trial status based on generation completion
         total_gens = trial.target_generations
