@@ -10,6 +10,10 @@ import torch
 from torch.utils.data import Dataset
 from typing import Optional, Tuple, Dict, List
 from dataclasses import dataclass
+import h5py
+import os
+from pathlib import Path
+from tqdm import tqdm
 
 from physics_coupling import (
     CorePhysicalDrivers, CoupledPhysicsCalculator,
@@ -64,7 +68,10 @@ class PhysicsConstrainedDataset(Dataset):
         for_test: bool = False,
         seed: Optional[int] = None,
         enable_real_signal_augmentation: bool = False,
-        real_signal_path: Optional[str] = None
+        real_signal_path: Optional[str] = None,
+        cache_dir: Optional[str] = None,
+        use_cache: bool = True,
+        regenerate_cache: bool = False
     ):
         """
         Initialize physics-constrained dataset.
@@ -77,6 +84,9 @@ class PhysicsConstrainedDataset(Dataset):
             seed: Random seed for reproducibility
             enable_real_signal_augmentation: Apply physics to real HF recordings
             real_signal_path: Path to real signal recordings (.npz or .wav)
+            cache_dir: Directory to store cached signals (default: ./dataset_cache)
+            use_cache: If True, use cached signals if available
+            regenerate_cache: If True, regenerate cache even if it exists
         """
         self.num_samples = num_samples
         self.signal_generator = signal_generator
@@ -85,12 +95,22 @@ class PhysicsConstrainedDataset(Dataset):
         self.seed = seed
         self.enable_real_signal_augmentation = enable_real_signal_augmentation
         self.real_signal_path = real_signal_path
+        self.use_cache = use_cache
+
+        # Cache configuration
+        if cache_dir is None:
+            cache_dir = './dataset_cache'
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        cache_name = f"physics_dataset_n{num_samples}_sr{sample_rate}_{'test' if for_test else 'train'}_seed{seed}.h5"
+        self.cache_path = self.cache_dir / cache_name
 
         # Initialize scenario library and physics calculator
         self.scenario_library = ScenarioLibrary()
         self.physics_calc = CoupledPhysicsCalculator(seed=seed)
 
-        # Pre-generate scenario parameters (but not signals - on-the-fly)
+        # Pre-generate scenario parameters
         print(f"Generating {num_samples} physics-coupled scenario parameters...")
         self.scenario_drivers = self.scenario_library.generate_balanced_realistic_batch(
             batch_size=num_samples,
@@ -102,6 +122,18 @@ class PhysicsConstrainedDataset(Dataset):
         self.real_signals = None
         if enable_real_signal_augmentation and real_signal_path:
             self.real_signals = self._load_real_signals(real_signal_path)
+
+        # Handle caching
+        self.cached_data = None
+        if use_cache:
+            if self.cache_path.exists() and not regenerate_cache:
+                print(f"Loading cached dataset from {self.cache_path}...")
+                self._load_cache()
+            else:
+                print(f"Generating and caching {num_samples} signals to {self.cache_path}...")
+                self._generate_and_cache()
+        else:
+            print("Cache disabled - signals will be generated on-the-fly (SLOW)")
 
         print(f"✓ PhysicsConstrainedDataset initialized: {num_samples} samples")
         self._print_distribution_stats()
@@ -172,72 +204,151 @@ class PhysicsConstrainedDataset(Dataset):
             print(f"  {qrn}: {count}%")
         print("="*60 + "\n")
 
+    def _generate_and_cache(self):
+        """Generate all signals and cache to disk."""
+        # Create HDF5 file
+        with h5py.File(self.cache_path, 'w') as f:
+            # Pre-allocate datasets (we'll determine max signal length from first sample)
+            # Generate first sample to get dimensions
+            drivers = self.scenario_drivers[0]
+            conditions = self.physics_calc.calculate_all_effects(drivers)
+            _, clean_signal, _, _ = self._generate_clean_signal(drivers.frequency_mhz)
+            received_signal = self._apply_channel_effects(clean_signal, drivers, conditions)
+
+            max_signal_len = len(received_signal)
+
+            # Create datasets
+            signals_ds = f.create_dataset('signals', shape=(self.num_samples, max_signal_len),
+                                         dtype=np.complex64, compression='gzip')
+            snr_ds = f.create_dataset('snr_db', shape=(self.num_samples,), dtype=np.float32)
+            pattern_ids = f.create_dataset('pattern_ids', shape=(self.num_samples,), dtype=np.int16)
+            freq_triples = f.create_dataset('frequency_triples', shape=(self.num_samples,), dtype=np.int16)
+
+            # Store first sample
+            signals_ds[0] = received_signal[:max_signal_len]  # Truncate/pad if needed
+            snr_ds[0] = conditions.effective_snr_db
+            pattern_ids[0] = 0  # Will be updated
+            freq_triples[0] = 0  # Will be updated
+
+            # Generate remaining samples
+            for idx in tqdm(range(self.num_samples), desc="Caching signals"):
+                drivers = self.scenario_drivers[idx]
+                conditions = self.physics_calc.calculate_all_effects(drivers)
+
+                message_bits, clean_signal, pattern_id, frequency_triple = self._generate_clean_signal(drivers.frequency_mhz)
+                received_signal = self._apply_channel_effects(clean_signal, drivers, conditions)
+
+                # Store (pad/truncate to max_signal_len)
+                sig_len = min(len(received_signal), max_signal_len)
+                signals_ds[idx, :sig_len] = received_signal[:sig_len]
+                snr_ds[idx] = conditions.effective_snr_db
+                pattern_ids[idx] = pattern_id
+                freq_triples[idx] = frequency_triple
+
+            # Store metadata
+            f.attrs['num_samples'] = self.num_samples
+            f.attrs['sample_rate'] = self.sample_rate
+            f.attrs['for_test'] = self.for_test
+            f.attrs['seed'] = self.seed if self.seed is not None else -1
+
+        # Load the cache into memory
+        self._load_cache()
+
+        print(f"✓ Cache generated and saved to {self.cache_path}")
+
+    def _load_cache(self):
+        """Load cached signals into memory."""
+        with h5py.File(self.cache_path, 'r') as f:
+            # Load all data into memory for fast access
+            self.cached_data = {
+                'signals': f['signals'][:],
+                'snr_db': f['snr_db'][:],
+                'pattern_ids': f['pattern_ids'][:],
+                'frequency_triples': f['frequency_triples'][:]
+            }
+
+        print(f"✓ Loaded {len(self.cached_data['signals'])} cached signals into memory")
+
     def __len__(self) -> int:
         return self.num_samples
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Dict]:
         """
-        Generate a single training sample with physics-coupled channel effects.
+        Get a single training sample.
 
         Returns:
             received_iq: Torch tensor of received I/Q samples [2, num_samples]
             labels: Dictionary with ground truth and metadata
         """
-        # Get pre-generated scenario parameters
-        drivers = self.scenario_drivers[idx]
+        # Use cached data if available
+        if self.cached_data is not None:
+            # Load from cache (FAST)
+            received_signal = self.cached_data['signals'][idx]
+            snr_db = float(self.cached_data['snr_db'][idx])
+            pattern_id = int(self.cached_data['pattern_ids'][idx])
+            frequency_triple = int(self.cached_data['frequency_triples'][idx])
 
-        # Calculate all coupled effects
-        conditions = self.physics_calc.calculate_all_effects(drivers)
+            # Get scenario parameters
+            drivers = self.scenario_drivers[idx]
+            conditions = self.physics_calc.calculate_all_effects(drivers)
 
-        # Generate clean signal OR use real signal
-        if self.enable_real_signal_augmentation and self.real_signals is not None:
-            # Use real signal and apply physics-based propagation
-            clean_signal = self._get_random_real_signal()
-            message_bits = None  # Unknown for real signals
-            pattern_id = None
-            frequency_triple = None
+            # Convert complex signal to I/Q tensor shape (2, num_samples)
+            iq_i = np.real(received_signal).astype(np.float32)
+            iq_q = np.imag(received_signal).astype(np.float32)
+            received_iq = torch.from_numpy(np.stack([iq_i, iq_q], axis=0))
+
+            labels = {
+                'pattern_id': pattern_id,
+                'frequency_triple': frequency_triple,
+                'snr_db': snr_db,
+                'sfi': drivers.sfi,
+                'k_index': drivers.k_index,
+                'frequency_mhz': drivers.frequency_mhz,
+                'sample_idx': idx
+            }
+
         else:
-            # Generate synthetic signal
-            message_bits, clean_signal, pattern_id, frequency_triple = self._generate_clean_signal(
-                drivers.frequency_mhz
-            )
+            # Generate on-the-fly (SLOW - only if cache disabled)
+            drivers = self.scenario_drivers[idx]
+            conditions = self.physics_calc.calculate_all_effects(drivers)
 
-        # Apply physics-coupled channel effects
-        received_signal = self._apply_channel_effects(
-            clean_signal, drivers, conditions
-        )
+            if self.enable_real_signal_augmentation and self.real_signals is not None:
+                clean_signal = self._get_random_real_signal()
+                message_bits = None
+                pattern_id = None
+                frequency_triple = None
+            else:
+                message_bits, clean_signal, pattern_id, frequency_triple = self._generate_clean_signal(
+                    drivers.frequency_mhz
+                )
 
-        # Convert to torch tensor
-        received_iq = torch.from_numpy(received_signal).float()
+            received_signal = self._apply_channel_effects(clean_signal, drivers, conditions)
 
-        # Create labels dictionary
-        labels = {
-            # Ground truth (for synthetic signals)
-            'message_bits': message_bits,
-            'pattern_id': pattern_id,
-            'frequency_triple': frequency_triple,
-            'snr_db': conditions.effective_snr_db,
+            # Convert to I/Q tensor
+            iq_i = np.real(received_signal).astype(np.float32)
+            iq_q = np.imag(received_signal).astype(np.float32)
+            received_iq = torch.from_numpy(np.stack([iq_i, iq_q], axis=0))
 
-            # Physical state (for analysis/debugging)
-            'sfi': drivers.sfi,
-            'k_index': drivers.k_index,
-            'frequency_mhz': drivers.frequency_mhz,
-            'utc_hour': drivers.utc_hour,
-            'latitude': drivers.latitude,
-            'thunderstorm_activity': drivers.thunderstorm_activity,
-
-            # Derived conditions
-            'propagation_mode': conditions.propagation_mode.value,
-            'dominant_qrn_type': conditions.dominant_qrn_type.value,
-            'muf_mhz': conditions.muf_mhz,
-            'd_layer_absorption_db': conditions.d_layer_absorption_db,
-            'delay_spread_ms': conditions.multipath_delay_spread_ms,
-            'doppler_spread_hz': conditions.doppler_spread_hz,
-
-            # Metadata
-            'is_real_signal': self.enable_real_signal_augmentation and self.real_signals is not None,
-            'sample_idx': idx
-        }
+            labels = {
+                'message_bits': message_bits,
+                'pattern_id': pattern_id,
+                'frequency_triple': frequency_triple,
+                'snr_db': conditions.effective_snr_db,
+                'sfi': drivers.sfi,
+                'k_index': drivers.k_index,
+                'frequency_mhz': drivers.frequency_mhz,
+                'utc_hour': drivers.utc_hour,
+                'latitude': drivers.latitude,
+                'thunderstorm_activity': drivers.thunderstorm_activity,
+                'propagation_mode': conditions.propagation_mode.value,
+                'dominant_qrn_type': conditions.dominant_qrn_type.value,
+                'muf_mhz': conditions.muf_mhz,
+                'd_layer_absorption_db': conditions.d_layer_absorption_db,
+                'delay_spread_ms': conditions.multipath_delay_spread_ms,
+                'doppler_spread_hz': conditions.doppler_spread_hz,
+                'is_real_signal': self.enable_real_signal_augmentation and self.real_signals is not None,
+                'sample_idx': idx
+            }
 
         return received_iq, labels
 
