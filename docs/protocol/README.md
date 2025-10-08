@@ -98,7 +98,35 @@ Total: 4 bytes = 32 bits
 - Duration: 0.64s @ 200 sym/s
 - Fast acknowledgment
 
-### 4. Message (User Data)
+### 4. QSY (Frequency Change Request)
+
+**Purpose:** Request kernel change due to collision
+
+**When sent:**
+- RX detects conflict in 8 closest context signals
+- Alternative to rejecting RTS outright
+- Proactive collision avoidance
+
+**Payload:**
+```python
+{
+    'rx_kernel': 28 bytes,        # Latest RX kernel from beacon
+    'reason': 1 byte              # Collision/QRM/preference
+}
+Total: 29 bytes = 232 bits
+```
+
+**Transmission:**
+- Pattern: 256 symbols @ BPSK
+- Duration: 1.28s @ 200 sym/s
+- Sent in response to RTS
+
+**TX response:**
+- Extract RX kernel from QSY
+- Retransmit RTS with RX kernel parameters
+- Wait for CTS confirmation
+
+### 5. Message (User Data)
 
 **Purpose:** Transmit user content
 
@@ -246,9 +274,51 @@ Station B wants to TX to Station A:
 ```
 
 **If collision detected:**
+
+**Option 1: QSY (Frequency change request)**
+- RX detects conflict in 8 closest context signals
+- RX sends QSY with its latest RX kernel
+- TX retransmits RTS using RX kernel parameters
+- RX confirms with CTS
+- Data exchange proceeds on new channel
+
+**Option 2: Backoff/retry**
 - CTS not received → random backoff (0.5-2s)
 - Retry with exponential backoff
 - Maximum 3 retries before giving up
+
+**QSY mechanism:**
+```python
+# RX monitors 8 closest context signals during RTS reception
+def handle_rts(incoming_rts, context_signals):
+    # Check if conflicting station in 8 closest
+    if collision_detected_in_8_closest(incoming_rts, context_signals):
+        # Send QSY with latest RX kernel (from beacon)
+        send_qsy(self.latest_rx_kernel)
+        return
+
+    # No conflict → send CTS
+    send_cts()
+
+# TX receives QSY
+def handle_qsy(qsy_message):
+    # Extract RX kernel from QSY
+    rx_kernel = qsy_message.rx_kernel
+
+    # Retransmit RTS using RX's preferred parameters
+    send_rts(
+        pattern_id=rx_kernel.pattern_id,
+        frequency_triple=rx_kernel.frequency_triple,
+        modulation=rx_kernel.modulation,
+        # ... other RX kernel params
+    )
+```
+
+**Why QSY uses RX kernel:**
+- Already optimized for RX station's conditions
+- No calculation needed (just reuse from beacon)
+- Natural load balancing across RX's preferred channels
+- Minimizes protocol overhead
 
 ### TX Kernel Anti-Collision
 

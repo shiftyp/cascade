@@ -232,6 +232,63 @@ T=6-15s: See B's TX kernel
          No collisions!
 ```
 
+### Collision Scenario with QSY
+
+**Station B and C both trying to contact A:**
+```
+T=0s:  Station A beacons RX kernel
+       {pattern: 3, freq: 25, mod: QPSK, polar: 3/4, embedding: [...]}
+
+T=5s:  Station C sends RTS to A
+       {pattern: 3, freq: 25} - uses A's RX kernel
+       512s @ BPSK = 2.05s
+
+T=6s:  Station B sends RTS to A (doesn't hear C)
+       {pattern: 3, freq: 25} - same as C!
+       COLLISION IMMINENT
+
+T=7s:  Station A receives both RTS
+       Decodes B's RTS clearly (arrived later, stronger)
+       Detects C's RTS in 8 closest context signals
+       CONFLICT DETECTED on pattern 3, freq 25
+
+T=8s:  Station A sends QSY to B
+       {rx_kernel: latest (pattern: 3, freq: 25), reason: collision}
+       256s @ BPSK = 1.28s
+       Tells B: "Conflict detected, use my RX kernel as-is or pick alternative"
+
+T=9s:  Station B receives QSY
+       Extracts RX kernel from QSY
+       Waits 500ms (collision avoidance backoff)
+
+T=10s: Station B retransmits RTS with alternative
+       {pattern: 4, freq: 25} - different pattern, same freq triple
+       512s @ BPSK = 2.05s
+
+T=12s: Station A sends CTS to B
+       {session_id: XYZ, status: OK}
+       128s @ BPSK = 0.51s
+       No conflict now!
+
+T=13s: Station B transmits message
+       {pattern: 4, freq: 25, QPSK}
+       No collision with C's transmission
+
+T=7.5s: (Meanwhile) Station A sends CTS to C
+        {session_id: ABC, status: OK}
+        Different session, pattern 3, freq: 25
+
+T=8s:   Station C transmits message
+        {pattern: 3, freq: 25, QPSK}
+        Overlaps with B's QSY reception but different pattern!
+```
+
+**Result:**
+- Both B and C complete successfully
+- QSY avoided collision by separating patterns
+- ~1.3s overhead for collision resolution
+- Better than exponential backoff (would be 0.5-2s + retry)
+
 ---
 
 ## Kernel Coordination

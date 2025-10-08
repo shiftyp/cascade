@@ -235,6 +235,48 @@ The embedding now contains ONLY channel-adaptive parameters that can't be discre
 - With 43 triples, 8 contexts covers ~18% of spectrum neighborhood
 - Balances memory/computation with disambiguation capability
 
+## Protocol Layer: RTS/CTS/QSY Collision Avoidance
+
+**RTS/CTS Exchange:**
+1. **TX sends RTS** (Request-to-Send) with proposed kernel
+2. **RX monitors 8 closest context signals** for conflicts
+3. **Collision detection:** If RX hears conflicting RTS on same channel (pattern/frequency)
+4. **QSY response:** RX sends QSY (frequency change request) with alternative kernel
+5. **New RTS/CTS:** TX retransmits RTS with updated kernel, RX confirms with CTS
+6. **Data transmission:** Proceeds on collision-free channel
+
+**Conflict determination (protocol layer):**
+- Examines 8 closest context signals (by frequency/time/pattern/SNR proximity)
+- Detects if another station is using same pattern + frequency triple
+- Calculates collision probability based on timing overlap
+- If risk exceeds threshold → issue QSY with alternative parameters
+
+**QSY kernel negotiation:**
+```python
+# RX detects collision from context signals
+if collision_detected_in_8_closest(incoming_rts, context_signals):
+    # Send QSY with latest RX kernel (already advertised in beacon)
+    # This tells TX: "Use MY preferred parameters instead"
+    send_qsy(self.latest_rx_kernel)
+
+    # TX receives QSY with RX's preferred kernel
+    # TX retransmits RTS using RX kernel parameters
+    # RX confirms with CTS
+    # Data exchange proceeds on collision-free channel
+```
+
+**Why use RX kernel:**
+- RX kernel already optimized for RX station's channel conditions
+- Avoids need to calculate new parameters on-the-fly
+- TX already has this kernel from beacon (or can extract from QSY)
+- Natural load balancing (RX spreads traffic across its preferred channels)
+
+**Benefits:**
+- Proactive collision avoidance (before data transmission)
+- Minimal overhead (QSY only sent when conflict detected)
+- Uses existing 8-context network awareness
+- Preserves spectrum efficiency (avoids wasted transmissions)
+
 ## Training Strategy: Breaking the Circular Dependencies
 
 ### Problem Statement
