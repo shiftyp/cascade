@@ -772,11 +772,11 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
                 eval_type = "FULL" if (current_generation % 10 == 0) else "sampled(30)"
 
-                # Get detailed metrics for best pattern (every 100 generations)
+                # Get detailed metrics for historically best pattern (every 100 generations)
                 detailed_metrics = None
                 if current_generation % 100 == 0:
-                    best_set_cores = population[fitness_scores[0][1]]
-                    _, detailed_metrics = evaluate_fitness(best_set_cores, use_sampling=False, return_details=True)
+                    # Use pattern_set (historically best) for consistent tracking
+                    _, detailed_metrics = evaluate_fitness(pattern_set, use_sampling=False, return_details=True)
 
                 with open(debug_file_path, 'a') as f:
                     f.write(f"Generation {current_generation}/{total_generations} [{eval_type}]:\n")
@@ -806,10 +806,10 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
             # Save checkpoint every 100 iterations for live updates (skip iteration 0)
             if (current_iteration > 0 and current_iteration % 100 == 0) or current_generation >= total_generations:
-                # Get detailed metrics for checkpoint
+                # Get detailed metrics for checkpoint (use historically best pattern_set)
                 try:
-                    best_set_cores = population[fitness_scores[0][1]]
-                    _, detailed_metrics = evaluate_fitness(best_set_cores, use_sampling=False, return_details=True)
+                    # Use pattern_set which is the historically best (never gets worse)
+                    _, detailed_metrics = evaluate_fitness(pattern_set, use_sampling=False, return_details=True)
 
                     checkpoint = {
                         'pattern_set': pattern_set,  # Best pattern set (128-bit cores)
@@ -964,9 +964,9 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
         avg_speed = iterations_done / total_elapsed if total_elapsed > 0 else float('inf')
 
         # Calculate final detailed metrics for return to main process
+        # Use pattern_set which is the historically best (never gets worse)
         try:
-            best_set_cores = population[fitness_scores[0][1]]
-            _, final_detailed_metrics = evaluate_fitness(best_set_cores, use_sampling=False, return_details=True)
+            _, final_detailed_metrics = evaluate_fitness(pattern_set, use_sampling=False, return_details=True)
         except:
             final_detailed_metrics = None
 
