@@ -112,14 +112,14 @@ class SignalGenerator:
 
     # CASCADE V2 constants
     SAMPLE_RATE = 48000  # Hz
-    PATTERN_SYMBOL_RATE = 75  # Pattern layer symbols/second (optimized for low power)
+    PATTERN_SYMBOL_RATE = 25  # Pattern layer symbols/second (optimized for low power)
     DATA_SYMBOL_RATE = 200  # Data layer symbols/second (variable based on SNR)
     MIN_FREQ = 300  # Hz (140 Hz guard band on right: 2860-3000 Hz)
     MAX_FREQ = 2860  # Hz (usable bandwidth: 300-2860 Hz = 2.56 kHz)
     TONE_SPACING = 20  # Hz
     NUM_CHANNELS = 129  # 300-2860 Hz in 20 Hz steps
     NUM_FREQUENCY_TRIPLES = 43  # 129 channels / 3 = 43 triples for 3-FSK
-    VALID_PATTERN_LENGTHS = [64, 128, 256, 512, 1024]  # Max 1024, partial patterns supported
+    MAX_PATTERN_LENGTH = 4096  # Maximum pattern length with looping (supports partial < 1024)
     RAMP_DURATION_MS = 15  # Preamble/postamble ramp duration for spectral containment
 
     def __init__(self, patterns_dir: Optional[Path] = None):
@@ -230,29 +230,44 @@ class SignalGenerator:
                                     modulation_scheme: str) -> int:
         """Determine required pattern length for message size.
 
+        Calculates minimum pattern length needed to fit message after Polar encoding.
+        Pattern can loop if needed (up to 4096 symbols).
+
         Args:
             message_bits: Number of data bits to transmit
-            polar_rate: Polar code rate
+            polar_rate: Polar code rate (k, n)
             modulation_scheme: Modulation type
 
         Returns:
-            int: Minimum pattern length (64, 128, 256, 512, 1024, or 2048)
+            int: Minimum pattern length in symbols (rounded up to power of 2 for efficiency)
 
         Raises:
             ValueError: If message too large for maximum pattern length
         """
-        for length in self.VALID_PATTERN_LENGTHS:
-            capacity = self.estimate_message_capacity(length, polar_rate, modulation_scheme)
-            if capacity >= message_bits:
-                return length
+        # Calculate required pattern length
+        bits_per_symbol = modulation.get_bits_per_symbol(modulation_scheme)
+        k, n = polar_rate
 
-        max_capacity = self.estimate_message_capacity(
-            self.VALID_PATTERN_LENGTHS[-1], polar_rate, modulation_scheme
-        )
-        raise ValueError(
-            f"Message ({message_bits} bits) exceeds maximum capacity "
-            f"({max_capacity} bits) for longest pattern"
-        )
+        # After Polar encoding: encoded_bits = message_bits * (n/k)
+        # Pattern needs: pattern_length * bits_per_symbol >= encoded_bits
+        # So: pattern_length >= (message_bits * n/k) / bits_per_symbol
+
+        min_length = int(np.ceil((message_bits * n / k) / bits_per_symbol))
+
+        # Round up to next power of 2 for efficiency (better for FFT, etc.)
+        pattern_length = 2 ** int(np.ceil(np.log2(max(64, min_length))))
+
+        # Check against maximum
+        if pattern_length > self.MAX_PATTERN_LENGTH:
+            max_capacity = self.estimate_message_capacity(
+                self.MAX_PATTERN_LENGTH, polar_rate, modulation_scheme
+            )
+            raise ValueError(
+                f"Message ({message_bits} bits) exceeds maximum capacity "
+                f"({max_capacity} bits) for longest pattern ({self.MAX_PATTERN_LENGTH} symbols)"
+            )
+
+        return pattern_length
 
     def generate(self, pattern_id: int, frequency_triple: int,
                 modulation_scheme: str, polar_rate: Tuple[int, int],
@@ -297,20 +312,25 @@ class SignalGenerator:
         # Load pattern (ternary symbols for 3-FSK)
         pattern_symbols = self.pattern_loader.load_pattern(pattern_id, pattern_length)
 
-        # Encode message with Polar code
-        polar_codeword = polar_codec.encode(message_bits, polar_rate, pattern_length)
-
-        # Modulate data with constellation
+        # Calculate bits per symbol for modulation
         bits_per_symbol = modulation.get_bits_per_symbol(modulation_scheme)
-        if len(polar_codeword) < pattern_length * bits_per_symbol:
-            # Pad to fill pattern
-            padded = np.zeros(pattern_length * bits_per_symbol, dtype=np.uint8)
+
+        # Polar code block length = total bits available in pattern
+        polar_block_length = pattern_length * bits_per_symbol
+
+        # Encode message with Polar code
+        polar_codeword = polar_codec.encode(message_bits, polar_rate, polar_block_length)
+
+        # Pad if needed to fill pattern
+        if len(polar_codeword) < polar_block_length:
+            padded = np.zeros(polar_block_length, dtype=np.uint8)
             padded[:len(polar_codeword)] = polar_codeword
             polar_codeword = padded
 
+        # Modulate data with constellation
         data_symbols = modulation.map_to_constellation(polar_codeword, modulation_scheme)
 
-        # Generate GMSK 3-FSK for pattern layer (75 sym/s, optimized for low power)
+        # Generate GMSK 3-FSK for pattern layer (25 sym/s, optimized for low power)
         tone_a, tone_b, tone_c = self.get_tone_triple_frequencies(frequency_triple)
 
         # Add extra samples for preamble/postamble ramps

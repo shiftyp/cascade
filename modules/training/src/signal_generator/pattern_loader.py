@@ -13,20 +13,20 @@ class PatternLoader:
     """Loads and caches CASCADE V2 patterns from final_patterns_399968.pkl.
 
     Patterns are generated offline by genetic algorithm. The file contains 4 full-length
-    patterns (1024 symbols each). Shorter patterns are extracted as partial patterns
-    (first N symbols of the full pattern).
+    patterns (1024 symbols each). Patterns support both partial extraction and looping.
 
     Pattern structure in final_patterns_399968.pkl:
     - pattern_id: 0-3 (4 patterns, 3-FSK with 3 tones each)
     - Master length: 1024 symbols
-    - Partial patterns: Extract first N symbols for shorter lengths
+    - Partial patterns (< 1024): Extract first N symbols
+    - Looped patterns (> 1024): Repeat pattern (up to 4096 symbols)
     - Format: nested_patterns[1024]['cores'][pattern_id][repetition_map]
 
-    Total: 4 full-length patterns, supporting partial extraction
+    Total: 4 full-length patterns, supporting partial extraction and looping
     """
 
     MASTER_LENGTH = 1024  # Full pattern length
-    VALID_PARTIAL_LENGTHS = [64, 128, 256, 512, 1024]  # Max 1024, no extension beyond
+    MAX_LOOPED_LENGTH = 4096  # Maximum length with looping (4× repetition)
 
     def __init__(self, patterns_dir: Optional[Path] = None):
         """Initialize pattern loader.
@@ -114,15 +114,14 @@ class PatternLoader:
         return pattern_symbols
 
     def load_pattern(self, pattern_id: int, length: int) -> np.ndarray:
-        """Load pattern with requested length (supports partial patterns).
+        """Load pattern with requested length (supports partial patterns and looping).
 
-        Returns first N symbols of the 1024-symbol master pattern.
-        Pattern transmission stops when data transmission ends.
+        For length <= 1024: Returns first N symbols of master pattern
+        For length > 1024: Returns looped pattern (repeats master pattern)
 
         Args:
             pattern_id: Pattern ID (0-3, 4 patterns total)
-            length: Pattern length in symbols (64, 128, 256, 512, 1024)
-                   Maximum 1024 symbols
+            length: Pattern length in symbols (any positive integer up to 4096)
 
         Returns:
             np.ndarray: Pattern symbols, shape (length,), dtype uint8, values {0, 1, 2} for 3-FSK
@@ -135,11 +134,13 @@ class PatternLoader:
         if not (0 <= pattern_id <= 3):
             raise ValueError(f"pattern_id must be 0-3 (4 patterns), got {pattern_id}")
 
-        if length not in self.VALID_PARTIAL_LENGTHS:
-            raise ValueError(f"length must be one of {self.VALID_PARTIAL_LENGTHS}, got {length}")
+        if length <= 0:
+            raise ValueError(f"length must be positive, got {length}")
 
-        if length > self.MASTER_LENGTH:
-            raise ValueError(f"length cannot exceed {self.MASTER_LENGTH}, got {length}")
+        if length > self.MAX_LOOPED_LENGTH:
+            raise ValueError(
+                f"length cannot exceed {self.MAX_LOOPED_LENGTH} (max with looping), got {length}"
+            )
 
         # Check cache first
         cache_key = (pattern_id, length)
@@ -149,8 +150,14 @@ class PatternLoader:
         # Load master pattern (1024 symbols)
         master_pattern = self._load_master_pattern(pattern_id)
 
-        # Extract partial pattern: first N symbols
-        pattern_symbols = master_pattern[:length].copy()
+        # Extract partial or loop pattern
+        if length <= self.MASTER_LENGTH:
+            # Partial pattern: first N symbols
+            pattern_symbols = master_pattern[:length].copy()
+        else:
+            # Looped pattern: tile master pattern to reach desired length
+            num_tiles = (length + self.MASTER_LENGTH - 1) // self.MASTER_LENGTH
+            pattern_symbols = np.tile(master_pattern, num_tiles)[:length]
 
         # Cache and return
         self._cache[cache_key] = pattern_symbols
