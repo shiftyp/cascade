@@ -10,124 +10,173 @@ import numpy as np
 
 
 class PatternLoader:
-    """Loads and caches CASCADE V2 patterns from pickle files.
+    """Loads and caches CASCADE V2 patterns from final_patterns_399968.pkl.
 
-    Patterns are generated offline by genetic algorithm and stored as .pkl files.
-    This class provides efficient loading and caching of pattern data.
+    Patterns are generated offline by genetic algorithm. The file contains 4 full-length
+    patterns (1024 symbols each). Shorter patterns are extracted as partial patterns
+    (first N symbols of the full pattern).
 
-    Pattern file naming: pattern_{pattern_id}_{length}.pkl
-    - pattern_id: 0-7 (8 patterns)
-    - length: 64, 128, 256, 512, 1024, 2048 (6 nested lengths)
+    Pattern structure in final_patterns_399968.pkl:
+    - pattern_id: 0-3 (4 patterns, 3-FSK with 3 tones each)
+    - Master length: 1024 symbols
+    - Partial patterns: Extract first N symbols for shorter lengths
+    - Format: nested_patterns[1024]['cores'][pattern_id][repetition_map]
 
-    Total: 48 pattern files (8 × 6)
+    Total: 4 full-length patterns, supporting partial extraction
     """
+
+    MASTER_LENGTH = 1024  # Full pattern length
+    VALID_PARTIAL_LENGTHS = [64, 128, 256, 512, 1024]  # Max 1024, no extension beyond
 
     def __init__(self, patterns_dir: Optional[Path] = None):
         """Initialize pattern loader.
 
         Args:
-            patterns_dir: Directory containing pattern .pkl files.
-                         Defaults to modules/training/patterns/tournament/
+            patterns_dir: Directory containing final_patterns_399968.pkl.
+                         Defaults to modules/training/patterns/
         """
         if patterns_dir is None:
-            # Default to tournament patterns directory
+            # Default to patterns directory (not tournament subdirectory)
             module_dir = Path(__file__).parent.parent.parent
-            patterns_dir = module_dir / "patterns" / "tournament"
+            patterns_dir = module_dir / "patterns"
 
         self.patterns_dir = Path(patterns_dir)
         self._cache: Dict[Tuple[int, int], np.ndarray] = {}
-        self._loaded_count = 0
+        self._master_patterns: Dict[int, np.ndarray] = {}  # Cache full-length patterns
+        self._final_patterns_data = None  # Lazy load
 
-    def load_pattern(self, pattern_id: int, length: int) -> np.ndarray:
-        """Load a specific pattern by ID and length.
+    def _load_final_patterns(self):
+        """Lazy load final_patterns_399968.pkl file."""
+        if self._final_patterns_data is not None:
+            return
+
+        final_patterns_file = self.patterns_dir / "final_patterns_399968.pkl"
+
+        if not final_patterns_file.exists():
+            raise FileNotFoundError(
+                f"Final patterns file not found: {final_patterns_file}\n"
+                f"Expected location: {self.patterns_dir}\n"
+                f"This file should contain the optimized patterns from the genetic algorithm."
+            )
+
+        with open(final_patterns_file, 'rb') as f:
+            self._final_patterns_data = pickle.load(f)
+
+        print(f"Loaded final patterns: {self._final_patterns_data.get('algorithm', 'unknown')}, "
+              f"{self._final_patterns_data.get('best_score', 0):.2f} dB")
+
+    def _load_master_pattern(self, pattern_id: int) -> np.ndarray:
+        """Load full-length (1024) pattern from file.
 
         Args:
-            pattern_id: Pattern ID (0-7)
-            length: Pattern length in symbols (64, 128, 256, 512, 1024, 2048)
+            pattern_id: Pattern ID (0-3)
+
+        Returns:
+            np.ndarray: Full pattern, shape (1024,), dtype uint8
+        """
+        if pattern_id in self._master_patterns:
+            return self._master_patterns[pattern_id]
+
+        # Load final patterns file if not already loaded
+        self._load_final_patterns()
+
+        # Extract master pattern (length 1024)
+        try:
+            nested_patterns = self._final_patterns_data['nested_patterns']
+            patterns_dict = nested_patterns[self.MASTER_LENGTH]
+            pattern_core = patterns_dict['cores'][pattern_id]
+            repetition_map = patterns_dict['repetition_map']
+
+            # Expand pattern using repetition map
+            pattern_symbols = pattern_core[repetition_map]
+
+        except (KeyError, IndexError) as e:
+            raise ValueError(
+                f"Could not extract pattern_id={pattern_id} from final patterns file: {e}"
+            )
+
+        # Validate pattern format
+        pattern_symbols = np.asarray(pattern_symbols, dtype=np.uint8)
+
+        if pattern_symbols.shape[0] != self.MASTER_LENGTH:
+            raise ValueError(
+                f"Pattern has length {pattern_symbols.shape[0]}, expected {self.MASTER_LENGTH}"
+            )
+
+        # Validate ternary symbols for 3-FSK
+        if not np.all((pattern_symbols >= 0) & (pattern_symbols <= 2)):
+            raise ValueError(
+                f"Pattern contains values outside 0-2 range (3-FSK ternary)"
+            )
+
+        # Cache master pattern
+        self._master_patterns[pattern_id] = pattern_symbols
+        return pattern_symbols
+
+    def load_pattern(self, pattern_id: int, length: int) -> np.ndarray:
+        """Load pattern with requested length (supports partial patterns).
+
+        Returns first N symbols of the 1024-symbol master pattern.
+        Pattern transmission stops when data transmission ends.
+
+        Args:
+            pattern_id: Pattern ID (0-3, 4 patterns total)
+            length: Pattern length in symbols (64, 128, 256, 512, 1024)
+                   Maximum 1024 symbols
 
         Returns:
             np.ndarray: Pattern symbols, shape (length,), dtype uint8, values {0, 1, 2} for 3-FSK
 
         Raises:
             ValueError: If pattern_id or length is invalid
-            FileNotFoundError: If pattern file doesn't exist
+            FileNotFoundError: If final patterns file doesn't exist
         """
         # Validate inputs
-        if not (0 <= pattern_id <= 7):
-            raise ValueError(f"pattern_id must be 0-7, got {pattern_id}")
+        if not (0 <= pattern_id <= 3):
+            raise ValueError(f"pattern_id must be 0-3 (4 patterns), got {pattern_id}")
 
-        valid_lengths = [64, 128, 256, 512, 1024, 2048]
-        if length not in valid_lengths:
-            raise ValueError(f"length must be one of {valid_lengths}, got {length}")
+        if length not in self.VALID_PARTIAL_LENGTHS:
+            raise ValueError(f"length must be one of {self.VALID_PARTIAL_LENGTHS}, got {length}")
+
+        if length > self.MASTER_LENGTH:
+            raise ValueError(f"length cannot exceed {self.MASTER_LENGTH}, got {length}")
 
         # Check cache first
         cache_key = (pattern_id, length)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        # Load from file
-        pattern_file = self.patterns_dir / f"pattern_{pattern_id}_{length}.pkl"
+        # Load master pattern (1024 symbols)
+        master_pattern = self._load_master_pattern(pattern_id)
 
-        if not pattern_file.exists():
-            raise FileNotFoundError(
-                f"Pattern file not found: {pattern_file}\n"
-                f"Patterns must be generated first using the genetic algorithm.\n"
-                f"Expected location: {self.patterns_dir}"
-            )
-
-        with open(pattern_file, 'rb') as f:
-            pattern_data = pickle.load(f)
-
-        # Extract pattern bits (format depends on genetic algorithm output)
-        # Assuming it's either raw array or dict with 'pattern' key
-        if isinstance(pattern_data, dict):
-            pattern_bits = pattern_data['pattern']
-        else:
-            pattern_bits = pattern_data
-
-        # Validate pattern format
-        pattern_symbols = np.asarray(pattern_bits, dtype=np.uint8)
-
-        if pattern_symbols.shape != (length,):
-            raise ValueError(
-                f"Pattern file {pattern_file} has shape {pattern_symbols.shape}, "
-                f"expected ({length},)"
-            )
-
-        # Validate ternary symbols for 3-FSK
-        if not np.all((pattern_symbols >= 0) & (pattern_symbols <= 2)):
-            raise ValueError(
-                f"Pattern file {pattern_file} contains values outside 0-2 range (3-FSK ternary)"
-            )
+        # Extract partial pattern: first N symbols
+        pattern_symbols = master_pattern[:length].copy()
 
         # Cache and return
         self._cache[cache_key] = pattern_symbols
-        self._loaded_count += 1
 
         return pattern_symbols
 
     def load_all_patterns(self) -> int:
-        """Pre-load all 48 patterns into cache.
+        """Pre-load all 4 master patterns from final_patterns_399968.pkl.
 
         Returns:
-            int: Number of patterns successfully loaded
+            int: Number of patterns successfully loaded (4)
 
         Note:
-            This is recommended for production use to avoid loading delays.
-            Takes ~1 second for all 48 patterns.
+            This loads the 4 full-length (1024) patterns into cache.
+            Partial patterns are extracted on-demand from these masters.
         """
-        pattern_ids = range(8)
-        lengths = [64, 128, 256, 512, 1024, 2048]
+        pattern_ids = range(4)  # 0-3 (4 patterns)
 
         loaded = 0
         for pattern_id in pattern_ids:
-            for length in lengths:
-                try:
-                    self.load_pattern(pattern_id, length)
-                    loaded += 1
-                except FileNotFoundError:
-                    # Pattern file doesn't exist yet, skip
-                    continue
+            try:
+                self._load_master_pattern(pattern_id)
+                loaded += 1
+            except (FileNotFoundError, ValueError) as e:
+                print(f"Warning: Could not load pattern {pattern_id}: {e}")
+                continue
 
         return loaded
 

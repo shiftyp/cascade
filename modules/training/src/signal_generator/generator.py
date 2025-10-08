@@ -72,7 +72,7 @@ def apply_carrier_ramps(signal, ramp_duration_ms, sample_rate):
 @dataclass
 class KernelParameters:
     """Discrete portion of CASCADE kernel (TX parameters)."""
-    pattern_id: int  # 0-7
+    pattern_id: int  # 0-3 (4 patterns with 3 tones each)
     frequency_triple: int  # 0-42 (3-FSK: 3 adjacent channels)
     modulation: str  # 'BPSK', 'QPSK', '8-PSK', '16-APSK'
     polar_rate: Tuple[int, int]  # (k, n) e.g., (2, 3)
@@ -119,7 +119,7 @@ class SignalGenerator:
     TONE_SPACING = 20  # Hz
     NUM_CHANNELS = 129  # 300-2860 Hz in 20 Hz steps
     NUM_FREQUENCY_TRIPLES = 43  # 129 channels / 3 = 43 triples for 3-FSK
-    VALID_PATTERN_LENGTHS = [64, 128, 256, 512, 1024, 2048]
+    VALID_PATTERN_LENGTHS = [64, 128, 256, 512, 1024]  # Max 1024, partial patterns supported
     RAMP_DURATION_MS = 15  # Preamble/postamble ramp duration for spectral containment
 
     def __init__(self, patterns_dir: Optional[Path] = None):
@@ -134,7 +134,7 @@ class SignalGenerator:
         try:
             loaded = self.pattern_loader.load_all_patterns()
             if loaded > 0:
-                print(f"Loaded {loaded}/48 patterns")
+                print(f"Loaded {loaded}/4 master patterns (1024 symbols, partial patterns supported)")
         except Exception as e:
             print(f"Warning: Could not pre-load patterns: {e}")
 
@@ -143,7 +143,7 @@ class SignalGenerator:
         """Validate kernel parameters.
 
         Args:
-            pattern_id: Pattern ID (0-7)
+            pattern_id: Pattern ID (0-3, 4 patterns with 3 tones each)
             frequency_triple: Frequency triple index (0-42)
             modulation_scheme: Modulation type
             polar_rate: Polar code rate (k, n)
@@ -151,8 +151,8 @@ class SignalGenerator:
         Raises:
             ValueError: If any parameter is invalid
         """
-        if not (0 <= pattern_id <= 7):
-            raise ValueError(f"pattern_id must be 0-7, got {pattern_id}")
+        if not (0 <= pattern_id <= 3):
+            raise ValueError(f"pattern_id must be 0-3 (4 patterns), got {pattern_id}")
 
         if not (0 <= frequency_triple <= 42):
             raise ValueError(f"frequency_triple must be 0-42, got {frequency_triple}")
