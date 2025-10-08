@@ -17,6 +17,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from scipy import signal
+from scipy.interpolate import RectBivariateSpline
 import sys
 import os
 import pickle
@@ -135,9 +136,9 @@ print("  - Multipath fading (3 paths, 2ms delay spread)")
 print("  - AWGN (SNR = 5 dB)")
 
 # Compute STFT for both signals (to get time-frequency-amplitude-phase)
-# Use larger nperseg for better frequency resolution
-nperseg = 2048
-noverlap = int(nperseg * 0.95)
+# Use very large nperseg for smooth waterfall-like surface (SETI@home style)
+nperseg = 4096
+noverlap = int(nperseg * 0.98)
 
 f_clean, t_clean, Zxx_clean = signal.stft(
     sig_clean, fs=SAMPLE_RATE, window='hann',
@@ -157,9 +158,9 @@ f_degraded = np.fft.fftshift(f_degraded)
 Zxx_clean = np.fft.fftshift(Zxx_clean, axes=0)
 Zxx_degraded = np.fft.fftshift(Zxx_degraded, axes=0)
 
-# Focus on signal bandwidth (±100 Hz around carrier for better detail)
+# Focus on signal bandwidth (±150 Hz around carrier for smooth surface)
 freq_center = (tone_a + tone_c) / 2
-freq_mask = (f_clean >= freq_center - 100) & (f_clean <= freq_center + 100)
+freq_mask = (f_clean >= freq_center - 150) & (f_clean <= freq_center + 150)
 
 f_plot = f_clean[freq_mask]
 Zxx_clean_plot = Zxx_clean[freq_mask, :]
@@ -178,16 +179,36 @@ T_degraded, F_degraded = np.meshgrid(t_degraded, f_plot)
 
 print(f"\nSTFT computed: {len(f_plot)} freq bins × {len(t_clean)} time bins")
 
-# Use full resolution for smooth surface (no subsampling)
-T_clean_sub = T_clean
-F_clean_sub = F_clean
-amp_clean_sub = amp_clean
-phase_clean_sub = phase_clean
+# Interpolate for smooth surface
+# Upsample by 10x in both dimensions for ultra-smooth rendering
+upsample_factor = 10
+t_interp = np.linspace(t_clean.min(), t_clean.max(), len(t_clean) * upsample_factor)
+f_interp = np.linspace(f_plot.min(), f_plot.max(), len(f_plot) * upsample_factor)
 
-T_degraded_sub = T_degraded
-F_degraded_sub = F_degraded
-amp_degraded_sub = amp_degraded
-phase_degraded_sub = phase_degraded
+# Interpolate amplitude and phase for clean signal
+amp_clean_interp_func = RectBivariateSpline(f_plot, t_clean, amp_clean)
+phase_clean_interp_func = RectBivariateSpline(f_plot, t_clean, phase_clean)
+
+amp_clean_interp = amp_clean_interp_func(f_interp, t_interp)
+phase_clean_interp = phase_clean_interp_func(f_interp, t_interp)
+
+# Interpolate amplitude and phase for degraded signal
+amp_degraded_interp_func = RectBivariateSpline(f_plot, t_degraded, amp_degraded)
+phase_degraded_interp_func = RectBivariateSpline(f_plot, t_degraded, phase_degraded)
+
+amp_degraded_interp = amp_degraded_interp_func(f_interp, t_interp)
+phase_degraded_interp = phase_degraded_interp_func(f_interp, t_interp)
+
+# Create interpolated meshgrids
+T_clean_sub, F_clean_sub = np.meshgrid(t_interp, f_interp)
+T_degraded_sub, F_degraded_sub = np.meshgrid(t_interp, f_interp)
+
+amp_clean_sub = amp_clean_interp
+phase_clean_sub = phase_clean_interp
+amp_degraded_sub = amp_degraded_interp
+phase_degraded_sub = phase_degraded_interp
+
+print(f"Interpolated to: {len(f_interp)} freq bins × {len(t_interp)} time bins (10x upsampling)")
 
 # Create 4D visualization with surface manifold
 fig = plt.figure(figsize=(22, 10))
