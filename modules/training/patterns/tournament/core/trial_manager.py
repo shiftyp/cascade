@@ -65,6 +65,11 @@ class Trial:
         self.progress = 0.0
         self.eta = "N/A"
 
+        # Window orthogonality metrics (loaded from checkpoint)
+        self.window_metrics = None
+        self.global_metrics = None
+        self.erasure_metrics = None
+
     def start(self):
         """Start the trial"""
         self.status = 'running'

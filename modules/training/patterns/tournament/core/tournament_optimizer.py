@@ -180,7 +180,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             f.flush()
 
         # Define GA constants (before checkpoint check so always available)
-        pattern_core_length = pattern_length // redundancy  # Core bits based on redundancy factor
+        pattern_core_length = pattern_length // redundancy  # Core symbols (ternary) based on redundancy factor
         population_size = 32  # Number of pattern sets in population
         num_elites = 4  # Top performers preserved unchanged
 
@@ -228,7 +228,8 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write(f"Pattern configuration:\n")
                 f.write(f"  Number of patterns: {num_patterns}\n")
                 f.write(f"  Pattern length: {pattern_length} symbols ({duration_sec:.2f} sec)\n")
-                f.write(f"  Core length: {pattern_core_length} bits (4x redundancy)\n")
+                f.write(f"  Core length: {pattern_core_length} ternary symbols ({redundancy}x redundancy)\n")
+                f.write(f"  Modulation: 3-FSK (ternary: 0,1,2 → 3 frequencies)\n")
                 f.write(f"  Min symbols for decode: {min_symbols_needed} (37.5% erasure)\n")
                 f.write(f"  Welch bound: {welch_bound_db:.2f} dB (theoretical limit)\n")
                 f.flush()
@@ -283,18 +284,81 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             peak = np.max(np.abs(xcorr))
             return 20 * np.log10(peak / len(p1_erased) + 1e-10)
 
+        # Helper function for windowed correlation testing
+        def windowed_correlation(p1, p2, window_size, num_windows=8):
+            """Test correlation on random windows of patterns
+
+            Optimizes for local orthogonality instead of global orthogonality.
+            This is more robust for partial pattern detection scenarios.
+
+            Args:
+                p1, p2: Full patterns (±1 valued)
+                window_size: Size of window to test
+                num_windows: Number of random windows to sample
+
+            Returns:
+                Worst-case correlation in dB across all windows
+            """
+            pattern_len = len(p1)
+            worst_corr = -100.0
+
+            for _ in range(num_windows):
+                # Random window start
+                if pattern_len <= window_size:
+                    # Pattern smaller than window, use full pattern
+                    window = slice(0, pattern_len)
+                else:
+                    window_start = np.random.randint(0, pattern_len - window_size)
+                    window = slice(window_start, window_start + window_size)
+
+                p1_win = p1[window]
+                p2_win = p2[window]
+
+                # Correlation on window
+                xcorr = np.correlate(p1_win, p2_win, mode='full')
+                peak = np.max(np.abs(xcorr))
+                corr_db = 20 * np.log10(peak / len(p1_win) + 1e-10)
+                worst_corr = max(worst_corr, corr_db)
+
+            return worst_corr
+
         # Fitness evaluation function for a pattern set
-        def evaluate_fitness(pattern_set_cores, use_sampling=True, sample_size=30):
-            """Calculate fitness (worst-case orthogonality) for a pattern set
+        def evaluate_fitness(pattern_set_cores, use_sampling=True, sample_size=30, return_details=False):
+            """Calculate fitness using WINDOWED orthogonality instead of global
+
+            Optimizes for local orthogonality by testing random windows of various
+            sizes. This ensures patterns are distinguishable even when only partial
+            sections are received (late detection, burst interference, etc.)
+
+            Accepts lower full-pattern correlation for better partial-pattern robustness.
 
             Args:
                 pattern_set_cores: List of 128-bit core patterns
                 use_sampling: If True, sample random pairs (faster)
                 sample_size: Number of pairs to sample (default 30 of 120)
+                return_details: If True, return (score, details_dict)
+
+            Returns:
+                If return_details=False: worst_case_score (float)
+                If return_details=True: (worst_case_score, details_dict)
             """
             worst_normal = -100.0
             worst_flip = -100.0
             worst_erasure = -100.0
+
+            # Window sizes to test (scaled to pattern length)
+            # Test 25%, 12.5%, and 6.25% of full pattern length
+            window_sizes = [
+                pattern_length // 4,   # 25% window (e.g., 512 for 2048)
+                pattern_length // 8,   # 12.5% window (e.g., 256 for 2048)
+                pattern_length // 16   # 6.25% window (e.g., 128 for 2048)
+            ]
+            num_windows_per_size = 5  # Sample 5 random windows per size
+
+            # Track per-window metrics if details requested
+            if return_details:
+                window_metrics = {ws: {'normal': -100.0, 'flip': -100.0} for ws in window_sizes}
+                global_metrics = {'normal': -100.0, 'flip': -100.0}
 
             # Generate all possible pairs
             all_pairs = [(i, j) for i in range(num_patterns) for j in range(i + 1, num_patterns)]
@@ -310,30 +374,62 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 pairs_to_check = all_pairs
 
             for i, j in pairs_to_check:
-                # Expand and convert to ±1
+                # Expand and convert ternary {0,1,2} to {-1,0,+1} for correlation
                 pi_full = pattern_set_cores[i][repetition_map]
                 pj_full = pattern_set_cores[j][repetition_map]
-                pi = 2 * pi_full.astype(np.float32) - 1
-                pj = 2 * pj_full.astype(np.float32) - 1
+                # 3-FSK: 0→-1, 1→0, 2→+1 (for ternary patterns)
+                pi = pi_full.astype(np.float32) - 1
+                pj = pj_full.astype(np.float32) - 1
 
-                # Normal correlation
-                xcorr = np.correlate(pi, pj, mode='full')
-                peak = np.max(np.abs(xcorr))
-                corr_db = 20 * np.log10(peak / pattern_length + 1e-10)
-                worst_normal = max(worst_normal, corr_db)
+                # Test multiple window sizes for local orthogonality
+                for window_size in window_sizes:
+                    # Normal correlation on windows
+                    corr_db = windowed_correlation(pi, pj, window_size, num_windows_per_size)
+                    worst_normal = max(worst_normal, corr_db)
+                    if return_details:
+                        window_metrics[window_size]['normal'] = max(
+                            window_metrics[window_size]['normal'], corr_db
+                        )
 
-                # Flip correlation
-                xcorr_f = np.correlate(pi, -pj, mode='full')
-                peak_f = np.max(np.abs(xcorr_f))
-                corr_f_db = 20 * np.log10(peak_f / pattern_length + 1e-10)
-                worst_flip = max(worst_flip, corr_f_db)
+                    # Flip correlation on windows
+                    corr_f_db = windowed_correlation(pi, -pj, window_size, num_windows_per_size)
+                    worst_flip = max(worst_flip, corr_f_db)
+                    if return_details:
+                        window_metrics[window_size]['flip'] = max(
+                            window_metrics[window_size]['flip'], corr_f_db
+                        )
 
-                # Erasure (quick test)
+                # Keep erasure test (already tests partial patterns)
                 erasure_db = test_with_erasure(pi, pj, 0.375)
                 worst_erasure = max(worst_erasure, erasure_db)
 
+                # For details: also compute global (full-pattern) correlation
+                if return_details:
+                    xcorr_global = np.correlate(pi, pj, mode='full')
+                    peak_global = np.max(np.abs(xcorr_global))
+                    global_normal = 20 * np.log10(peak_global / len(pi) + 1e-10)
+                    global_metrics['normal'] = max(global_metrics['normal'], global_normal)
+
+                    xcorr_global_f = np.correlate(pi, -pj, mode='full')
+                    peak_global_f = np.max(np.abs(xcorr_global_f))
+                    global_flip = 20 * np.log10(peak_global_f / len(pi) + 1e-10)
+                    global_metrics['flip'] = max(global_metrics['flip'], global_flip)
+
             # Return worst-case (higher/less negative is worse)
-            return max(worst_normal, worst_flip, worst_erasure)
+            worst_case = max(worst_normal, worst_flip, worst_erasure)
+
+            if return_details:
+                details = {
+                    'window_metrics': window_metrics,
+                    'global_metrics': global_metrics,
+                    'erasure': worst_erasure,
+                    'worst_normal': worst_normal,
+                    'worst_flip': worst_flip,
+                    'worst_overall': worst_case
+                }
+                return worst_case, details
+            else:
+                return worst_case
 
         # Continue with initialization or checkpoint resume
         if not checkpoint_file.exists():
@@ -344,18 +440,19 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.write(f"Initializing genetic algorithm:\n")
                 f.write(f"  Population size: {population_size} pattern sets\n")
                 f.write(f"  Patterns per set: {num_patterns}\n")
-                f.write(f"  Core bits per pattern: {pattern_core_length}\n")
+                f.write(f"  Core symbols per pattern: {pattern_core_length} (ternary)\n")
                 f.write(f"  Elites preserved: {num_elites}\n")
                 f.flush()
 
-            # Initialize population: 32 sets of 16 patterns (128-bit cores)
+            # Initialize population: 32 sets of 8 patterns (ternary cores)
             population = []
             for set_idx in range(population_size):
                 pattern_set_core = []
                 for i in range(num_patterns):
                     pattern_seed = seed + set_idx * 1000 + i * 7919
                     np.random.seed(pattern_seed)
-                    pattern_core = np.random.randint(0, 2, pattern_core_length, dtype=np.uint8)
+                    # 3-FSK: ternary patterns {0, 1, 2} instead of binary {0, 1}
+                    pattern_core = np.random.randint(0, 3, pattern_core_length, dtype=np.uint8)
                     pattern_set_core.append(pattern_core)
                 population.append(pattern_set_core)
 
@@ -377,57 +474,122 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 peak = np.max(np.abs(xcorr))
                 return 20 * np.log10(peak / len(p1_erased) + 1e-10)
 
+            # Helper function for windowed correlation testing
+            def windowed_correlation(p1, p2, window_size, num_windows=8):
+                """Test correlation on random windows of patterns"""
+                pattern_len = len(p1)
+                worst_corr = -100.0
+
+                for _ in range(num_windows):
+                    if pattern_len <= window_size:
+                        window = slice(0, pattern_len)
+                    else:
+                        window_start = np.random.randint(0, pattern_len - window_size)
+                        window = slice(window_start, window_start + window_size)
+
+                    p1_win = p1[window]
+                    p2_win = p2[window]
+
+                    xcorr = np.correlate(p1_win, p2_win, mode='full')
+                    peak = np.max(np.abs(xcorr))
+                    corr_db = 20 * np.log10(peak / len(p1_win) + 1e-10)
+                    worst_corr = max(worst_corr, corr_db)
+
+                return worst_corr
+
             # Fitness evaluation function for a pattern set
-            def evaluate_fitness(pattern_set_cores, use_sampling=True, sample_size=30):
-                """Calculate fitness (worst-case orthogonality) for a pattern set
+            def evaluate_fitness(pattern_set_cores, use_sampling=True, sample_size=30, return_details=False):
+                """Calculate fitness using WINDOWED orthogonality instead of global
 
                 Args:
                     pattern_set_cores: List of 128-bit core patterns
                     use_sampling: If True, sample random pairs (faster)
                     sample_size: Number of pairs to sample (default 30 of 120)
+                    return_details: If True, return (score, details_dict)
                 """
                 worst_normal = -100.0
                 worst_flip = -100.0
                 worst_erasure = -100.0
+
+                # Window sizes for local orthogonality testing
+                window_sizes = [
+                    pattern_length // 4,   # 25% window
+                    pattern_length // 8,   # 12.5% window
+                    pattern_length // 16   # 6.25% window
+                ]
+                num_windows_per_size = 5
+
+                # Track per-window metrics if details requested
+                if return_details:
+                    window_metrics = {ws: {'normal': -100.0, 'flip': -100.0} for ws in window_sizes}
+                    global_metrics = {'normal': -100.0, 'flip': -100.0}
 
                 # Generate all possible pairs
                 all_pairs = [(i, j) for i in range(num_patterns) for j in range(i + 1, num_patterns)]
 
                 # Select pairs to evaluate
                 if use_sampling and len(all_pairs) > sample_size:
-                    # Random sample for speed
                     pairs_to_check = [all_pairs[idx] for idx in np.random.choice(
                         len(all_pairs), sample_size, replace=False
                     )]
                 else:
-                    # Full evaluation
                     pairs_to_check = all_pairs
 
                 for i, j in pairs_to_check:
-                    # Expand and convert to ±1
+                    # Expand and convert ternary {0,1,2} to {-1,0,+1} for correlation
                     pi_full = pattern_set_cores[i][repetition_map]
                     pj_full = pattern_set_cores[j][repetition_map]
-                    pi = 2 * pi_full.astype(np.float32) - 1
-                    pj = 2 * pj_full.astype(np.float32) - 1
+                    # 3-FSK: 0→-1, 1→0, 2→+1 (for ternary patterns)
+                    pi = pi_full.astype(np.float32) - 1
+                    pj = pj_full.astype(np.float32) - 1
 
-                    # Normal correlation
-                    xcorr = np.correlate(pi, pj, mode='full')
-                    peak = np.max(np.abs(xcorr))
-                    corr_db = 20 * np.log10(peak / pattern_length + 1e-10)
-                    worst_normal = max(worst_normal, corr_db)
+                    # Test multiple window sizes for local orthogonality
+                    for window_size in window_sizes:
+                        corr_db = windowed_correlation(pi, pj, window_size, num_windows_per_size)
+                        worst_normal = max(worst_normal, corr_db)
+                        if return_details:
+                            window_metrics[window_size]['normal'] = max(
+                                window_metrics[window_size]['normal'], corr_db
+                            )
 
-                    # Flip correlation
-                    xcorr_f = np.correlate(pi, -pj, mode='full')
-                    peak_f = np.max(np.abs(xcorr_f))
-                    corr_f_db = 20 * np.log10(peak_f / pattern_length + 1e-10)
-                    worst_flip = max(worst_flip, corr_f_db)
+                        corr_f_db = windowed_correlation(pi, -pj, window_size, num_windows_per_size)
+                        worst_flip = max(worst_flip, corr_f_db)
+                        if return_details:
+                            window_metrics[window_size]['flip'] = max(
+                                window_metrics[window_size]['flip'], corr_f_db
+                            )
 
-                    # Erasure (quick test)
+                    # Keep erasure test
                     erasure_db = test_with_erasure(pi, pj, 0.375)
                     worst_erasure = max(worst_erasure, erasure_db)
 
-                # Return worst-case (higher/less negative is worse)
-                return max(worst_normal, worst_flip, worst_erasure)
+                    # For details: also compute global (full-pattern) correlation
+                    if return_details:
+                        xcorr_global = np.correlate(pi, pj, mode='full')
+                        peak_global = np.max(np.abs(xcorr_global))
+                        global_normal = 20 * np.log10(peak_global / len(pi) + 1e-10)
+                        global_metrics['normal'] = max(global_metrics['normal'], global_normal)
+
+                        xcorr_global_f = np.correlate(pi, -pj, mode='full')
+                        peak_global_f = np.max(np.abs(xcorr_global_f))
+                        global_flip = 20 * np.log10(peak_global_f / len(pi) + 1e-10)
+                        global_metrics['flip'] = max(global_metrics['flip'], global_flip)
+
+                # Return worst-case
+                worst_case = max(worst_normal, worst_flip, worst_erasure)
+
+                if return_details:
+                    details = {
+                        'window_metrics': window_metrics,
+                        'global_metrics': global_metrics,
+                        'erasure': worst_erasure,
+                        'worst_normal': worst_normal,
+                        'worst_flip': worst_flip,
+                        'worst_overall': worst_case
+                    }
+                    return worst_case, details
+                else:
+                    return worst_case
 
             # Evaluate initial population (full evaluation for baseline)
             fitness_scores = []
@@ -452,7 +614,7 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                 f.flush()
     
         # Genetic algorithm parameters
-        mutation_rate = 0.10  # 10% of 128 bits = ~13 bits per mutation
+        mutation_rate = 0.10  # 10% of symbols mutated per pattern
         crossover_rate = 0.7  # 70% of offspring use crossover
 
         # Calculate generations
@@ -473,11 +635,13 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
             f.write(f"Genetic algorithm parameters:\n")
             f.write(f"  Total generations: {total_generations}\n")
             f.write(f"  Population size: {population_size}\n")
-            f.write(f"  Mutation rate: {mutation_rate:.1%} ({int(mutation_rate * pattern_core_length)} bits)\n")
+            f.write(f"  Mutation rate: {mutation_rate:.1%} (~{int(mutation_rate * pattern_core_length)} symbols)\n")
             f.write(f"  Crossover rate: {crossover_rate:.1%}\n")
             f.write(f"  Elites: {num_elites}\n")
-            f.write(f"  Adaptive sampling: 30 pairs (75% speedup), full eval every 10th gen\n")
-            f.write(f"  Expected speed: ~30 iter/s sampled, ~8 iter/s full\n")
+            f.write(f"  Fitness metric: WINDOWED orthogonality (25%, 12.5%, 6.25% windows)\n")
+            f.write(f"  Window sampling: 5 random windows per size (optimizes local orthogonality)\n")
+            f.write(f"  Adaptive pair sampling: 30 pairs (75% speedup), full eval every 10th gen\n")
+            f.write(f"  Expected speed: ~20 iter/s sampled, ~5 iter/s full (slower due to windowing)\n")
             f.flush()
 
         import time
@@ -517,7 +681,12 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
                         num_flips = np.random.randint(1, int(mutation_rate * pattern_core_length) + 5)
                         flip_positions = np.random.choice(pattern_core_length, num_flips, replace=False)
                         offspring[pattern_idx] = offspring[pattern_idx].copy()
-                        offspring[pattern_idx][flip_positions] = 1 - offspring[pattern_idx][flip_positions]
+                        # 3-FSK: Randomly change to a different ternary value {0,1,2}
+                        for pos in flip_positions:
+                            old_val = offspring[pattern_idx][pos]
+                            # Pick a different value from {0,1,2}
+                            possible_vals = [v for v in [0, 1, 2] if v != old_val]
+                            offspring[pattern_idx][pos] = np.random.choice(possible_vals)
 
                 new_population.append(offspring)
 
@@ -571,31 +740,86 @@ def run_single_trial_worker(trial_id: int, iterations: int, seed: int,
 
                 eval_type = "FULL" if (current_generation % 10 == 0) else "sampled(30)"
 
+                # Get detailed metrics for best pattern (every 100 generations)
+                detailed_metrics = None
+                if current_generation % 100 == 0:
+                    best_set_cores = population[fitness_scores[0][1]]
+                    _, detailed_metrics = evaluate_fitness(best_set_cores, use_sampling=False, return_details=True)
+
                 with open(debug_file_path, 'a') as f:
                     f.write(f"Generation {current_generation}/{total_generations} [{eval_type}]:\n")
                     f.write(f"  Best: {best_fitness:.2f} dB, Median: {median_fitness:.2f} dB, "
                            f"Worst: {worst_fitness:.2f} dB\n")
                     f.write(f"  Overall best: {best_score:.2f} dB\n")
+
+                    # Show detailed window breakdown every 100 generations
+                    if detailed_metrics:
+                        f.write(f"  Window Orthogonality Breakdown:\n")
+                        window_sizes = sorted(detailed_metrics['window_metrics'].keys(), reverse=True)
+                        for ws in window_sizes:
+                            wm = detailed_metrics['window_metrics'][ws]
+                            percent = (ws / pattern_length) * 100
+                            worst_win = max(wm['normal'], wm['flip'])
+                            f.write(f"    {ws:4d}bit ({percent:4.1f}%): {worst_win:6.2f} dB "
+                                   f"(normal={wm['normal']:6.2f}, flip={wm['flip']:6.2f})\n")
+                        gm = detailed_metrics['global_metrics']
+                        worst_global = max(gm['normal'], gm['flip'])
+                        f.write(f"    GLOBAL ({pattern_length}bit): {worst_global:6.2f} dB "
+                               f"(normal={gm['normal']:6.2f}, flip={gm['flip']:6.2f})\n")
+                        f.write(f"    Erasure test: {detailed_metrics['erasure']:6.2f} dB\n")
+
                     f.write(f"  Elapsed: {elapsed:.1f}s, Speed: {speed_str}\n")
                     f.flush()
                 last_log_time = current_time
 
-            # Save checkpoint every 1000 iterations for live updates
-            if current_iteration % 1000 == 0 or current_generation >= total_generations:
-                checkpoint = {
-                    'pattern_set': pattern_set,  # Best pattern set (128-bit cores)
-                    'repetition_map': repetition_map,  # Single shared map
-                    'population': population,  # Full population for resume
-                    'fitness_scores': fitness_scores,  # Current fitness ranking
-                    'iteration': current_iteration,
-                    'generation': current_generation,
-                    'best_score': best_score,
-                    'score_history': score_history,
-                    'trial_id': trial_id,
-                    'seed': seed
-                }
-                with open(checkpoint_file, 'wb') as f:
-                    pickle.dump(checkpoint, f)
+            # Save checkpoint every 100 iterations for live updates (skip iteration 0)
+            if (current_iteration > 0 and current_iteration % 100 == 0) or current_generation >= total_generations:
+                # Get detailed metrics for checkpoint
+                try:
+                    best_set_cores = population[fitness_scores[0][1]]
+                    _, detailed_metrics = evaluate_fitness(best_set_cores, use_sampling=False, return_details=True)
+
+                    checkpoint = {
+                        'pattern_set': pattern_set,  # Best pattern set (128-bit cores)
+                        'repetition_map': repetition_map,  # Single shared map
+                        'population': population,  # Full population for resume
+                        'fitness_scores': fitness_scores,  # Current fitness ranking
+                        'iteration': current_iteration,
+                        'generation': current_generation,
+                        'best_score': best_score,
+                        'score_history': score_history,
+                        'trial_id': trial_id,
+                        'seed': seed,
+                        'window_metrics': detailed_metrics['window_metrics'],
+                        'global_metrics': detailed_metrics['global_metrics'],
+                        'erasure_metrics': detailed_metrics['erasure']
+                    }
+                    with open(checkpoint_file, 'wb') as f:
+                        pickle.dump(checkpoint, f)
+                    # Debug: confirm metrics saved
+                    with open(debug_file_path, 'a') as f:
+                        f.write(f"  Saved checkpoint with window metrics: {list(detailed_metrics['window_metrics'].keys())}\n")
+                        f.flush()
+                except Exception as e:
+                    # Log error but don't crash - save checkpoint without metrics
+                    with open(debug_file_path, 'a') as f:
+                        f.write(f"Warning: Failed to compute detailed metrics for checkpoint: {e}\n")
+                        f.flush()
+                    # Save checkpoint without detailed metrics
+                    checkpoint = {
+                        'pattern_set': pattern_set,
+                        'repetition_map': repetition_map,
+                        'population': population,
+                        'fitness_scores': fitness_scores,
+                        'iteration': current_iteration,
+                        'generation': current_generation,
+                        'best_score': best_score,
+                        'score_history': score_history,
+                        'trial_id': trial_id,
+                        'seed': seed
+                    }
+                    with open(checkpoint_file, 'wb') as f:
+                        pickle.dump(checkpoint, f)
     
         # Calculate convergence rate based on score improvement
         if len(score_history) > 10:
@@ -965,6 +1189,17 @@ class DynamicTournamentOptimizer:
                     trial.iterations = checkpoint['iteration']
                     trial.best_score = float(checkpoint.get('best_score', trial.best_score))
                     trial.current_score = trial.best_score
+
+                    # Window metrics (for display)
+                    if 'window_metrics' in checkpoint:
+                        trial.window_metrics = checkpoint['window_metrics']
+                        # Debug: verify metrics were loaded
+                        if trial.window_metrics and len(trial.window_metrics) > 0:
+                            print(f"✓ Loaded window metrics for trial {trial_id}: {list(trial.window_metrics.keys())}")
+                    if 'global_metrics' in checkpoint:
+                        trial.global_metrics = checkpoint['global_metrics']
+                    if 'erasure_metrics' in checkpoint:
+                        trial.erasure_metrics = checkpoint['erasure_metrics']
 
                     # GA-specific stats (for display)
                     if 'generation' in checkpoint:

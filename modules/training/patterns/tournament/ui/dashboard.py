@@ -61,7 +61,7 @@ class PatternGeneratorDashboard:
 
         # Sidebar split
         self.layout["sidebar"].split(
-            Layout(name="stats", size=15),
+            Layout(name="stats", size=22),  # Increased from 15 to 22 for window metrics
             Layout(name="info", size=12)
         )
 
@@ -194,6 +194,11 @@ class PatternGeneratorDashboard:
             else:
                 best_score_str = f"{self.optimizer.global_best_score:.2f} dB"
 
+            # Get best trial for window metrics
+            best_trial = None
+            if self.optimizer.global_best_trial_id is not None:
+                best_trial = next((t for t in self.optimizer.trials if t.trial_id == self.optimizer.global_best_trial_id), None)
+
             # Show GA stats with generation info
             ga_trial = next((t for t in self.optimizer.trials if hasattr(t, 'algorithm') and t.algorithm == 'GA'), None)
             if ga_trial and hasattr(ga_trial, 'generation'):
@@ -214,6 +219,38 @@ class PatternGeneratorDashboard:
                     f"[bold]Runtime:[/]          {runtime_str}",
                     f"[bold]Phase:[/]            {self.optimizer.current_phase.title()}"
                 ]
+
+                # Add window metrics if available
+                stats_lines.append("")
+                stats_lines.append("[bold cyan]Window Orthogonality:[/]")
+
+                if best_trial and hasattr(best_trial, 'window_metrics') and best_trial.window_metrics:
+                    # Sort window sizes (largest first)
+                    window_sizes = sorted(best_trial.window_metrics.keys(), reverse=True)
+                    pattern_length = self.optimizer.pattern_length
+
+                    # Show all 3 window sizes
+                    for ws in window_sizes:
+                        wm = best_trial.window_metrics[ws]
+                        percent = (ws / pattern_length) * 100
+                        worst = max(wm['normal'], wm['flip'])
+                        stats_lines.append(f"  {ws:4d}bit ({percent:4.1f}%): {worst:6.2f} dB")
+
+                    # Show global
+                    if hasattr(best_trial, 'global_metrics') and best_trial.global_metrics:
+                        gm = best_trial.global_metrics
+                        worst_global = max(gm['normal'], gm['flip'])
+                        stats_lines.append(f"  Global:         {worst_global:6.2f} dB")
+                else:
+                    # Debug: why are metrics not showing?
+                    debug_msg = "Computing..."
+                    if not best_trial:
+                        debug_msg += " (no best trial)"
+                    elif not hasattr(best_trial, 'window_metrics'):
+                        debug_msg += " (no attr)"
+                    elif not best_trial.window_metrics:
+                        debug_msg += " (empty/None)"
+                    stats_lines.append(f"  [dim]{debug_msg}[/dim]")
             else:
                 # Fallback stats
                 stats_lines = [
