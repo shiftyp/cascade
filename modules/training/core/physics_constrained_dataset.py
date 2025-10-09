@@ -206,31 +206,19 @@ class PhysicsConstrainedDataset(Dataset):
 
     def _generate_and_cache(self):
         """Generate all signals and cache to disk."""
+        # Use fixed signal length (matches IQ encoder input size)
+        FIXED_SIGNAL_LEN = 2048
+
         # Create HDF5 file
         with h5py.File(self.cache_path, 'w') as f:
-            # Pre-allocate datasets (we'll determine max signal length from first sample)
-            # Generate first sample to get dimensions
-            drivers = self.scenario_drivers[0]
-            conditions = self.physics_calc.calculate_all_effects(drivers)
-            _, clean_signal, _, _ = self._generate_clean_signal(drivers.frequency_mhz)
-            received_signal = self._apply_channel_effects(clean_signal, drivers, conditions)
-
-            max_signal_len = len(received_signal)
-
-            # Create datasets
-            signals_ds = f.create_dataset('signals', shape=(self.num_samples, max_signal_len),
+            # Create datasets with fixed length
+            signals_ds = f.create_dataset('signals', shape=(self.num_samples, FIXED_SIGNAL_LEN),
                                          dtype=np.complex64, compression='gzip')
             snr_ds = f.create_dataset('snr_db', shape=(self.num_samples,), dtype=np.float32)
             pattern_ids = f.create_dataset('pattern_ids', shape=(self.num_samples,), dtype=np.int16)
             freq_triples = f.create_dataset('frequency_triples', shape=(self.num_samples,), dtype=np.int16)
 
-            # Store first sample
-            signals_ds[0] = received_signal[:max_signal_len]  # Truncate/pad if needed
-            snr_ds[0] = conditions.effective_snr_db
-            pattern_ids[0] = 0  # Will be updated
-            freq_triples[0] = 0  # Will be updated
-
-            # Generate remaining samples
+            # Generate all samples
             for idx in tqdm(range(self.num_samples), desc="Caching signals"):
                 drivers = self.scenario_drivers[idx]
                 conditions = self.physics_calc.calculate_all_effects(drivers)
@@ -238,9 +226,18 @@ class PhysicsConstrainedDataset(Dataset):
                 message_bits, clean_signal, pattern_id, frequency_triple = self._generate_clean_signal(drivers.frequency_mhz)
                 received_signal = self._apply_channel_effects(clean_signal, drivers, conditions)
 
-                # Store (pad/truncate to max_signal_len)
-                sig_len = min(len(received_signal), max_signal_len)
-                signals_ds[idx, :sig_len] = received_signal[:sig_len]
+                # Pad or truncate to fixed length
+                if len(received_signal) < FIXED_SIGNAL_LEN:
+                    # Pad with zeros
+                    padded = np.zeros(FIXED_SIGNAL_LEN, dtype=np.complex64)
+                    padded[:len(received_signal)] = received_signal
+                    received_signal = padded
+                else:
+                    # Truncate to fixed length
+                    received_signal = received_signal[:FIXED_SIGNAL_LEN]
+
+                # Store
+                signals_ds[idx] = received_signal
                 snr_ds[idx] = conditions.effective_snr_db
                 pattern_ids[idx] = pattern_id
                 freq_triples[idx] = frequency_triple
@@ -248,6 +245,7 @@ class PhysicsConstrainedDataset(Dataset):
             # Store metadata
             f.attrs['num_samples'] = self.num_samples
             f.attrs['sample_rate'] = self.sample_rate
+            f.attrs['signal_length'] = FIXED_SIGNAL_LEN
             f.attrs['for_test'] = self.for_test
             f.attrs['seed'] = self.seed if self.seed is not None else -1
 
