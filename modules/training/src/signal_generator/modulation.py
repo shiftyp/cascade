@@ -104,7 +104,7 @@ def _map_bpsk(bit_groups: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: Complex symbols, shape (num_symbols,)
     """
-    bits = bit_groups[:, 0]
+    bits = bit_groups[:, 0].astype(np.int32)  # Convert to int32 to avoid uint8 overflow
     # Map: 0 → +1, 1 → -1
     symbols = 1 - 2 * bits
     return symbols.astype(np.complex64)
@@ -292,3 +292,120 @@ def verify_unit_power(symbols: np.ndarray, tolerance: float = 0.01) -> bool:
     """
     avg_power = np.mean(np.abs(symbols) ** 2)
     return abs(avg_power - 1.0) < tolerance
+
+
+def generate_pilot_sequence(modulation: str, num_symbols: int, shaped: bool = True) -> np.ndarray:
+    """Generate swept constellation pilot sequence for NN channel learning.
+
+    Creates a sequence that cycles through constellation points.
+    With shaped=True, orders points from inner (low amplitude) to outer (high amplitude)
+    for smooth AGC settling and gradual equalizer learning.
+
+    The NN can use this known sequence to:
+    - Estimate channel gain/phase response
+    - Learn equalizer taps
+    - Compute SNR estimate
+    - Detect carrier offset
+
+    Args:
+        modulation: Modulation scheme ('BPSK', 'QPSK', '8-PSK', '16-APSK')
+        num_symbols: Number of pilot symbols to generate
+        shaped: If True, order inner→outer for smooth AGC (default: True)
+
+    Returns:
+        np.ndarray: Complex pilot symbols, shape (num_symbols,), dtype complex64
+
+    Example:
+        >>> pilots = generate_pilot_sequence('QPSK', 100, shaped=True)
+        >>> # Returns inner points first [0°, 180°], then outer [90°, 270°], repeating
+    """
+    # Generate all constellation points
+    bits_per_sym = get_bits_per_symbol(modulation)
+    num_constellation_points = 2 ** bits_per_sym
+
+    # Create bit patterns for all constellation points
+    all_bits = []
+    for i in range(num_constellation_points):
+        bits = [(i >> j) & 1 for j in range(bits_per_sym - 1, -1, -1)]
+        all_bits.extend(bits)
+
+    all_bits = np.array(all_bits, dtype=np.uint8)
+    constellation = map_to_constellation(all_bits, modulation)
+
+    # Shape pilot order (inner → outer) for smooth AGC/equalizer learning
+    if shaped:
+        if modulation == 'BPSK':
+            # BPSK: Start with +1 (lower amplitude after AGC gain), then -1
+            order = [0, 1]  # [+1, -1]
+
+        elif modulation == 'QPSK':
+            # QPSK: Cardinal points (I or Q axis) first, then diagonal
+            # Order by distance from origin (all QPSK points same magnitude, so use phase)
+            # Start with 0° and 180° (I-axis), then 90° and 270° (Q-axis)
+            angles = np.angle(constellation)
+            # Group into cardinal (near 0°/180°) and diagonal (near ±90°)
+            cardinal_mask = (np.abs(np.abs(angles) - np.pi/2) > np.pi/4)
+            order = list(np.where(cardinal_mask)[0]) + list(np.where(~cardinal_mask)[0])
+
+        elif modulation == '8-PSK':
+            # 8-PSK: Start with cardinal (0°, 90°, 180°, 270°), then diagonal
+            angles = np.angle(constellation) % (2*np.pi)
+            # Cardinal: angles close to 0, π/2, π, 3π/2
+            is_cardinal = np.array([
+                np.min([abs(a), abs(a - np.pi), abs(a - np.pi/2), abs(a - 3*np.pi/2)])
+                < np.pi/8 for a in angles
+            ])
+            order = list(np.where(is_cardinal)[0]) + list(np.where(~is_cardinal)[0])
+
+        elif modulation == '16-APSK':
+            # 16-APSK: Inner ring first (4 points, low amplitude), then outer ring (12 points)
+            magnitudes = np.abs(constellation)
+            # Sort by magnitude: inner ring points have smaller magnitude
+            order = np.argsort(magnitudes).tolist()
+
+        else:
+            order = list(range(num_constellation_points))
+
+        # Reorder constellation
+        constellation = constellation[order]
+
+    # Repeat constellation to fill num_symbols
+    num_repeats = int(np.ceil(num_symbols / num_constellation_points))
+    pilot_sequence = np.tile(constellation, num_repeats)[:num_symbols]
+
+    return pilot_sequence.astype(np.complex64)
+
+
+def generate_constant_pilot(modulation: str, num_symbols: int) -> np.ndarray:
+    """Generate constant pilot symbol for continuous phase reference.
+
+    Uses a single known constellation point repeated. Useful for:
+    - Continuous carrier phase tracking
+    - Frequency offset estimation
+    - Simple channel gain estimation
+
+    Args:
+        modulation: Modulation scheme ('BPSK', 'QPSK', '8-PSK', '16-APSK')
+        num_symbols: Number of pilot symbols to generate
+
+    Returns:
+        np.ndarray: Complex pilot symbols (all identical), shape (num_symbols,)
+
+    Example:
+        >>> pilots = generate_constant_pilot('QPSK', 50)
+        >>> # Returns [+1+j, +1+j, +1+j, ...] (constant reference)
+    """
+    # Use first constellation point (typically highest I+Q)
+    if modulation == 'BPSK':
+        pilot_symbol = complex(1, 0)  # +1
+    elif modulation == 'QPSK':
+        pilot_symbol = (1 + 1j) / np.sqrt(2)  # 45°
+    elif modulation == '8-PSK':
+        pilot_symbol = complex(1, 0)  # 0°
+    elif modulation == '16-APSK':
+        # Use outer ring point for stronger signal
+        pilot_symbol = 2.7 / np.sqrt((4 * 1.0**2 + 12 * 2.7**2) / 16)  # Normalized outer ring
+    else:
+        raise ValueError(f"Unknown modulation: {modulation}")
+
+    return np.full(num_symbols, pilot_symbol, dtype=np.complex64)

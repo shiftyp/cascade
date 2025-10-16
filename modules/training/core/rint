@@ -1,0 +1,8 @@
+	# gawk profile, created Tue Oct 14 13:10:54 2025
+
+	# Rule(s)
+
+    49  $2 { # 49
+    49  	print
+	}
+

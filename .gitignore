@@ -9,3 +9,4 @@ env/
 venv/Also 
 logs
 checkpoints/
+artifacts/

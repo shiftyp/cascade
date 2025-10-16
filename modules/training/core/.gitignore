@@ -1,0 +1,23 @@
+# Cache directories
+__pycache__/
+.ipynb_checkpoints/
+dataset_cache/
+visualizations/
+
+# Artifacts (model checkpoints, training logs)
+artifacts/
+
+# Temporary files
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints
+
+# Test outputs
+test_output/

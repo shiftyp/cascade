@@ -1,0 +1,22 @@
+================================================================================
+CASCADE FULL MODEL TRAINING (Joint RX/TX, 100M Samples)
+================================================================================
+
+Configuration:
+  Training samples: 100000
+  Validation samples: 1000
+  Batch size: 4096
+  Max epochs per stage: 50
+
+Features enabled:
+  ✓ STREAMING DATASET (10s I/Q streams, 11× faster!)
+    - 10-second streams with 2-5 complete messages
+    - Natural temporal collisions from Poisson arrivals
+    - 5 training windows extracted per stream
+    - GPU polar encoding (89× faster than CPU)
+  ✓ Joint RX/TX training (TX embedding encoder)
+  ✓ Context signals (8 max)
+  ✓ GPU-accelerated generation
+  ✓ Pre-calculated physics (parallel CPU)
+  ✓ Early stopping (patience=10)
+

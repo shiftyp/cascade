@@ -12,8 +12,10 @@ from typing import Optional, Tuple, Dict, List
 from dataclasses import dataclass
 import h5py
 import os
+import sys
 from pathlib import Path
 from tqdm import tqdm
+from multiprocessing import Pool, cpu_count
 
 from physics_coupling import (
     CorePhysicalDrivers, CoupledPhysicsCalculator,
@@ -23,6 +25,7 @@ from scenarios import ScenarioLibrary, ScenarioType
 from modules.training.src.signal_generator.generator import SignalGenerator
 from modules.training.src.channel_simulator.multipath import apply_multipath_fading, MultipathProfile
 from modules.training.src.channel_simulator.awgn import generate_awgn
+from signal_visualizer import SignalVisualizer
 
 
 @dataclass
@@ -71,7 +74,10 @@ class PhysicsConstrainedDataset(Dataset):
         real_signal_path: Optional[str] = None,
         cache_dir: Optional[str] = None,
         use_cache: bool = True,
-        regenerate_cache: bool = False
+        regenerate_cache: bool = False,
+        enable_visualization: bool = False,
+        visualization_dir: Optional[str] = None,
+        visualization_sample_rate: float = 0.01
     ):
         """
         Initialize physics-constrained dataset.
@@ -87,6 +93,9 @@ class PhysicsConstrainedDataset(Dataset):
             cache_dir: Directory to store cached signals (default: ./dataset_cache)
             use_cache: If True, use cached signals if available
             regenerate_cache: If True, regenerate cache even if it exists
+            enable_visualization: If True, create spectrograms during generation
+            visualization_dir: Directory to save visualizations (default: ./visualizations)
+            visualization_sample_rate: Fraction of signals to visualize (0.01 = 1%)
         """
         self.num_samples = num_samples
         self.signal_generator = signal_generator
@@ -96,6 +105,8 @@ class PhysicsConstrainedDataset(Dataset):
         self.enable_real_signal_augmentation = enable_real_signal_augmentation
         self.real_signal_path = real_signal_path
         self.use_cache = use_cache
+        self.enable_visualization = enable_visualization
+        self.visualization_sample_rate = visualization_sample_rate
 
         # Cache configuration
         if cache_dir is None:
@@ -103,20 +114,33 @@ class PhysicsConstrainedDataset(Dataset):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Visualization configuration
+        if visualization_dir is None:
+            visualization_dir = './visualizations'
+        self.visualization_dir = Path(visualization_dir)
+        if self.enable_visualization:
+            self.visualization_dir.mkdir(parents=True, exist_ok=True)
+
         cache_name = f"physics_dataset_n{num_samples}_sr{sample_rate}_{'test' if for_test else 'train'}_seed{seed}.h5"
         self.cache_path = self.cache_dir / cache_name
 
-        # Initialize scenario library and physics calculator
+        # Initialize scenario library and physics calculator (suppress verbose output)
         self.scenario_library = ScenarioLibrary()
         self.physics_calc = CoupledPhysicsCalculator(seed=seed)
 
         # Pre-generate scenario parameters
-        print(f"Generating {num_samples} physics-coupled scenario parameters...")
+        print(f"\n{'='*60}")
+        print(f"PHYSICS-CONSTRAINED DATASET INITIALIZATION")
+        print(f"{'='*60}")
+        print(f"Samples: {num_samples:,} ({'test' if for_test else 'train'} distribution)")
+        print(f"Generating physics-coupled scenarios...")
+
         self.scenario_drivers = self.scenario_library.generate_balanced_realistic_batch(
             batch_size=num_samples,
             for_test=for_test,
             seed=seed
         )
+        print(f"✓ Scenarios generated")
 
         # Load real signals if augmentation enabled
         self.real_signals = None
@@ -127,15 +151,13 @@ class PhysicsConstrainedDataset(Dataset):
         self.cached_data = None
         if use_cache:
             if self.cache_path.exists() and not regenerate_cache:
-                print(f"Loading cached dataset from {self.cache_path}...")
+                print(f"\nLoading from cache: {self.cache_path.name}")
                 self._load_cache()
             else:
-                print(f"Generating and caching {num_samples} signals to {self.cache_path}...")
                 self._generate_and_cache()
         else:
-            print("Cache disabled - signals will be generated on-the-fly (SLOW)")
+            print("\n⚠ Cache disabled - signals will be generated on-the-fly (SLOW)")
 
-        print(f"✓ PhysicsConstrainedDataset initialized: {num_samples} samples")
         self._print_distribution_stats()
 
     def _load_real_signals(self, path: str) -> List[np.ndarray]:
@@ -205,42 +227,138 @@ class PhysicsConstrainedDataset(Dataset):
         print("="*60 + "\n")
 
     def _generate_and_cache(self):
-        """Generate all signals and cache to disk."""
+        """Generate all signals and cache to disk with optimizations."""
         # Use fixed signal length (matches IQ encoder input size)
         FIXED_SIGNAL_LEN = 2048
+        BATCH_SIZE = 1000  # Write in batches
+
+        # Determine number of worker processes (leave 1 core free)
+        num_workers = max(1, cpu_count() - 1)
+
+        print(f"\nGenerating {self.num_samples:,} signals with {num_workers} parallel workers...")
+        print(f"Cache: {self.cache_path.name}")
+
+        # Initialize visualizer if enabled
+        visualizer = None
+        if self.enable_visualization:
+            visualizer = SignalVisualizer(
+                output_dir=str(self.visualization_dir),
+                max_queue_size=50
+            )
+            visualizer.start()
+            num_to_visualize = max(1, int(self.num_samples * self.visualization_sample_rate))
+            print(f"Visualization: enabled ({num_to_visualize} samples @ {self.visualization_sample_rate*100:.1f}%)")
 
         # Create HDF5 file
         with h5py.File(self.cache_path, 'w') as f:
-            # Create datasets with fixed length
+            # Create datasets with fixed length and LZF compression (10-100x faster than gzip)
             signals_ds = f.create_dataset('signals', shape=(self.num_samples, FIXED_SIGNAL_LEN),
-                                         dtype=np.complex64, compression='gzip')
+                                         dtype=np.complex64, compression='lzf')
+            clean_signals_ds = f.create_dataset('clean_signals', shape=(self.num_samples, FIXED_SIGNAL_LEN),
+                                               dtype=np.complex64, compression='lzf')
             snr_ds = f.create_dataset('snr_db', shape=(self.num_samples,), dtype=np.float32)
             pattern_ids = f.create_dataset('pattern_ids', shape=(self.num_samples,), dtype=np.int16)
             freq_triples = f.create_dataset('frequency_triples', shape=(self.num_samples,), dtype=np.int16)
+            qrn_types = f.create_dataset('qrn_types', shape=(self.num_samples,), dtype='S16')  # String dtype for QRN type
+            modulations = f.create_dataset('modulations', shape=(self.num_samples,), dtype='S16')  # BPSK, QPSK, etc.
+            data_symbol_rates = f.create_dataset('data_symbol_rates', shape=(self.num_samples,), dtype=np.int16)  # 75-300
+            duration_windows_ds = f.create_dataset('duration_windows', shape=(self.num_samples,), dtype=np.uint8)  # 0-255
+            propagation_modes = f.create_dataset('propagation_modes', shape=(self.num_samples,), dtype='S32')  # Propagation mode strings
 
-            # Generate all samples
-            for idx in tqdm(range(self.num_samples), desc="Caching signals"):
-                drivers = self.scenario_drivers[idx]
-                conditions = self.physics_calc.calculate_all_effects(drivers)
+            # Batch processing with multiprocessing
+            num_batches = (self.num_samples + BATCH_SIZE - 1) // BATCH_SIZE
 
-                message_bits, clean_signal, pattern_id, frequency_triple = self._generate_clean_signal(drivers.frequency_mhz)
-                received_signal = self._apply_channel_effects(clean_signal, drivers, conditions)
+            # Initialize pool with worker init function (loads patterns once per worker)
+            with Pool(processes=num_workers, initializer=self._init_worker) as pool:
+                # Single unified progress bar tracking total samples processed
+                with tqdm(total=self.num_samples, desc="Generating & caching", unit="samples",
+                         ncols=100, bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
+                         mininterval=0.5, file=sys.stdout) as pbar:
 
-                # Pad or truncate to fixed length
-                if len(received_signal) < FIXED_SIGNAL_LEN:
-                    # Pad with zeros
-                    padded = np.zeros(FIXED_SIGNAL_LEN, dtype=np.complex64)
-                    padded[:len(received_signal)] = received_signal
-                    received_signal = padded
-                else:
-                    # Truncate to fixed length
-                    received_signal = received_signal[:FIXED_SIGNAL_LEN]
+                    for batch_idx in range(num_batches):
+                        start_idx = batch_idx * BATCH_SIZE
+                        end_idx = min(start_idx + BATCH_SIZE, self.num_samples)
+                        batch_size = end_idx - start_idx
 
-                # Store
-                signals_ds[idx] = received_signal
-                snr_ds[idx] = conditions.effective_snr_db
-                pattern_ids[idx] = pattern_id
-                freq_triples[idx] = frequency_triple
+                        # Prepare arguments for parallel processing
+                        args_list = [
+                            (idx, self.scenario_drivers[idx], FIXED_SIGNAL_LEN)
+                            for idx in range(start_idx, end_idx)
+                        ]
+
+                        # Generate batch in parallel
+                        batch_results = pool.starmap(self._generate_single_sample_static, args_list)
+
+                        # Extract results
+                        batch_signals = np.zeros((batch_size, FIXED_SIGNAL_LEN), dtype=np.complex64)
+                        batch_clean_signals = np.zeros((batch_size, FIXED_SIGNAL_LEN), dtype=np.complex64)
+                        batch_snrs = np.zeros(batch_size, dtype=np.float32)
+                        batch_pattern_ids = np.zeros(batch_size, dtype=np.int16)
+                        batch_freq_triples = np.zeros(batch_size, dtype=np.int16)
+                        batch_qrn_types = []
+                        batch_modulations = []
+                        batch_data_symbol_rates = np.zeros(batch_size, dtype=np.int16)
+                        batch_duration_windows = np.zeros(batch_size, dtype=np.uint8)
+                        batch_propagation_modes = []
+
+                        for i, result in enumerate(batch_results):
+                            (received_signal, clean_signal, snr_db, pattern_id, frequency_triple,
+                             qrn_type, modulation, data_symbol_rate, duration_windows, propagation_mode) = result
+                            batch_signals[i] = received_signal
+                            batch_clean_signals[i] = clean_signal
+                            batch_snrs[i] = snr_db
+                            batch_pattern_ids[i] = pattern_id
+                            batch_freq_triples[i] = frequency_triple
+                            batch_qrn_types.append(qrn_type.encode('utf-8'))
+                            batch_modulations.append(modulation.encode('utf-8'))
+                            batch_data_symbol_rates[i] = data_symbol_rate
+                            batch_duration_windows[i] = duration_windows
+                            batch_propagation_modes.append(propagation_mode.encode('utf-8'))
+
+                        # Write entire batch at once (much faster than individual writes)
+                        signals_ds[start_idx:end_idx] = batch_signals
+                        clean_signals_ds[start_idx:end_idx] = batch_clean_signals
+                        snr_ds[start_idx:end_idx] = batch_snrs
+                        pattern_ids[start_idx:end_idx] = batch_pattern_ids
+                        freq_triples[start_idx:end_idx] = batch_freq_triples
+                        qrn_types[start_idx:end_idx] = batch_qrn_types
+                        modulations[start_idx:end_idx] = batch_modulations
+                        data_symbol_rates[start_idx:end_idx] = batch_data_symbol_rates
+                        duration_windows_ds[start_idx:end_idx] = batch_duration_windows
+                        propagation_modes[start_idx:end_idx] = batch_propagation_modes
+
+                        # Randomly sample signals for visualization
+                        if visualizer is not None:
+                            for i in range(batch_size):
+                                # Random sampling based on visualization_sample_rate
+                                if np.random.rand() < self.visualization_sample_rate:
+                                    sample_idx = start_idx + i
+
+                                    # Create metadata dictionary
+                                    metadata = {
+                                        'pattern_id': int(batch_pattern_ids[i]),
+                                        'frequency_triple': int(batch_freq_triples[i]),
+                                        'snr_db': float(batch_snrs[i]),
+                                        'qrn_type': batch_qrn_types[i].decode('utf-8') if isinstance(batch_qrn_types[i], bytes) else str(batch_qrn_types[i]),
+                                        'modulation': batch_modulations[i].decode('utf-8') if isinstance(batch_modulations[i], bytes) else str(batch_modulations[i]),
+                                        'data_symbol_rate': int(batch_data_symbol_rates[i]),
+                                        'propagation_mode': batch_propagation_modes[i].decode('utf-8') if isinstance(batch_propagation_modes[i], bytes) else str(batch_propagation_modes[i]),
+                                        'sample_idx': sample_idx
+                                    }
+
+                                    # Send to visualizer (non-blocking)
+                                    visualizer.add_signal(
+                                        iq_samples=batch_signals[i],
+                                        sample_rate=self.sample_rate,
+                                        metadata=metadata,
+                                        sample_idx=sample_idx,
+                                        blocking=False
+                                    )
+
+                        # Update progress bar
+                        pbar.update(batch_size)
+                        pbar.refresh()  # Force immediate update
+                        sys.stdout.flush()  # Force output flush
 
             # Store metadata
             f.attrs['num_samples'] = self.num_samples
@@ -249,10 +367,175 @@ class PhysicsConstrainedDataset(Dataset):
             f.attrs['for_test'] = self.for_test
             f.attrs['seed'] = self.seed if self.seed is not None else -1
 
+        # Stop visualizer and wait for completion
+        if visualizer is not None:
+            print("Completing visualizations...")
+            visualizer.stop()
+            print(f"✓ Visualizations saved to {self.visualization_dir}")
+
         # Load the cache into memory
         self._load_cache()
 
-        print(f"✓ Cache generated and saved to {self.cache_path}")
+        print(f"✓ Cache generated: {self.num_samples:,} samples saved to {self.cache_path.name}")
+
+    # Worker-level cache (shared across all samples in a worker process)
+    _worker_signal_gen = None
+    _worker_physics_calc = None
+
+    @staticmethod
+    def _init_worker():
+        """Initialize worker process with cached objects (called once per worker)."""
+        from modules.training.src.signal_generator.generator import SignalGenerator
+
+        # Create objects once per worker and cache them
+        PhysicsConstrainedDataset._worker_physics_calc = CoupledPhysicsCalculator(seed=None)
+        PhysicsConstrainedDataset._worker_signal_gen = SignalGenerator()
+
+    @staticmethod
+    def _generate_single_sample_static(idx: int, drivers: CorePhysicalDrivers, fixed_len: int) -> Tuple:
+        """
+        Static method for parallel signal generation (must be picklable).
+
+        This is a wrapper that uses cached objects from worker initialization.
+        Returns: (received_signal, clean_signal, snr_db, pattern_id, frequency_triple, qrn_type,
+                  modulation, data_symbol_rate, duration_windows, propagation_mode)
+        """
+        # Use worker-level cached instances (initialized once per worker)
+        physics_calc = PhysicsConstrainedDataset._worker_physics_calc
+        signal_gen = PhysicsConstrainedDataset._worker_signal_gen
+
+        # Calculate conditions
+        conditions = physics_calc.calculate_all_effects(drivers)
+
+        # Generate clean signal
+        message_len = np.random.randint(50, 150)
+        message_bytes = np.random.bytes(message_len)
+        pattern_id = np.random.randint(0, 4)
+        frequency_triple = int((drivers.frequency_mhz - 0.3) / 0.02) // 3
+        frequency_triple = np.clip(frequency_triple, 0, 42)
+
+        modulation_scheme = 'QPSK'
+        polar_rate = (2, 3)
+        data_symbol_rate = 150
+
+        clean_iq_signal, metadata = signal_gen.generate(
+            pattern_id=pattern_id,
+            frequency_triple=frequency_triple,
+            modulation_scheme=modulation_scheme,
+            polar_rate=polar_rate,
+            data_symbol_rate=data_symbol_rate,
+            message=message_bytes,
+            seed=None
+        )
+
+        clean_signal_original = clean_iq_signal.iq_samples.copy()
+
+        # Apply channel effects
+        received_signal = PhysicsConstrainedDataset._apply_channel_effects_static(
+            clean_signal_original, drivers, conditions, 48000
+        )
+
+        # Pad or truncate BOTH signals to fixed length
+        clean_signal = PhysicsConstrainedDataset._pad_or_truncate(clean_signal_original, fixed_len)
+        received_signal = PhysicsConstrainedDataset._pad_or_truncate(received_signal, fixed_len)
+
+        # Get dominant QRN type
+        qrn_type = conditions.dominant_qrn_type.value
+
+        # Get propagation mode
+        propagation_mode = conditions.propagation_mode.value
+
+        # Calculate duration in 341ms windows
+        # duration_seconds is in metadata, convert to windows
+        duration_seconds = metadata.get('duration_seconds', 1.0)
+        duration_windows = int(np.ceil(duration_seconds / 0.341))
+        duration_windows = np.clip(duration_windows, 0, 255)
+
+        return (received_signal, clean_signal, conditions.effective_snr_db, pattern_id, frequency_triple,
+                qrn_type, modulation_scheme, data_symbol_rate, duration_windows, propagation_mode)
+
+    @staticmethod
+    def _pad_or_truncate(signal: np.ndarray, fixed_len: int) -> np.ndarray:
+        """Pad or truncate signal to fixed length."""
+        if len(signal) < fixed_len:
+            padded = np.zeros(fixed_len, dtype=np.complex64)
+            padded[:len(signal)] = signal
+            return padded
+        else:
+            return signal[:fixed_len]
+
+    @staticmethod
+    def _apply_channel_effects_static(
+        clean_signal: np.ndarray,
+        drivers: CorePhysicalDrivers,
+        conditions: DerivedConditions,
+        sample_rate: int
+    ) -> np.ndarray:
+        """
+        Static method to apply channel effects (for parallel processing).
+
+        Simplified version that doesn't require instance methods.
+        """
+        signal = clean_signal.copy()
+
+        # 1. Apply propagation mode
+        mode = conditions.propagation_mode
+
+        if mode == PropagationMode.RAYLEIGH:
+            from modules.training.src.channel_simulator.multipath import apply_multipath_fading, MultipathProfile
+            profile = MultipathProfile(
+                delays=[0.0],
+                powers=[1.0],
+                doppler_shifts=[conditions.doppler_spread_hz],
+                k_factors=[0.0]
+            )
+            signal = apply_multipath_fading(signal, profile, sample_rate)
+
+        elif mode == PropagationMode.RICIAN:
+            from modules.training.src.channel_simulator.multipath import apply_multipath_fading, MultipathProfile
+            profile = MultipathProfile(
+                delays=[0.0],
+                powers=[1.0],
+                doppler_shifts=[conditions.doppler_spread_hz],
+                k_factors=[conditions.rician_k_factor]
+            )
+            signal = apply_multipath_fading(signal, profile, sample_rate)
+
+        elif mode == PropagationMode.MULTIPATH_SPARSE:
+            from modules.training.src.channel_simulator.multipath import watterson_hf_profile, apply_multipath_fading
+            profile = watterson_hf_profile(
+                delay_spread_ms=conditions.multipath_delay_spread_ms,
+                doppler_spread_hz=conditions.doppler_spread_hz
+            )
+            signal = apply_multipath_fading(signal, profile, sample_rate)
+
+        elif mode == PropagationMode.MULTIPATH_DENSE:
+            from modules.training.src.channel_simulator.multipath import severe_multipath_profile, apply_multipath_fading
+            profile = severe_multipath_profile(
+                num_paths=6,
+                max_delay_ms=conditions.multipath_delay_spread_ms,
+                max_doppler_hz=conditions.doppler_spread_hz
+            )
+            signal = apply_multipath_fading(signal, profile, sample_rate)
+
+        # 2. Apply D-layer absorption
+        absorption_linear = 10 ** (-conditions.d_layer_absorption_db / 20)
+        signal = signal * absorption_linear
+
+        # 3. Apply simplified QRN (basic atmospheric noise)
+        qrn_power_db = conditions.atmospheric_noise_db
+        qrn_power_linear = 10 ** (qrn_power_db / 20)
+        qrn_signal = (np.random.randn(len(signal)) + 1j * np.random.randn(len(signal))) * qrn_power_linear
+        signal = signal + qrn_signal
+
+        # 4. Apply AWGN to reach target SNR
+        signal_power = np.mean(np.abs(signal) ** 2)
+        noise_power = signal_power / (10 ** (conditions.effective_snr_db / 10))
+        noise = np.random.normal(0, np.sqrt(noise_power / 2), len(signal)) + \
+                1j * np.random.normal(0, np.sqrt(noise_power / 2), len(signal))
+        signal = signal + noise
+
+        return signal
 
     def _load_cache(self):
         """Load cached signals into memory."""
@@ -260,12 +543,25 @@ class PhysicsConstrainedDataset(Dataset):
             # Load all data into memory for fast access
             self.cached_data = {
                 'signals': f['signals'][:],
+                'clean_signals': f['clean_signals'][:] if 'clean_signals' in f else None,
                 'snr_db': f['snr_db'][:],
                 'pattern_ids': f['pattern_ids'][:],
-                'frequency_triples': f['frequency_triples'][:]
+                'frequency_triples': f['frequency_triples'][:],
+                'qrn_types': f['qrn_types'][:] if 'qrn_types' in f else None,
+                'modulations': f['modulations'][:] if 'modulations' in f else None,
+                'data_symbol_rates': f['data_symbol_rates'][:] if 'data_symbol_rates' in f else None,
+                'duration_windows': f['duration_windows'][:] if 'duration_windows' in f else None,
+                'propagation_modes': f['propagation_modes'][:] if 'propagation_modes' in f else None
             }
 
-        print(f"✓ Loaded {len(self.cached_data['signals'])} cached signals into memory")
+        print(f"✓ Loaded {len(self.cached_data['signals']):,} samples into memory")
+        extra_features = []
+        if self.cached_data['clean_signals'] is not None:
+            extra_features.append("clean signals")
+        if self.cached_data['modulations'] is not None:
+            extra_features.append("modulation/rate/duration")
+        if extra_features:
+            print(f"  (includes {', '.join(extra_features)})")
 
     def __len__(self) -> int:
         return self.num_samples
@@ -304,6 +600,33 @@ class PhysicsConstrainedDataset(Dataset):
                 'frequency_mhz': drivers.frequency_mhz,
                 'sample_idx': idx
             }
+
+            # Add clean signal and QRN type if available (for QRN Expert training)
+            if self.cached_data['clean_signals'] is not None:
+                clean_signal = self.cached_data['clean_signals'][idx]
+                clean_iq_i = np.real(clean_signal).astype(np.float32)
+                clean_iq_q = np.imag(clean_signal).astype(np.float32)
+                labels['clean_iq'] = torch.from_numpy(np.stack([clean_iq_i, clean_iq_q], axis=0))
+
+            if self.cached_data['qrn_types'] is not None:
+                qrn_type_bytes = self.cached_data['qrn_types'][idx]
+                labels['qrn_type'] = qrn_type_bytes.decode('utf-8') if isinstance(qrn_type_bytes, bytes) else str(qrn_type_bytes)
+
+            # Add modulation, data rate, duration (for Signal Expert and Decoder training)
+            if self.cached_data['modulations'] is not None:
+                modulation_bytes = self.cached_data['modulations'][idx]
+                labels['modulation'] = modulation_bytes.decode('utf-8') if isinstance(modulation_bytes, bytes) else str(modulation_bytes)
+
+            if self.cached_data['data_symbol_rates'] is not None:
+                labels['data_symbol_rate'] = int(self.cached_data['data_symbol_rates'][idx])
+
+            if self.cached_data['duration_windows'] is not None:
+                labels['duration_windows'] = int(self.cached_data['duration_windows'][idx])
+
+            # Add propagation mode (for Channel Expert training)
+            if self.cached_data['propagation_modes'] is not None:
+                prop_mode_bytes = self.cached_data['propagation_modes'][idx]
+                labels['propagation_mode'] = prop_mode_bytes.decode('utf-8') if isinstance(prop_mode_bytes, bytes) else str(prop_mode_bytes)
 
         else:
             # Generate on-the-fly (SLOW - only if cache disabled)

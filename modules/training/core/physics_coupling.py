@@ -14,6 +14,13 @@ from dataclasses import dataclass
 from typing import Tuple, Dict, Optional
 from enum import Enum
 
+# Import ITU-R P.533 model for accurate MUF/absorption
+try:
+    from itu_r_p533 import ITU_R_P533
+    ITU_MODEL_AVAILABLE = True
+except ImportError:
+    ITU_MODEL_AVAILABLE = False
+
 
 class PropagationMode(Enum):
     """HF propagation modes."""
@@ -22,6 +29,7 @@ class PropagationMode(Enum):
     RICIAN = "rician"  # Dominant path + multipath
     MULTIPATH_SPARSE = "multipath_sparse"  # 2-3 paths
     MULTIPATH_DENSE = "multipath_dense"  # 4+ paths
+    SPORADIC_E = "sporadic_e"  # Enhanced E-layer propagation (skip distance)
 
 
 class QRNType(Enum):
@@ -64,6 +72,10 @@ class CorePhysicalDrivers:
     # Band
     frequency_mhz: float  # Operating frequency
 
+    # Solar activity events (optional, for SID modeling)
+    solar_flare_probability: float = 0.0  # 0-1, probability of X-ray flare
+    flare_intensity: float = 0.0  # If flare: X1, X5, X10 class (1, 5, 10)
+
 
 @dataclass
 class DerivedConditions:
@@ -93,6 +105,16 @@ class DerivedConditions:
     effective_snr_db: float  # What we'd measure
     signal_strength_s_units: int  # S-meter reading (1-9+)
 
+    # Solar events (new)
+    solar_flare_active: bool = False  # SID in progress
+    sid_absorption_db: float = 0.0  # Additional absorption from SID
+
+    # Pre-computed noise generation parameters (for GPU efficiency)
+    atmospheric_burst_rate: float = 0.5  # Bursts/sec (K-index scaled)
+    has_qrm: bool = False  # Whether this stream has QRM
+    has_atmospheric_qrn: bool = False  # Whether has atmospheric QRN
+    has_impulsive_qrn: bool = False  # Whether has impulsive QRN
+
 
 class CoupledPhysicsCalculator:
     """
@@ -102,9 +124,16 @@ class CoupledPhysicsCalculator:
     (auroral absorption, multipath) AND noise (auroral hiss, static).
     """
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(self, seed: Optional[int] = None, use_itu_model: bool = True):
         if seed is not None:
             np.random.seed(seed)
+
+        # Initialize ITU model if available
+        self.use_itu = use_itu_model and ITU_MODEL_AVAILABLE
+        if self.use_itu:
+            self.itu_model = ITU_R_P533()
+        else:
+            self.itu_model = None
 
     def calculate_all_effects(self, drivers: CorePhysicalDrivers) -> DerivedConditions:
         """
@@ -119,7 +148,12 @@ class CoupledPhysicsCalculator:
         e_layer = self._calculate_sporadic_e(drivers)
         f_height = self._calculate_f_layer_height(drivers)
 
-        # Calculate propagation mode (depends on frequency vs MUF, K-index, time)
+        # Check for solar flare effects (Sudden Ionospheric Disturbance)
+        flare_active, sid_absorption = self._calculate_solar_flare_effects(drivers)
+        if flare_active:
+            d_absorption += sid_absorption  # SID increases D-layer absorption
+
+        # Calculate propagation mode (depends on frequency vs MUF, K-index, time, Sporadic E)
         prop_mode = self._calculate_propagation_mode(drivers, muf)
 
         # Calculate multipath characteristics (coupled to K-index, time, MUF)
@@ -136,6 +170,15 @@ class CoupledPhysicsCalculator:
         snr = self._calculate_effective_snr(drivers, d_absorption, atm_noise, man_noise)
         s_units = self._snr_to_s_units(snr)
 
+        # PRE-COMPUTE noise generation parameters (for GPU efficiency)
+        # Atmospheric burst rate (K-index dependent)
+        atm_burst_rate = 0.5 * (1.0 + drivers.k_index / 9.0)  # 0.5-1.0 bursts/sec
+
+        # Determine which noise types this stream will have (random but pre-computed)
+        has_qrm = np.random.random() < 0.2  # 20% have QRM
+        has_atmospheric = qrn_type in [QRNType.CRACKLING, QRNType.THUNDERSTORM, QRNType.STATIC] or np.random.random() < 0.3
+        has_impulsive = np.random.random() < 0.15  # 15% have powerline noise
+
         return DerivedConditions(
             muf_mhz=muf,
             luf_mhz=luf,
@@ -151,29 +194,52 @@ class CoupledPhysicsCalculator:
             atmospheric_noise_db=atm_noise,
             man_made_noise_db=man_noise,
             effective_snr_db=snr,
-            signal_strength_s_units=s_units
+            signal_strength_s_units=s_units,
+            solar_flare_active=flare_active,
+            sid_absorption_db=sid_absorption,
+            # Pre-computed noise parameters
+            atmospheric_burst_rate=atm_burst_rate,
+            has_qrm=has_qrm,
+            has_atmospheric_qrn=has_atmospheric,
+            has_impulsive_qrn=has_impulsive
         )
 
     def _calculate_muf(self, d: CorePhysicalDrivers) -> float:
         """Maximum Usable Frequency (coupled to SFI, time, season, latitude)."""
-        # Base MUF from solar flux
-        base_muf = 5.0 + (d.sfi - 70) * 0.08  # 5-25 MHz range
+        if self.use_itu and self.itu_model is not None:
+            # Use ITU-R P.533 model (industry standard)
+            month = ((d.day_of_year - 1) // 30) + 1  # Approximate month from day
+            month = min(12, max(1, month))
 
-        # Time of day effect (local solar time)
-        local_hour = (d.utc_hour + d.longitude / 15.0) % 24
-        if 6 <= local_hour <= 18:  # Daytime
-            time_factor = 1.0 + 0.3 * np.sin(np.pi * (local_hour - 6) / 12)
-        else:  # Nighttime
-            time_factor = 0.5 + 0.2 * np.cos(np.pi * (local_hour - 18) / 12)
+            muf = self.itu_model.calculate_muf(
+                ssn=d.sunspot_number,
+                month=month,
+                latitude=d.latitude,
+                longitude=d.longitude,
+                utc_hour=d.utc_hour,
+                frequency=d.frequency_mhz
+            )
 
-        # Seasonal effect (winter anomaly at mid-latitudes)
-        season_factor = 1.0 + 0.1 * np.cos(2 * np.pi * d.day_of_year / 365.25)
+            # Geomagnetic disturbance reduces MUF
+            k_factor = 1.0 - 0.05 * d.k_index
+            muf *= k_factor
 
-        # Geomagnetic disturbance reduces MUF
-        k_factor = 1.0 - 0.05 * d.k_index  # -5% per K-index unit
+            return muf
+        else:
+            # Fallback to simplified model
+            base_muf = 5.0 + (d.sfi - 70) * 0.08
 
-        muf = base_muf * time_factor * season_factor * k_factor
-        return max(3.0, min(50.0, muf))  # Physical limits
+            local_hour = (d.utc_hour + d.longitude / 15.0) % 24
+            if 6 <= local_hour <= 18:
+                time_factor = 1.0 + 0.3 * np.sin(np.pi * (local_hour - 6) / 12)
+            else:
+                time_factor = 0.5 + 0.2 * np.cos(np.pi * (local_hour - 18) / 12)
+
+            season_factor = 1.0 + 0.1 * np.cos(2 * np.pi * d.day_of_year / 365.25)
+            k_factor = 1.0 - 0.05 * d.k_index
+
+            muf = base_muf * time_factor * season_factor * k_factor
+            return max(3.0, min(50.0, muf))
 
     def _calculate_luf(self, d: CorePhysicalDrivers) -> float:
         """Lowest Usable Frequency (coupled to absorption)."""
@@ -197,31 +263,38 @@ class CoupledPhysicsCalculator:
 
     def _calculate_d_layer_absorption(self, d: CorePhysicalDrivers) -> float:
         """D-layer absorption in dB (coupled to time, frequency, K-index)."""
-        # Solar zenith angle effect
         local_hour = (d.utc_hour + d.longitude / 15.0) % 24
-        latitude_rad = np.radians(d.latitude)
 
-        # Simplified solar zenith angle
-        if 6 <= local_hour <= 18:
-            zenith_factor = np.cos(np.pi * (local_hour - 12) / 12) * np.cos(latitude_rad)
-            zenith_factor = max(0, zenith_factor)
+        if self.use_itu and self.itu_model is not None:
+            # Use ITU-R P.533 absorption model
+            absorption = self.itu_model.calculate_absorption(
+                frequency=d.frequency_mhz,
+                local_time=local_hour,
+                ssn=d.sunspot_number,
+                k_index=d.k_index,
+                latitude=d.latitude
+            )
+            return absorption
         else:
-            zenith_factor = 0.0
+            # Fallback to simplified model
+            latitude_rad = np.radians(d.latitude)
 
-        # Base absorption (frequency dependent: ~f^1.5)
-        base_absorption = 0.5 * (d.frequency_mhz / 7.0) ** 1.5
+            if 6 <= local_hour <= 18:
+                zenith_factor = np.cos(np.pi * (local_hour - 12) / 12) * np.cos(latitude_rad)
+                zenith_factor = max(0, zenith_factor)
+            else:
+                zenith_factor = 0.0
 
-        # Daytime absorption
-        day_absorption = base_absorption * zenith_factor * 10.0  # 0-10 dB range
+            base_absorption = 0.5 * (d.frequency_mhz / 7.0) ** 1.5
+            day_absorption = base_absorption * zenith_factor * 10.0
 
-        # Auroral/polar cap absorption (high K-index at high latitudes)
-        if abs(d.latitude) > 55:
-            auroral_absorption = d.k_index * 2.0 * (abs(d.latitude) - 55) / 35
-        else:
-            auroral_absorption = 0.0
+            if abs(d.latitude) > 55:
+                auroral_absorption = d.k_index * 2.0 * (abs(d.latitude) - 55) / 35
+            else:
+                auroral_absorption = 0.0
 
-        total_absorption = day_absorption + auroral_absorption
-        return max(0.0, min(30.0, total_absorption))
+            total_absorption = day_absorption + auroral_absorption
+            return max(0.0, min(30.0, total_absorption))
 
     def _calculate_sporadic_e(self, d: CorePhysicalDrivers) -> bool:
         """Sporadic E presence (more common in summer, mid-latitudes)."""
@@ -261,17 +334,23 @@ class CoupledPhysicsCalculator:
 
     def _calculate_propagation_mode(self, d: CorePhysicalDrivers, muf: float) -> PropagationMode:
         """
-        Propagation mode (coupled to freq/MUF ratio, K-index, time).
+        Propagation mode (coupled to freq/MUF ratio, K-index, time, Sporadic E).
 
         High K-index → more multipath, Rayleigh fading
         Near MUF → Rician (dominant sky wave)
         Below LUF → heavy absorption, possible ground wave (AWGN-like)
+        Sporadic E → Enhanced short-skip propagation
         """
         freq_ratio = d.frequency_mhz / muf
 
+        # Check for Sporadic E (can support higher frequencies)
+        if self._calculate_sporadic_e(d):
+            # Sporadic E supports VHF/low-HF with strong signal
+            if d.frequency_mhz > 20 or freq_ratio > 1.2:
+                return PropagationMode.SPORADIC_E
+
         # Very low frequency or very high K-index → Rayleigh
         if freq_ratio < 0.3 or d.k_index > 7:
-            # Check for ground wave dominance (low freq, short range)
             if d.frequency_mhz < 4.0:
                 return PropagationMode.RICIAN  # Ground wave dominant
             else:
@@ -289,7 +368,6 @@ class CoupledPhysicsCalculator:
         if 0.4 <= freq_ratio <= 0.8 and 3 <= d.k_index <= 5:
             return PropagationMode.MULTIPATH_SPARSE
 
-        # Default: Rician for good conditions
         return PropagationMode.RICIAN
 
     def _calculate_delay_spread(self, d: CorePhysicalDrivers, mode: PropagationMode, f_height: float) -> float:
@@ -308,8 +386,9 @@ class CoupledPhysicsCalculator:
             PropagationMode.RICIAN: 0.3,
             PropagationMode.RAYLEIGH: 1.5,
             PropagationMode.MULTIPATH_SPARSE: 1.0,
-            PropagationMode.MULTIPATH_DENSE: 2.5
-        }[mode]
+            PropagationMode.MULTIPATH_DENSE: 2.5,
+            PropagationMode.SPORADIC_E: 0.5  # Sporadic E has moderate delay spread
+        }.get(mode, 1.0)  # Default to 1.0 if mode not found
 
         delay = base_delay * k_factor * mode_multiplier
         return max(0.0, min(10.0, delay))
@@ -334,8 +413,9 @@ class CoupledPhysicsCalculator:
             PropagationMode.RICIAN: 0.5,
             PropagationMode.RAYLEIGH: 2.0,
             PropagationMode.MULTIPATH_SPARSE: 1.5,
-            PropagationMode.MULTIPATH_DENSE: 3.0
-        }[mode]
+            PropagationMode.MULTIPATH_DENSE: 3.0,
+            PropagationMode.SPORADIC_E: 1.0  # Sporadic E has moderate Doppler
+        }.get(mode, 1.0)  # Default to 1.0 if mode not found
 
         doppler = base_doppler * k_factor * auroral_factor * mode_multiplier
         return max(0.0, min(5.0, doppler))
@@ -465,14 +545,16 @@ class CoupledPhysicsCalculator:
 
         This is what we'd actually measure at the receiver.
         """
-        # Assume transmit power gives baseline SNR
-        baseline_snr = 20.0  # dB (typical for HF with good antennas)
+        # Baseline signal strength (typical amateur HF: -73 dBm minimum detectable)
+        # With good antennas and typical power (100W): S9 = 0 dB SNR
+        baseline_snr = 30.0  # dB (increased from 20 to give realistic range)
 
         # Path loss (simplified: depends on frequency, distance)
-        # Lower frequencies have lower path loss
-        path_loss = 10.0 + (d.frequency_mhz - 7.0) * 0.5
+        # Typical HF path loss: 100-140 dB for 1000-3000 km
+        # But we want SNR not path loss, so use relative loss
+        path_loss = 5.0 + (d.frequency_mhz - 7.0) * 0.3  # Reduced from 0.5
 
-        # Total noise floor
+        # Total noise floor (atmospheric + man-made)
         total_noise = 10 * np.log10(10**(atm_noise/10) + 10**(man_noise/10))
 
         # Effective SNR
@@ -482,6 +564,39 @@ class CoupledPhysicsCalculator:
         snr += np.random.normal(0, 1.5)
 
         return max(-30.0, min(40.0, snr))
+
+    def _calculate_solar_flare_effects(self, d: CorePhysicalDrivers) -> Tuple[bool, float]:
+        """
+        Calculate Sudden Ionospheric Disturbance (SID) from solar flares.
+
+        X-ray flares cause rapid increase in D-layer ionization → absorption spike.
+
+        Args:
+            d: Core physical drivers (with optional flare parameters)
+
+        Returns:
+            Tuple of (flare_active, sid_absorption_db)
+        """
+        # Check if flare is occurring (from driver parameters)
+        if hasattr(d, 'solar_flare_probability') and d.solar_flare_probability > 0:
+            flare_active = np.random.random() < d.solar_flare_probability
+
+            if flare_active and hasattr(d, 'flare_intensity'):
+                # SID absorption depends on flare class
+                # X1 flare: +5 dB, X10 flare: +20 dB
+                intensity = d.flare_intensity
+                sid_absorption = 5.0 * np.log10(intensity + 1) * 2.0  # 0-20 dB range
+
+                # SID only on sunlit side
+                local_hour = (d.utc_hour + d.longitude / 15.0) % 24
+                if 6 <= local_hour <= 18:
+                    return True, sid_absorption
+                else:
+                    return False, 0.0
+            else:
+                return False, 0.0
+        else:
+            return False, 0.0
 
     def _snr_to_s_units(self, snr_db: float) -> int:
         """Convert SNR to S-meter units (1-9+)."""

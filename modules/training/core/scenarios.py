@@ -19,6 +19,9 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from enum import Enum
+from tqdm import tqdm
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 from physics_coupling import CorePhysicalDrivers, CoupledPhysicsCalculator, DerivedConditions
 from continuous_distributions import (
@@ -67,6 +70,92 @@ class ScenarioTemplate:
 
     # Physics constraints (incompatible combinations)
     incompatible_with: List[str] = field(default_factory=list)
+
+
+def _generate_scenario_worker(args):
+    """
+    Worker function for parallel scenario generation.
+
+    Args:
+        args: Tuple of (template_name, templates_dict, worker_seed)
+
+    Returns:
+        CorePhysicalDrivers instance
+    """
+    template_name, templates_dict, worker_seed = args
+
+    # Set per-worker random seed for reproducibility
+    if worker_seed is not None:
+        np.random.seed(worker_seed)
+
+    template = templates_dict[template_name]
+
+    # Sample from continuous distributions
+    sfi_dist = create_solar_flux_dist(template.solar_flux_scenario)
+    sfi = sfi_dist.sample()
+
+    k_dist = create_k_index_dist(template.k_index_scenario)
+    k_index = k_dist.sample()
+
+    ts_dist = create_thunderstorm_activity_dist(template.thunderstorm_scenario)
+    thunderstorm_activity = ts_dist.sample()
+
+    time_dist = create_time_of_day_dist(template.time_scenario)
+    utc_hour = time_dist.sample()
+
+    lat_dist = create_latitude_dist(template.latitude_scenario)
+    latitude = lat_dist.sample()
+
+    day_dist = create_day_of_year_dist(template.season)
+    day_of_year = int(day_dist.sample())
+
+    # Random longitude
+    longitude = np.random.uniform(-180, 180)
+
+    # Select random band from template's band list
+    band = np.random.choice(template.bands)
+    freq_dist = create_frequency_dist(band)
+    frequency_mhz = freq_dist.sample()
+
+    # Derive other correlated parameters
+    # Sunspot number correlates with SFI
+    sunspot_number = (sfi - 70) * 1.5 + np.random.normal(0, 10)
+    sunspot_number = max(0, min(250, sunspot_number))
+
+    # A-index from K-index (roughly K^2 * 3)
+    a_index = k_index ** 2 * 3 + np.random.normal(0, 5)
+    a_index = max(0, min(400, a_index))
+
+    # Dst from K-index (storms have negative Dst)
+    if k_index > 5:
+        dst_index = -30 * (k_index - 4) + np.random.normal(0, 20)
+    else:
+        dst_index = np.random.normal(-20, 15)
+    dst_index = max(-500, min(50, dst_index))
+
+    # Precipitation correlates with thunderstorm activity
+    if thunderstorm_activity > 0.3:
+        precipitation_rate = thunderstorm_activity * 50 + np.random.exponential(10)
+    else:
+        precipitation_rate = np.random.exponential(2)
+
+    # Create CorePhysicalDrivers instance
+    drivers = CorePhysicalDrivers(
+        sfi=sfi,
+        sunspot_number=sunspot_number,
+        k_index=k_index,
+        a_index=a_index,
+        dst_index=dst_index,
+        utc_hour=utc_hour,
+        day_of_year=day_of_year,
+        latitude=latitude,
+        longitude=longitude,
+        thunderstorm_activity=thunderstorm_activity,
+        precipitation_rate=precipitation_rate,
+        frequency_mhz=frequency_mhz
+    )
+
+    return drivers
 
 
 class ScenarioLibrary:
@@ -336,7 +425,9 @@ class ScenarioLibrary:
 
     def generate_balanced_realistic_batch(self, batch_size: int,
                                          for_test: bool = False,
-                                         seed: Optional[int] = None) -> List[CorePhysicalDrivers]:
+                                         seed: Optional[int] = None,
+                                         num_workers: Optional[int] = None,
+                                         use_parallel: bool = True) -> List[CorePhysicalDrivers]:
         """
         Generate a batch of scenarios with balanced-realistic weighting.
 
@@ -344,6 +435,8 @@ class ScenarioLibrary:
             batch_size: Number of scenarios to generate
             for_test: If True, use harder distribution (more storms, fewer excellent)
             seed: Random seed for reproducibility
+            num_workers: Number of parallel workers (default: cpu_count() - 1)
+            use_parallel: If True, use multiprocessing (default: True)
 
         Returns:
             List of CorePhysicalDrivers instances
@@ -374,11 +467,90 @@ class ScenarioLibrary:
             replace=True
         )
 
-        # Generate instances
-        batch = []
-        for template_name in selected_templates:
-            drivers = self.generate_scenario_instance(template_name)
-            batch.append(drivers)
+        # Decide whether to use parallel processing
+        # Only use parallel for large batches (overhead not worth it for small batches)
+        if use_parallel and batch_size >= 1000:
+            # Parallel generation
+            if num_workers is None:
+                num_workers = max(1, cpu_count() - 1)  # Leave 1 core free
+
+            # For very large batches (>1M), process in sub-batches to avoid memory issues
+            if batch_size > 1_000_000:
+                print(f"Large batch detected ({batch_size:,} scenarios)")
+                print(f"Processing in sub-batches to manage memory...")
+
+                sub_batch_size = 500_000
+                num_sub_batches = (batch_size + sub_batch_size - 1) // sub_batch_size
+                batch = []
+
+                for sub_batch_idx in range(num_sub_batches):
+                    start_idx = sub_batch_idx * sub_batch_size
+                    end_idx = min(start_idx + sub_batch_size, batch_size)
+                    current_size = end_idx - start_idx
+
+                    print(f"\nSub-batch {sub_batch_idx + 1}/{num_sub_batches}: generating {current_size:,} scenarios...")
+
+                    # Process this sub-batch
+                    sub_templates = selected_templates[start_idx:end_idx]
+                    if seed is not None:
+                        sub_seeds = [seed + i for i in range(start_idx, end_idx)]
+                    else:
+                        sub_seeds = [None] * current_size
+
+                    worker_args = [
+                        (template_name, self.templates, worker_seed)
+                        for template_name, worker_seed in zip(sub_templates, sub_seeds)
+                    ]
+
+                    chunksize = max(1000, current_size // (num_workers * 10))
+
+                    with Pool(processes=num_workers) as pool:
+                        sub_batch = list(tqdm(
+                            pool.imap_unordered(_generate_scenario_worker, worker_args, chunksize=chunksize),
+                            total=current_size,
+                            desc=f"  Sub-batch {sub_batch_idx + 1}",
+                            unit="scenarios",
+                            smoothing=0.05,
+                            mininterval=0.5
+                        ))
+
+                    batch.extend(sub_batch)
+                    print(f"  ✓ Completed sub-batch {sub_batch_idx + 1}/{num_sub_batches} ({len(batch):,}/{batch_size:,} total)")
+
+                print(f"\n✓ All sub-batches complete: {len(batch):,} scenarios generated")
+
+            else:
+                # Normal parallel processing for moderate batches
+                if seed is not None:
+                    worker_seeds = [seed + i for i in range(batch_size)]
+                else:
+                    worker_seeds = [None] * batch_size
+
+                worker_args = [
+                    (template_name, self.templates, worker_seed)
+                    for template_name, worker_seed in zip(selected_templates, worker_seeds)
+                ]
+
+                print(f"Generating scenarios using {num_workers} parallel workers...")
+                chunksize = max(500, batch_size // (num_workers * 10))
+                print(f"Chunk size: {chunksize} scenarios per chunk")
+
+                with Pool(processes=num_workers) as pool:
+                    batch = list(tqdm(
+                        pool.imap_unordered(_generate_scenario_worker, worker_args, chunksize=chunksize),
+                        total=batch_size,
+                        desc="Sampling scenarios (parallel)",
+                        unit="scenarios",
+                        smoothing=0.05,
+                        mininterval=0.5
+                    ))
+
+        else:
+            # Serial generation (for small batches or if parallel disabled)
+            batch = []
+            for template_name in tqdm(selected_templates, desc="Sampling scenarios", unit="scenarios"):
+                drivers = self.generate_scenario_instance(template_name)
+                batch.append(drivers)
 
         return batch
 

@@ -8,13 +8,13 @@ from scipy import signal as scipy_signal
 from typing import Tuple
 
 
-def generate_gaussian_filter(BT: float = 0.3, span_symbols: int = 4,
+def generate_gaussian_filter(BT: float = 0.3, span_symbols: int = 8,
                             samples_per_symbol: int = 240) -> np.ndarray:
     """Generate Gaussian filter for GMSK pulse shaping.
 
     Args:
         BT: Bandwidth-time product (0.3 for CASCADE V2)
-        span_symbols: Filter span in symbols (typically 4)
+        span_symbols: Filter span in symbols (8 for smooth frequency transitions)
         samples_per_symbol: Samples per symbol (48000 Hz / 200 sym/s = 240)
 
     Returns:
@@ -79,8 +79,8 @@ def generate_gmsk_fsk(pattern_bits: np.ndarray,
     nrz_upsampled = np.zeros(pattern_length * samples_per_symbol, dtype=np.float32)
     nrz_upsampled[::samples_per_symbol] = nrz
 
-    # Apply Gaussian filter
-    gaussian_filter = generate_gaussian_filter(BT=0.3, span_symbols=4,
+    # Apply Gaussian filter (longer span for smooth phase transitions)
+    gaussian_filter = generate_gaussian_filter(BT=0.3, span_symbols=8,
                                               samples_per_symbol=samples_per_symbol)
     filtered = np.convolve(nrz_upsampled, gaussian_filter, mode='same')
 
@@ -173,8 +173,8 @@ def generate_gmsk_3fsk(pattern_symbols: np.ndarray,
     nrz_upsampled = np.zeros(pattern_length * samples_per_symbol, dtype=np.float32)
     nrz_upsampled[::samples_per_symbol] = nrz
 
-    # Apply Gaussian filter
-    gaussian_filter = generate_gaussian_filter(BT=0.3, span_symbols=4,
+    # Apply Gaussian filter (longer span for smooth phase transitions)
+    gaussian_filter = generate_gaussian_filter(BT=0.3, span_symbols=8,
                                               samples_per_symbol=samples_per_symbol)
     filtered = np.convolve(nrz_upsampled, gaussian_filter, mode='same')
 
@@ -272,3 +272,75 @@ def verify_constant_envelope(iq_signal: np.ndarray, tolerance: float = 0.05) -> 
     variance = np.var(envelope_normalized)
 
     return variance < tolerance
+
+
+def generate_gmsk_3fsk_always_on_center(pattern_symbols: np.ndarray,
+                                        tone_a_hz: float,
+                                        tone_b_hz: float,
+                                        tone_c_hz: float,
+                                        sample_rate: int = 48000,
+                                        symbol_rate: int = 200,
+                                        num_centers: int = 1) -> np.ndarray:
+    """Generate GMSK-modulated 3-FSK with frequency diversity.
+
+    Simplified implementation using proven standard GMSK 3-FSK.
+    Generates multiple 3-FSK signals at offset frequencies for frequency diversity.
+
+    Args:
+        pattern_symbols: Ternary pattern, values {0, 1, 2}
+        tone_a_hz: Lower frequency (e.g., 1300 Hz)
+        tone_b_hz: Center frequency (e.g., 1320 Hz)
+        tone_c_hz: Upper frequency (e.g., 1340 Hz)
+        sample_rate: IQ sample rate in Hz (default 48000)
+        symbol_rate: Symbol rate in symbols/second (default 200)
+        num_centers: Number of center frequencies for diversity (1-16)
+                    More centers = better SNR but wider bandwidth
+
+    Returns:
+        np.ndarray: Complex IQ samples with frequency diversity
+
+    Example:
+        >>> pattern = np.array([0, 1, 2, 1, 0, 2])
+        >>> iq = generate_gmsk_3fsk_always_on_center(pattern, 1300, 1320, 1340)
+    """
+    if not np.all((pattern_symbols >= 0) & (pattern_symbols <= 2)):
+        raise ValueError("pattern_symbols must contain only 0, 1, and 2")
+
+    if num_centers < 1 or num_centers > 16:
+        raise ValueError(f"num_centers must be 1-16, got {num_centers}")
+
+    # Power division for multiple centers
+    power_per_center = 1.0 / np.sqrt(num_centers)
+
+    # Initialize combined signal
+    pattern_length = len(pattern_symbols)
+    samples_per_symbol = sample_rate // symbol_rate
+    combined_signal = np.zeros(pattern_length * samples_per_symbol, dtype=np.complex64)
+
+    # Generate signal for each center frequency
+    for center_idx in range(num_centers):
+        # Offset frequencies for multiple centers
+        if num_centers > 1:
+            freq_offset = (center_idx - num_centers/2) * 60  # 60 Hz spacing
+            center_tone_a = tone_a_hz + freq_offset
+            center_tone_b = tone_b_hz + freq_offset
+            center_tone_c = tone_c_hz + freq_offset
+        else:
+            center_tone_a = tone_a_hz
+            center_tone_b = tone_b_hz
+            center_tone_c = tone_c_hz
+
+        # Use standard 3-FSK generation (proven to work without phase issues)
+        this_signal = generate_gmsk_3fsk(
+            pattern_symbols,
+            center_tone_a,
+            center_tone_b,
+            center_tone_c,
+            sample_rate,
+            symbol_rate
+        )
+
+        # Add to combined signal with power scaling
+        combined_signal += power_per_center * this_signal
+
+    return combined_signal.astype(np.complex64)

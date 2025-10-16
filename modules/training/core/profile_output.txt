@@ -1,0 +1,108 @@
+================================================================================
+COMPLETE DATASET GENERATION PROFILING
+================================================================================
+
+Generating 1000 streams (batch_size=100)...
+
+
+======================================================================
+STREAMING CASCADE DATASET (GPU-ACCELERATED)
+======================================================================
+Dataset configuration:
+  TRAINING SAMPLES (windows): 5,000
+  Streams to generate: 1,000 (= 5,000 samples ÷ 5 windows/stream)
+  Stream duration: 10.0s (480,000 samples @ 48000 Hz)
+  Window duration: 2.0s (96,000 samples)
+  Windows per stream: 5
+Avg messages per stream: 8.0
+GPU batch size: 100 streams
+Device: cuda
+
+Initializing GPU components...
+GPUSignalGenerator: Using device cuda
+  Using always-on center design (4 centers + 2 alternating outers)
+GPU Polar Codec: Pre-computing generator matrices...
+✓ GPU Polar ready: 8 block sizes, 48 (size,rate) combinations
+✓ Loaded 4 always-on patterns (center/lower/upper), 8 RC filters, and GPU Polar codec
+GPUChannelSimulator: 48000 Hz, device cuda
+  Time resolution: 10ms (100 updates/sec)
+  Coherence bandwidth: 50 Hz
+  Transceiver impairments: ENABLED (HF rig + audio interface)
+    Profiles: ['ideal', 'icom_ic7300', 'yaesu_ft991a', 'elecraft_kx3', 'kenwood_ts590', 'budget_soundcard', 'chinese_budget', 'icom_ic705', 'flex6000', 'hermes_lite2']
+
+📻 HF Transceiver Impairments: ENABLED
+  TX impairments: ON (ALC, SSB filter, audio path)
+  RX impairments: ON (AGC, SSB filter, audio path)
+  Weighted sampling: 30% IC-7300, 20% FT-991A, 15% IC-705, etc.
+  ✓ Created CUDA streams for async processing (2-3× speedup)
+
+🔧 Generating dataset in NUMPY format (writes directly to memmap)
+
+Generating 1,000 streams on GPU...
+Stream duration: 10.0s (480,000 samples)
+GPU batch size: 100 streams in parallel
+Using 32 CPU workers for background I/O
+  📁 Single-file mode: 1,000 streams
+Pre-calculating physics for all streams...
+Generating scenarios using 63 parallel workers...
+Chunk size: 500 scenarios per chunk
+Sampling scenarios (parallel):   0%|          | 0/1000 [00:00<?, ?scenarios/s]Sampling scenarios (parallel):   0%|          | 1/1000 [00:01<23:52,  1.43s/scenarios]Sampling scenarios (parallel): 100%|██████████| 1000/1000 [00:01<00:00, 685.51scenarios/s]
+Physics calc:   0%|          | 0/1000 [00:00<?, ?it/s]Physics calc: 100%|██████████| 1000/1000 [00:00<00:00, 49811.81it/s]
+✓ Physics pre-calculated for 1,000 streams
+Pre-extracting physics parameters to RAM arrays...
+✓ Physics arrays extracted (0.3 MB in RAM)
+
+📦 Generating to numpy memmap with async background writers
+   Using 8 parallel writer threads (overlaps GPU+I/O)
+  ✓ Started 8 background writer threads
+
+🚀 PIPELINE OPTIMIZATION ENABLED
+   Pre-gen workers: 8 (generates 4 batches ahead)
+   Post-proc workers: 0 (parallel normalization/metadata)
+  ✓ Pipeline workers initialized
+  Creating label file for 1,000 streams...
+  ✓ Pre-allocated label datasets
+
+  Generating chunk 1/1: streams 0-1,000
+Chunk 1/1:   0%|          | 0/1000 [00:00<?, ?streams/s]Chunk 1/1:  10%|█         | 100/1000 [00:05<00:53, 16.94streams/s]Chunk 1/1:  20%|██        | 200/1000 [00:09<00:34, 23.19streams/s]Chunk 1/1:  30%|███       | 300/1000 [00:12<00:25, 27.01streams/s]Chunk 1/1:  40%|████      | 400/1000 [00:15<00:20, 29.34streams/s]Chunk 1/1:  50%|█████     | 500/1000 [00:17<00:15, 31.50streams/s]Chunk 1/1:  60%|██████    | 600/1000 [00:21<00:12, 31.32streams/s]Chunk 1/1:  70%|███████   | 700/1000 [00:23<00:09, 32.10streams/s]Chunk 1/1:  80%|████████  | 800/1000 [00:27<00:06, 31.37streams/s]Chunk 1/1:  90%|█████████ | 900/1000 [00:29<00:03, 33.16streams/s]Chunk 1/1: 100%|██████████| 1000/1000 [00:32<00:00, 33.18streams/s]Chunk 1/1: 100%|██████████| 1000/1000 [00:32<00:00, 30.33streams/s]
+
+  ⏳ Waiting for background writes to complete...
+  ✓ All writes completed
+    Writing metadata...
+  ✓ Chunk 1 finalized in 0.3s
+
+  ✓ Label file closed (all 1,000 streams written)
+
+🛑 Shutting down background writers (ensuring all data written)...
+  ✓ All 8 writer threads completed
+  ✓ Memmap files flushed to disk
+
+🛑 Shutting down pre-generation worker pool...
+  ✓ Pre-generation pool terminated
+
+✓ Generated 1,000 streams in 37.7s
+  Streams: 26.5 streams/sec
+  Windows: 132.6 windows/sec (effective training samples)
+
+📦 Finalizing numpy files...
+  ✓ Saved to: /tmp/cascade_dataset_cache/streaming_cascade_v9_final_n1000streams_10.0s_seedNone_numpy
+  ✓ Files: streams.npy (3.8 GB), embeddings.npy, metadata.json, labels.h5
+  ✓ Thread-safe numpy format - ready for parallel DataLoader workers!
+  ✓ Metadata validated: 1,000 streams, 5 windows/stream
+  ✓ Pre-computed normalization stats loaded (40-60% faster __getitem__)
+  ✓ Labels from: streaming_cascade_v9_final_n1000streams_10.0s_seedNone_numpy_labels.h5
+  ✓ Loaded 1,000 streams via memory-map
+  ✓ Thread-safe parallel access enabled!
+  ✓ File size: 3.8 GB
+  ✓ Labels from HDF5 (small, doesn't bottleneck)
+  Loading all labels into RAM (eliminates HDF5 I/O bottleneck)...
+  ✓ Cached 1,000 labels in RAM (1.8 MB)
+    → Eliminates HDF5 I/O contention across 32 DataLoader workers
+======================================================================
+
+
+================================================================================
+TOTAL TIME: 38.6s
+Per stream: 38.6ms
+Throughput: 25.9 streams/sec
+================================================================================
