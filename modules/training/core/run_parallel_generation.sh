@@ -30,7 +30,8 @@ python3 generate_dataset_parallel.py \
     --num-streams $NUM_STREAMS \
     --num-workers $NUM_WORKERS \
     --cache-dir $CACHE_DIR \
-    --batch-size 4096  # B200 cluster: large batches per GPU!
+    --batch-size 3200 \  # A100 cluster: optimal for 80GB VRAM per GPU
+    --regen-interval 5  # Regenerate every 5 epochs (6 total for 30 epochs)
 
 echo
 echo "================================================================================"

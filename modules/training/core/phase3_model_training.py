@@ -2663,6 +2663,18 @@ Examples:
         choices=[1, 2, 3, 4],
         help='Training stage to start from (1=IQ Encoder, 2=CASCADE Model, 4=Joint RX/TX). Default: 1'
     )
+    parser.add_argument(
+        '--num-gpus',
+        type=int,
+        default=None,
+        help='Number of GPUs for parallel generation (default: auto-detect)'
+    )
+    parser.add_argument(
+        '--parallel-generation',
+        action='store_true',
+        default=True,
+        help='Use parallel multi-GPU generation (default: True if multiple GPUs detected)'
+    )
     args = parser.parse_args()
 
     # Create artifacts directory
@@ -2673,16 +2685,36 @@ Examples:
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"\nHardware Configuration:")
     print(f"=" * 60)
+
+    # Detect number of GPUs
+    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    if args.num_gpus is not None:
+        num_gpus = args.num_gpus
+
     if device == 'cuda':
         gpu_name = torch.cuda.get_device_name(0)
         gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        print(f"  GPU: {gpu_name}")
-        print(f"  VRAM: {gpu_mem_gb:.1f} GB")
+        print(f"  GPUs: {num_gpus}× {gpu_name}")
+        print(f"  VRAM per GPU: {gpu_mem_gb:.1f} GB")
+        print(f"  Total VRAM: {num_gpus * gpu_mem_gb:.1f} GB")
 
-        # Check for GH200
+        # Check cluster type
         is_gh200 = 'H200' in gpu_name or 'GH200' in gpu_name or gpu_mem_gb > 80
+        is_a100 = 'A100' in gpu_name
+        is_cluster = num_gpus >= 4
+
         if is_gh200:
-            print(f"  🚀 GH200 Grace Hopper Superchip Detected!")
+            print(f"  🚀 GH200 Grace Hopper Detected!")
+        elif is_a100 and is_cluster:
+            print(f"  🚀 A100 Cluster Detected!")
+            print(f"  💡 Parallel generation recommended ({num_gpus} workers)")
+
+        # Auto-enable parallel generation for clusters
+        use_parallel = args.parallel_generation and num_gpus >= 4
+        if use_parallel:
+            print(f"\n  ✓ Parallel generation ENABLED ({num_gpus} GPUs)")
+        else:
+            print(f"\n  ℹ️  Single-GPU generation (use --parallel-generation for multi-GPU)")
 
     # CPU info
     import subprocess
@@ -2748,6 +2780,57 @@ Examples:
         else:
             print(f"\n  RAM Caching: DISABLED (using HDF5 with parallel workers)")
             print(f"  Tip: Set CASCADE_LOAD_TO_RAM=true to enable RAM caching for faster training")
+
+        # PARALLEL GENERATION: Launch if cluster detected and datasets don't exist
+        if use_parallel and num_gpus >= 4:
+            cache_dir = Path('/tmp/cascade_parallel')
+            train_cache = cache_dir / 'train'
+            val_cache = cache_dir / 'val'
+
+            # Check if datasets already exist
+            if not (train_cache.exists() and val_cache.exists()) or REGENERATE_CACHE:
+                print(f"\n{'='*80}")
+                print(f"LAUNCHING PARALLEL DATASET GENERATION ({num_gpus} GPUs)")
+                print(f"{'='*80}")
+
+                # Calculate optimal batch size based on GPU
+                if gpu_mem_gb >= 150:  # B200
+                    optimal_batch = 4096
+                elif gpu_mem_gb >= 70:  # A100
+                    optimal_batch = 3200
+                else:  # Smaller GPUs
+                    optimal_batch = 1024
+
+                # Launch parallel generation script
+                gen_script = Path(__file__).parent / 'generate_dataset_parallel.py'
+
+                # Training set
+                print(f"\nGenerating training set ({num_train_streams:,} streams)...")
+                import subprocess
+                train_cmd = [
+                    sys.executable, str(gen_script),
+                    '--num-streams', str(num_train_streams),
+                    '--num-workers', str(num_gpus),
+                    '--cache-dir', str(train_cache),
+                    '--batch-size', str(optimal_batch)
+                ]
+                subprocess.run(train_cmd, check=True)
+
+                # Validation set
+                print(f"\nGenerating validation set ({num_val_streams:,} streams)...")
+                val_cmd = [
+                    sys.executable, str(gen_script),
+                    '--num-streams', str(num_val_streams),
+                    '--num-workers', str(num_gpus),
+                    '--cache-dir', str(val_cache),
+                    '--batch-size', str(optimal_batch),
+                    '--validation'
+                ]
+                subprocess.run(val_cmd, check=True)
+
+                print(f"\n✓ Parallel generation complete!")
+                print(f"  Training: {train_cache}")
+                print(f"  Validation: {val_cache}")
 
         train_dataset = StreamingCascadeDataset(
             num_streams=num_train_streams,

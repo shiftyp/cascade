@@ -28,8 +28,10 @@ def main():
                        help='Cache directory for output')
     parser.add_argument('--validation', action='store_true',
                        help='Generate validation set instead of training')
-    parser.add_argument('--batch-size', type=int, default=512,
-                       help='GPU batch size per worker (default: 512)')
+    parser.add_argument('--batch-size', type=int, default=3200,
+                       help='GPU batch size per worker (default: 3200 for A100)')
+    parser.add_argument('--regen-interval', type=int, default=5,
+                       help='Cache regeneration interval in epochs (default: 5)')
 
     args = parser.parse_args()
 
@@ -88,8 +90,19 @@ def main():
         processes.append((worker_id, proc, num_worker_streams))
 
     print(f"\n✓ All {args.num_workers} workers launched!")
-    print(f"  Monitoring progress (workers write to logs)...")
-    print(f"  Check individual logs: {args.cache_dir}/worker_*.log")
+    print(f"  Launching progress monitor...")
+
+    # Launch progress monitor in separate process
+    monitor_proc = subprocess.Popen([
+        sys.executable,
+        str(Path(__file__).parent / 'parallel_progress_monitor.py'),
+        '--cache-dir', args.cache_dir,
+        '--num-workers', str(args.num_workers)
+    ])
+
+    time.sleep(1)  # Let monitor start
+    print(f"  Monitor running (PID {monitor_proc.pid})")
+    print(f"  Individual logs: {args.cache_dir}/worker_*.log")
 
     # Monitor processes
     completed_workers = set()
@@ -117,6 +130,11 @@ def main():
             print(f"  [{len(completed_workers)}/{args.num_workers}] workers complete ({elapsed:.0f}s elapsed)")
 
     total_time = time.time() - start_time
+
+    # Stop progress monitor
+    if monitor_proc:
+        monitor_proc.terminate()
+        monitor_proc.wait()
 
     print("\n" + "=" * 80)
     print("PARALLEL GENERATION COMPLETE")
